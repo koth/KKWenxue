@@ -1,0 +1,8 @@
+
+com.kkwenxue.shanye.AudioEntryInstrumentedTest:.....
+
+Time: 16.025
+
+OK (5 tests)
+
+

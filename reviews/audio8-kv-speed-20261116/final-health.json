@@ -1,0 +1,241 @@
+{
+  "api": "ready",
+  "workers": {
+    "gpu": {
+      "engine": "audio8-realistic-air-cpp",
+      "gpu": "Orin",
+      "job_id": "0202b2deb43a42df89b4396fadc71f80",
+      "model": "ready",
+      "owner": "gpu-6b44d5802a6c483eba88871678cc3f80",
+      "state": "synthesis",
+      "heartbeat": 1794842004.3707561,
+      "alive": true
+    },
+    "cpu": {
+      "gpu": "unknown",
+      "job_id": null,
+      "model": "not-applicable",
+      "owner": "cpu-2823635daf5640aa9a83e3055d34fdc2",
+      "state": "idle",
+      "heartbeat": 1794842003.9842908,
+      "alive": true
+    }
+  },
+  "disks": [
+    {
+      "kind": "metadata",
+      "free_bytes": 191234789376,
+      "total_bytes": 249366470656
+    },
+    {
+      "kind": "audio",
+      "free_bytes": 191234789376,
+      "total_bytes": 249366470656
+    }
+  ],
+  "min_free_bytes": 5368709120,
+  "can_accept_work": true,
+  "book_count": 3,
+  "models": {
+    "voice_clone_ready": true
+  },
+  "initialization": "explicit-import-only",
+  "resumed_job": {
+    "id": "0202b2deb43a42df89b4396fadc71f80",
+    "state": "running",
+    "desired": "run",
+    "phase": "synthesis",
+    "error": null,
+    "counts": [
+      {
+        "state": "queued",
+        "count": 66
+      },
+      {
+        "state": "ready",
+        "count": 20
+      }
+    ],
+    "latest_attempts": [
+      {
+        "number": 1,
+        "elapsed": null,
+        "error": null,
+        "runtime": {
+          "batch_size": 1,
+          "engine": "Audio8Engine",
+          "packages": {
+            "numpy": "1.26.4",
+            "soundfile": "0.12.1"
+          }
+        }
+      },
+      {
+        "number": 1,
+        "elapsed": 15.806387620003079,
+        "error": null,
+        "runtime": {
+          "audio_seconds": 9.427301587301587,
+          "batch_size": 1,
+          "decode_seconds": 1.131405697,
+          "engine": "audio8-realistic-air-cpp",
+          "fragments": [
+            {
+              "autoregressive_seconds": 14.427498708,
+              "frames": 203,
+              "prefill_seconds": 0.054111914
+            }
+          ],
+          "generation_seconds": 14.481610846,
+          "native": true,
+          "packages": {
+            "numpy": "1.26.4",
+            "soundfile": "0.12.1"
+          },
+          "reference_cache": {
+            "prefix_hit": true,
+            "prefix_positions": 366,
+            "reference_prefill_seconds": 0.0,
+            "voice_hit": true,
+            "voice_prepare_seconds": 0.000146758
+          },
+          "runtime": {
+            "backend": "libtorch_cpp_cuda",
+            "batch_size": 1,
+            "compact_semantics": true,
+            "compute_capability": "8.7",
+            "context": 2048,
+            "cuda_free_bytes": 4201099264,
+            "cuda_total_bytes": 7990009856,
+            "dtype": "BFloat16",
+            "expanded_fp32_kv": true,
+            "gpu": "Orin",
+            "graphs": true,
+            "inference_revision": "expanded-kv-v3",
+            "peak_reserved_bytes": 1830813696,
+            "peak_tensor_bytes": 1824354816,
+            "python_runtime": false,
+            "reference_prefix_cache": true,
+            "sample_rate": 44100
+          },
+          "seed": 105600061,
+          "source_sample_rate": 44100,
+          "stored_sample_rate": 24000
+        }
+      },
+      {
+        "number": 1,
+        "elapsed": 27.963178948004497,
+        "error": null,
+        "runtime": {
+          "audio_seconds": 16.81124716553288,
+          "batch_size": 1,
+          "decode_seconds": 1.998459278,
+          "engine": "audio8-realistic-air-cpp",
+          "fragments": [
+            {
+              "autoregressive_seconds": 25.693413419,
+              "frames": 362,
+              "prefill_seconds": 0.055264277
+            }
+          ],
+          "generation_seconds": 25.748677856,
+          "native": true,
+          "packages": {
+            "numpy": "1.26.4",
+            "soundfile": "0.12.1"
+          },
+          "reference_cache": {
+            "prefix_hit": true,
+            "prefix_positions": 366,
+            "reference_prefill_seconds": 0.0,
+            "voice_hit": true,
+            "voice_prepare_seconds": 0.000145349
+          },
+          "runtime": {
+            "backend": "libtorch_cpp_cuda",
+            "batch_size": 1,
+            "compact_semantics": true,
+            "compute_capability": "8.7",
+            "context": 2048,
+            "cuda_free_bytes": 4201099264,
+            "cuda_total_bytes": 7990009856,
+            "dtype": "BFloat16",
+            "expanded_fp32_kv": true,
+            "gpu": "Orin",
+            "graphs": true,
+            "inference_revision": "expanded-kv-v3",
+            "peak_reserved_bytes": 1830813696,
+            "peak_tensor_bytes": 1824354816,
+            "python_runtime": false,
+            "reference_prefix_cache": true,
+            "sample_rate": 44100
+          },
+          "seed": 105600060,
+          "source_sample_rate": 44100,
+          "stored_sample_rate": 24000
+        }
+      },
+      {
+        "number": 1,
+        "elapsed": 15.661681682002381,
+        "error": null,
+        "runtime": {
+          "audio_seconds": 9.334421768707482,
+          "batch_size": 1,
+          "decode_seconds": 1.131146122,
+          "engine": "audio8-realistic-air-cpp",
+          "fragments": [
+            {
+              "autoregressive_seconds": 14.285982867,
+              "frames": 201,
+              "prefill_seconds": 0.054428566
+            }
+          ],
+          "generation_seconds": 14.340411625,
+          "native": true,
+          "packages": {
+            "numpy": "1.26.4",
+            "soundfile": "0.12.1"
+          },
+          "reference_cache": {
+            "prefix_hit": true,
+            "prefix_positions": 366,
+            "reference_prefill_seconds": 0.0,
+            "voice_hit": true,
+            "voice_prepare_seconds": 0.000150981
+          },
+          "runtime": {
+            "backend": "libtorch_cpp_cuda",
+            "batch_size": 1,
+            "compact_semantics": true,
+            "compute_capability": "8.7",
+            "context": 2048,
+            "cuda_free_bytes": 4201099264,
+            "cuda_total_bytes": 7990009856,
+            "dtype": "BFloat16",
+            "expanded_fp32_kv": true,
+            "gpu": "Orin",
+            "graphs": true,
+            "inference_revision": "expanded-kv-v3",
+            "peak_reserved_bytes": 1830813696,
+            "peak_tensor_bytes": 1824354816,
+            "python_runtime": false,
+            "reference_prefix_cache": true,
+            "sample_rate": 44100
+          },
+          "seed": 105600059,
+          "source_sample_rate": 44100,
+          "stored_sample_rate": 24000
+        }
+      }
+    ]
+  },
+  "services": {
+    "shanye-tts-api": "active",
+    "shanye-tts-gpu": "active",
+    "shanye-tts-cpu": "active",
+    "shanye-tts-relay-worker": "active"
+  },
+  "binary_sha256": "6b35a4f1018b3b67526ea1990735745d0f058ad9a61da395850eb494ce9e0a7b"
+}

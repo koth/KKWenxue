@@ -1,0 +1,12 @@
+[Unit]
+Description=Shanye catalog incremental sync (10 min)
+After=network-online.target shanye-catalog.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/var/lib/shanye-catalog
+EnvironmentFile=/etc/shanye-catalog.env
+ExecStart=/usr/local/bin/shanye-catalog incremental --pages 30 --quiet 2
+Nice=10
+IOSchedulingClass=idle
+UMask=0077

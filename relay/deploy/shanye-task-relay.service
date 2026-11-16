@@ -1,0 +1,20 @@
+[Unit]
+Description=Shanye generic task relay
+After=network.target
+
+[Service]
+Type=simple
+User=shanye-relay
+Group=shanye-relay
+StateDirectory=shanye-task-relay
+WorkingDirectory=/opt/shanye-task-relay
+EnvironmentFile=/etc/shanye-task-relay.env
+ExecStart=/opt/shanye-task-relay/shanye-task-relay
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

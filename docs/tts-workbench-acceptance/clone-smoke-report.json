@@ -1,0 +1,26 @@
+{
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "revision": "fd4b254389122332181a7c3db7f27e918eec64e3",
+  "reference_source": "Original studio-demo Dylan test segment, not a user voice",
+  "reference_text": "雨停了，窗台上还留着几滴水。",
+  "mode": "ICL with transcript",
+  "cold_load_and_two_segments_seconds": 28.55,
+  "warm_one_segment_seconds": 4.106,
+  "sample_rate": 24000,
+  "outputs": [
+    {
+      "file": "clone-smoke-1.flac",
+      "samples": 76800,
+      "seconds": 3.2,
+      "sha256": "ca934b60a1daf0bc90e4243dca41f8804e0cc315d1837800126e8a09445cbbd4"
+    },
+    {
+      "file": "clone-smoke-2.flac",
+      "samples": 55680,
+      "seconds": 2.32,
+      "sha256": "81df5a8aea3ccc95b3dc91051565d1c4682fcdc9281745fabb32f12e89f5d753"
+    }
+  ],
+  "status": "passed",
+  "limits": "Technical validity only; user reference similarity and rhythm remain for user audition."
+}

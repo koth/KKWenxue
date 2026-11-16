@@ -1,0 +1,18 @@
+{
+  "tts": {
+    "task_id": "3e97b6e6-b96b-49d3-b3ba-90720eae8829",
+    "bytes": 280360,
+    "sha256": "121da6d970aa4455127e447156623e6720eade72e5f6ebbf2e4d4232c8219726",
+    "chapters": 2,
+    "lan_host": "192.168.3.33",
+    "downloaded_to": "/tmp/shanye-jetson-tts-acceptance.zip"
+  },
+  "content": {
+    "task_id": "5bfb46bc-e01e-473e-bb00-128f4468eb4b",
+    "bytes": 827272,
+    "sha256": "275db0edd76b2a9af4ad3228c6bc0505c9f56e8a5f6a12bedf1add8799fc98b8",
+    "chapters": 500,
+    "lan_host": "192.168.3.33",
+    "downloaded_to": "/tmp/shanye-jetson-content-acceptance.zip"
+  }
+}

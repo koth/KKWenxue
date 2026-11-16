@@ -1,0 +1,13 @@
+active
+active
+active
+active
+Started Shanye TTS relay polling worker.
+INFO:shanye.remote_worker:relay task 2c4f4ac3-fb1b-4270-8839-36c1fb158d65 completed
+INFO:shanye.remote_worker:relay task d4e86ef8-d7ce-4f18-9f2b-a58c377636b7 completed
+Stopping Shanye TTS relay polling worker...
+shanye-tts-relay-worker.service: Succeeded.
+Stopped Shanye TTS relay polling worker.
+Started Shanye TTS relay polling worker.
+INFO:shanye.remote_worker:relay task e38e834a-497a-4e85-8cf1-c9f4949101c5 completed; LAN result published, no ZIP uploaded
+INFO:shanye.remote_worker:relay task e38e834a-497a-4e85-8cf1-c9f4949101c5 uploaded on demand

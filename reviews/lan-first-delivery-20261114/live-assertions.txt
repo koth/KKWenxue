@@ -1,0 +1,9 @@
+2:11-14 11:14:42.346  3031  3107 I System.out: Live relay task 2c4f4ac3-fb1b-4270-8839-36c1fb158d65
+3:11-14 11:15:03.474  3031  3107 I System.out: GPU result imported with validated UTF-16 cues
+4:11-14 11:20:09.999  3705  3732 I System.out: Live relay task d4e86ef8-d7ce-4f18-9f2b-a58c377636b7
+5:11-14 11:20:22.751  3705  3732 I System.out: GPU result imported with validated UTF-16 cues
+6:11-14 11:49:32.889  4498  4514 I System.out: Live relay task e38e834a-497a-4e85-8cf1-c9f4949101c5
+7:11-14 11:49:45.357  4498  4514 I System.out: Completion published a scoped LAN address without uploading ZIP
+8:11-14 11:49:45.675  4498  4514 I System.out: GPU result imported with validated UTF-16 cues
+9:11-14 11:49:45.732  4498  4514 I System.out: LAN import succeeded; public relay still has no ZIP
+10:11-14 11:49:49.315  4498  4514 I System.out: Explicit transfer request uploaded and downloaded the same verified ZIP without re-synthesis

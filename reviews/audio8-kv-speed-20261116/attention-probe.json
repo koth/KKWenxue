@@ -1,0 +1,35 @@
+{
+  "torch": "2.8.0",
+  "allow_tf32": false,
+  "allow_reduced_math": false,
+  "rows": [
+    {
+      "valid": 368,
+      "identical": true,
+      "max_error": 0.0,
+      "baseline_ms": 1.6353657531738282,
+      "expanded_float_ms": 0.6612659454345703
+    },
+    {
+      "valid": 513,
+      "identical": true,
+      "max_error": 0.0,
+      "baseline_ms": 1.6364889526367188,
+      "expanded_float_ms": 0.6589043426513672
+    },
+    {
+      "valid": 1025,
+      "identical": true,
+      "max_error": 0.0,
+      "baseline_ms": 1.6272799682617187,
+      "expanded_float_ms": 0.6713600158691406
+    },
+    {
+      "valid": 1800,
+      "identical": true,
+      "max_error": 0.0,
+      "baseline_ms": 1.6198348999023438,
+      "expanded_float_ms": 0.6489068603515625
+    }
+  ]
+}

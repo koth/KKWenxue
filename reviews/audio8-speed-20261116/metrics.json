@@ -1,0 +1,16 @@
+{
+  "baseline_rtf": 2.299648900274958,
+  "optimized_rtf": 2.1474828898195666,
+  "rtf_reduction": 0.06616923585039336,
+  "same_text_time_reduction": 0.07719873306475877,
+  "voice_prepare_seconds": [
+    9.8755e-05,
+    8.7747e-05,
+    0.000139813
+  ],
+  "prefix_hit": [
+    true,
+    true,
+    true
+  ]
+}

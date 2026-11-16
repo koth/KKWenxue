@@ -1,0 +1,350 @@
+{
+  "health": {
+    "api": "ready",
+    "workers": {
+      "gpu": {
+        "engine": "audio8-realistic-air-cpp",
+        "gpu": "Orin",
+        "job_id": null,
+        "model": "ready",
+        "owner": "gpu-2037b44637244b9195f707c84ec6b7be",
+        "state": "idle",
+        "heartbeat": 1794838693.367198,
+        "alive": true
+      },
+      "cpu": {
+        "gpu": "unknown",
+        "job_id": null,
+        "model": "not-applicable",
+        "owner": "cpu-4fab0b442e474c608017b58d99636dad",
+        "state": "idle",
+        "heartbeat": 1794838693.1932795,
+        "alive": true
+      }
+    },
+    "disks": [
+      {
+        "kind": "metadata",
+        "free_bytes": 191453347840,
+        "total_bytes": 249366470656
+      },
+      {
+        "kind": "audio",
+        "free_bytes": 191453347840,
+        "total_bytes": 249366470656
+      }
+    ],
+    "min_free_bytes": 5368709120,
+    "can_accept_work": true,
+    "book_count": 3,
+    "models": {
+      "voice_clone_ready": true
+    },
+    "initialization": "explicit-import-only"
+  },
+  "voices": {
+    "engine": "audio8-realistic-air-cpp",
+    "model": "Edge0/Audio8-TTS-Realistic-Air",
+    "revision": "6bf7a980759d8022a66922ee975dab99229a2dd9",
+    "voices": [],
+    "default_preset_id": "clone-a63c22269e594284805a0ffaadb784a1",
+    "languages": [
+      "Chinese"
+    ],
+    "instruction": false,
+    "voice_cloning": true,
+    "reference_text_required": true,
+    "voice_clone_model": "/home/jetson/workspace/Audio8-TTS-Realistic-Air",
+    "voice_design": false,
+    "source": "installed-model-config",
+    "speed_range": [
+      0.75,
+      1.5
+    ],
+    "pause_ms_range": [
+      0,
+      2000
+    ]
+  },
+  "presets": {
+    "items": [
+      {
+        "id": "clone-a63c22269e594284805a0ffaadb784a1",
+        "name": "参考音色 · cwns.mp3",
+        "speaker": "clone:a63c22269e594284805a0ffaadb784a1",
+        "instruct": "用标准普通话，以平静自然的语气讲述故事，语速适中。",
+        "created": 1794837983.2751842,
+        "confirmed": 1,
+        "export": {
+          "format": "m4a",
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · cwns.mp3",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "clone-a63c22269e594284805a0ffaadb784a1",
+          "speaker": "clone:a63c22269e594284805a0ffaadb784a1"
+        }
+      },
+      {
+        "id": "clone-10b832ee9ae246de91c52e51878936b5",
+        "name": "参考音色 · cwssr.mp3",
+        "speaker": "clone:10b832ee9ae246de91c52e51878936b5",
+        "instruct": "用标准普通话，以平静自然的语气讲述故事，语速适中。",
+        "created": 1794751136.0983396,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · cwssr.mp3",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "clone-10b832ee9ae246de91c52e51878936b5",
+          "speaker": "clone:10b832ee9ae246de91c52e51878936b5"
+        }
+      },
+      {
+        "id": "clone-c378b7d3f9944647902f4b6637bf6ea1",
+        "name": "参考音色 · xspb.mp3",
+        "speaker": "clone:c378b7d3f9944647902f4b6637bf6ea1",
+        "instruct": "用标准普通话，以平静自然的语气讲述故事，语速适中。",
+        "created": 1794750984.5922148,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · xspb.mp3",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "clone-c378b7d3f9944647902f4b6637bf6ea1",
+          "speaker": "clone:c378b7d3f9944647902f4b6637bf6ea1"
+        }
+      },
+      {
+        "id": "clone-1060f58d2cfa41c6a823b0248b98402f",
+        "name": "参考音色 · cxcw.mp3",
+        "speaker": "clone:1060f58d2cfa41c6a823b0248b98402f",
+        "instruct": "用标准普通话，以平静自然的语气讲述故事，语速适中。",
+        "created": 1794750148.8417263,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · cxcw.mp3",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "clone-1060f58d2cfa41c6a823b0248b98402f",
+          "speaker": "clone:1060f58d2cfa41c6a823b0248b98402f"
+        }
+      },
+      {
+        "id": "clone-70f7fba0dd2349aaa09a512036e44ce6",
+        "name": "参考音色 · sound.m4a",
+        "speaker": "clone:70f7fba0dd2349aaa09a512036e44ce6",
+        "instruct": "用标准普通话，以平静自然的语气讲述故事，语速适中。",
+        "created": 1794721012.1318262,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · sound.m4a",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "clone-70f7fba0dd2349aaa09a512036e44ce6",
+          "speaker": "clone:70f7fba0dd2349aaa09a512036e44ce6"
+        }
+      },
+      {
+        "id": "928ad044cd8a4d54be556607c202d37f",
+        "name": "参考音色 · stf.mp3",
+        "speaker": "clone:d9bf45c4dc3147cf8ddcf132651a501b",
+        "instruct": "仿单田芳用普通话来盘白小说，语气平静，沉稳",
+        "created": 1794720095.266609,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "normalize_loudness": true,
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · stf.mp3",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "928ad044cd8a4d54be556607c202d37f",
+          "speaker": "clone:d9bf45c4dc3147cf8ddcf132651a501b"
+        }
+      },
+      {
+        "id": "43f37427df224d259075a88f872b80f3",
+        "name": "参考音色 · stf.mp3",
+        "speaker": "clone:d9bf45c4dc3147cf8ddcf132651a501b",
+        "instruct": "仿单田芳用普通话来盘白小说",
+        "created": 1794719943.4965715,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "normalize_loudness": true,
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · stf.mp3",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "43f37427df224d259075a88f872b80f3",
+          "speaker": "clone:d9bf45c4dc3147cf8ddcf132651a501b"
+        }
+      },
+      {
+        "id": "df172d34abdd43939f422ec2357e0a11",
+        "name": "参考音色 · stf.mp3",
+        "speaker": "clone:d9bf45c4dc3147cf8ddcf132651a501b",
+        "instruct": "各位听众朋友们，今天我给大家讲一个精彩的历史故事，三国演义。这个故事发生在东汉末年，天下大乱之时。那是个英雄辈出的年代，且听我细细道来。单说这一日，在许都城外...",
+        "created": 1794719738.3914363,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "normalize_loudness": true,
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · stf.mp3",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "df172d34abdd43939f422ec2357e0a11",
+          "speaker": "clone:d9bf45c4dc3147cf8ddcf132651a501b"
+        }
+      },
+      {
+        "id": "clone-d9bf45c4dc3147cf8ddcf132651a501b",
+        "name": "参考音色 · stf.mp3",
+        "speaker": "clone:d9bf45c4dc3147cf8ddcf132651a501b",
+        "instruct": "用标准普通话，以平静自然的语气讲述故事，语速适中。",
+        "created": 1794719710.5203454,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · stf.mp3",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "clone-d9bf45c4dc3147cf8ddcf132651a501b",
+          "speaker": "clone:d9bf45c4dc3147cf8ddcf132651a501b"
+        }
+      },
+      {
+        "id": "ed40835c2103490eb002eff508e13603",
+        "name": "参考音色 · stf.mp3",
+        "speaker": "clone:9ef173d881f74a49888715b1ed92b24d",
+        "instruct": "用标准普通话，以平静自然的语气讲述故事，语速适中。注意每段音色保持一致，不要剧烈变化",
+        "created": 1794719552.927464,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "normalize_loudness": true,
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · stf.mp3",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "ed40835c2103490eb002eff508e13603",
+          "speaker": "clone:9ef173d881f74a49888715b1ed92b24d"
+        }
+      },
+      {
+        "id": "clone-9ef173d881f74a49888715b1ed92b24d",
+        "name": "参考音色 · stf.mp3",
+        "speaker": "clone:9ef173d881f74a49888715b1ed92b24d",
+        "instruct": "用标准普通话，以平静自然的语气讲述故事，语速适中。",
+        "created": 1794495560.5862434,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · stf.mp3",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "clone-9ef173d881f74a49888715b1ed92b24d",
+          "speaker": "clone:9ef173d881f74a49888715b1ed92b24d"
+        }
+      },
+      {
+        "id": "clone-e489b174d18c4d0aa0bee42c0ff58639",
+        "name": "参考音色 · default_storyteller_c06.wav",
+        "speaker": "clone:e489b174d18c4d0aa0bee42c0ff58639",
+        "instruct": "用标准普通话，以平静自然的语气讲述故事，语速适中。",
+        "created": 1794494758.9456813,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · default_storyteller_c06.wav",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "clone-e489b174d18c4d0aa0bee42c0ff58639",
+          "speaker": "clone:e489b174d18c4d0aa0bee42c0ff58639"
+        }
+      },
+      {
+        "id": "clone-0e2fcdfec66b428f9f54bef32c382f2f",
+        "name": "参考音色 · demo.m4a",
+        "speaker": "clone:0e2fcdfec66b428f9f54bef32c382f2f",
+        "instruct": "用标准普通话，以平静自然的语气讲述故事，语速适中。",
+        "created": 1794407752.4736035,
+        "confirmed": 0,
+        "export": {
+          "format": "m4a",
+          "pause_ms": 180,
+          "speed": 1.0
+        },
+        "builtin": false,
+        "voice": {
+          "label": "参考音色 · demo.m4a",
+          "description": "Audio8 参考音色",
+          "native_language": "中文",
+          "preset_id": "clone-0e2fcdfec66b428f9f54bef32c382f2f",
+          "speaker": "clone:0e2fcdfec66b428f9f54bef32c382f2f"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+[package]
+name = "shanye-task-relay"
+version = "0.1.0"
+edition = "2021"
+description = "Generic leased task relay with temporary result uploads"
+
+[dependencies]
+axum = "0.8"
+futures-util = "0.3"
+hex = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }

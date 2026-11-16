@@ -1,0 +1,19 @@
+5.15.148-tegra
+# R36 (release), REVISION: 4.3, GCID: 38968081, BOARD: generic, EABI: aarch64, DATE: Wed Jan  8 01:49:37 UTC 2025
+# KERNEL_VARIANT: oot
+TARGET_USERSPACE_LIB_DIR=nvidia
+TARGET_USERSPACE_LIB_DIR_PATH=usr/lib/aarch64-linux-gnu/nvidia
+uid=1000(jetson) gid=1000(jetson) groups=1000(jetson),4(adm),27(sudo),29(audio),44(video),104(render),135(gdm),996(weston-launch)
+2026-11-15 12:27:55
+multi-user.target
+active
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+0 loaded units listed.
+lo               UNKNOWN        127.0.0.1/8 
+enP8p1s0         UP             192.168.3.33/24 
+default via 192.168.3.1 dev enP8p1s0 proto static metric 100 
+169.254.0.0/16 dev enP8p1s0 scope link metric 1000 
+192.168.3.0/24 dev enP8p1s0 proto kernel scope link src 192.168.3.33 metric 100 
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  233G  6.6G  214G   3% /
+NVIDIA_REPO_HTTPS= 200

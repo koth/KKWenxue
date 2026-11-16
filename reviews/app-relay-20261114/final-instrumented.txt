@@ -1,0 +1,8 @@
+
+com.kkwenxue.shanye.SynthesisRelayInstrumentedTest:.....
+
+Time: 0.371
+
+OK (5 tests)
+
+

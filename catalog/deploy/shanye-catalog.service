@@ -1,0 +1,19 @@
+[Unit]
+Description=Shanye catalog (suduguu metadata + read API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/shanye-catalog
+EnvironmentFile=/etc/shanye-catalog.env
+ExecStart=/usr/local/bin/shanye-catalog serve
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/shanye-catalog
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Shanye catalog deep sync (daily 04:10)
+After=network-online.target shanye-catalog.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/var/lib/shanye-catalog
+EnvironmentFile=/etc/shanye-catalog.env
+ExecStart=/usr/local/bin/shanye-catalog incremental --pages 250 --quiet 3
+Nice=10
+IOSchedulingClass=idle
+UMask=0077

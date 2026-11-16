@@ -1,0 +1,16 @@
+[Unit]
+Description=Shanye TTS CPU exporter
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jetson/workspace/shanye-tts-service/app
+EnvironmentFile=/home/jetson/workspace/shanye-tts-service/service.env
+ExecStart=/home/jetson/workspace/shanye-tts-service/.api-venv/bin/python -m server.worker --role cpu
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=infinity
+UMask=0077
+
+[Install]
+WantedBy=default.target

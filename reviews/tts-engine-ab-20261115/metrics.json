@@ -1,0 +1,49 @@
+{
+  "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+  "gpu": "NVIDIA GeForce RTX 3090",
+  "torch": "2.3.1+cu121",
+  "load_seconds": 26.51801996299764,
+  "text_chars": 300,
+  "speed": 1.0,
+  "fp16": true,
+  "normalizer": "builtin",
+  "reference_sha256": "dcf97f6c824b56b11df3bfb9db2dff9bb4c26f47a2601ede910e7ebdfe88f4f5",
+  "results": [
+    {
+      "mode": "clone",
+      "path": "/h/work/shanye-cosyvoice-audition-20261115/cosyvoice3-0.5b-clone-raw.wav",
+      "generation_seconds": 37.853334437997546,
+      "audio_seconds": 75.08,
+      "real_time_factor": 0.5041733409429615,
+      "chunks_seconds": [
+        16.48,
+        25.4,
+        18.16,
+        15.04
+      ],
+      "sample_rate": 24000,
+      "peak": 0.33017393946647644,
+      "rms": 0.030146745964884758,
+      "gpu_peak_allocated_mib": 4547.732421875,
+      "instruction": "reference clone"
+    },
+    {
+      "mode": "neutral",
+      "path": "/h/work/shanye-cosyvoice-audition-20261115/cosyvoice3-0.5b-neutral-raw.wav",
+      "generation_seconds": 33.42055682698265,
+      "audio_seconds": 68.16,
+      "real_time_factor": 0.4903250708184074,
+      "chunks_seconds": [
+        13.6,
+        24.68,
+        16.0,
+        13.88
+      ],
+      "sample_rate": 24000,
+      "peak": 0.3091661334037781,
+      "rms": 0.02702849730849266,
+      "gpu_peak_allocated_mib": 4547.732421875,
+      "instruction": "You are a helpful assistant. 用标准普通话，以平静自然的语气讲述故事，语速适中。<|endofprompt|>"
+    }
+  ]
+}

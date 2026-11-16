@@ -1,0 +1,50 @@
+{
+  "api": "ready",
+  "workers": {
+    "gpu": {
+      "engine": "audio8-realistic-air-cpp",
+      "gpu": "Orin",
+      "job_id": null,
+      "model": "ready",
+      "owner": "gpu-12b97e2ff6c74255a634848bcacc9920",
+      "state": "idle",
+      "heartbeat": 1794840982.120754,
+      "alive": true
+    },
+    "cpu": {
+      "gpu": "unknown",
+      "job_id": null,
+      "model": "not-applicable",
+      "owner": "cpu-2823635daf5640aa9a83e3055d34fdc2",
+      "state": "idle",
+      "heartbeat": 1794840982.1221745,
+      "alive": true
+    }
+  },
+  "disks": [
+    {
+      "kind": "metadata",
+      "free_bytes": 191318892544,
+      "total_bytes": 249366470656
+    },
+    {
+      "kind": "audio",
+      "free_bytes": 191318892544,
+      "total_bytes": 249366470656
+    }
+  ],
+  "min_free_bytes": 5368709120,
+  "can_accept_work": true,
+  "book_count": 3,
+  "models": {
+    "voice_clone_ready": true
+  },
+  "initialization": "explicit-import-only",
+  "services": {
+    "shanye-tts-api": "active",
+    "shanye-tts-gpu": "active",
+    "shanye-tts-cpu": "active",
+    "shanye-tts-relay-worker": "active"
+  },
+  "binary_sha256": "46d44f734f7d7b6da0b4656a4224762b81379b917d0623bf3e7d0a5e56bfb24d"
+}

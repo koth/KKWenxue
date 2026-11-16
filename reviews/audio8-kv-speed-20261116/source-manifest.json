@@ -1,0 +1,27 @@
+[
+  {
+    "kind": "native",
+    "path": "include/audio8.hpp",
+    "sha256": "42351a80a855ed9ea3312ad18ae6b83c0fb30d5130bf748466728913adebe211"
+  },
+  {
+    "kind": "native",
+    "path": "src/model.cpp",
+    "sha256": "22f6382c5cf047ce3bfa1eb636e74e26bb02baf30cda8bdc1044973399b89708"
+  },
+  {
+    "kind": "native",
+    "path": "src/engine.cpp",
+    "sha256": "ae5719a36e195fed7d290fe3f7d3cce8abb0e7f994af0d65cc07ad77354f851e"
+  },
+  {
+    "kind": "native",
+    "path": "src/main.cpp",
+    "sha256": "f2b8f6eafdfd4d0f84e965acc43777b15f0852a1624351b6fbcb5a3e43f56da7"
+  },
+  {
+    "kind": "server",
+    "path": "server/presets.py",
+    "sha256": "d6d65ec515d13d54d596dad176cb8eaa98365d8ee7e8feef176ce781b99ea52b"
+  }
+]

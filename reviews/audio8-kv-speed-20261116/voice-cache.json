@@ -1,0 +1,104 @@
+{
+  "checks": [
+    {
+      "voice": "/home/jetson/workspace/shanye-tts-service/audio/audio8-voices/5116b2367b728ab371c56aa54fc63369a65d6b1edf5b234a669aa40282f99a33/voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.45831646,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.023495294
+      }
+    },
+    {
+      "voice": "/home/jetson/workspace/shanye-tts-service/audio/audio8-voices/5116b2367b728ab371c56aa54fc63369a65d6b1edf5b234a669aa40282f99a33/voice.json",
+      "cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 7.4115e-05
+      }
+    },
+    {
+      "voice": "/home/jetson/workspace/shanye-tts-service/audio/audio8-voices/f8b9e2c9c87c8d4fcf7e5d21847846fa4ac86d0f580b5bb7f97aa8ff9a1e2abc/voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 498,
+        "reference_prefill_seconds": 0.199190849,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.004500043
+      }
+    },
+    {
+      "voice": "/home/jetson/workspace/shanye-tts-service/audio/audio8-voices/5116b2367b728ab371c56aa54fc63369a65d6b1edf5b234a669aa40282f99a33/voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.171278458,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.003491109
+      }
+    },
+    {
+      "voice": "/home/jetson/workspace/shanye-tts-service/audio/audio8-voices/5116b2367b728ab371c56aa54fc63369a65d6b1edf5b234a669aa40282f99a33/voice.json",
+      "cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 6.6691e-05
+      }
+    },
+    {
+      "voice": "/home/jetson/workspace/audio8-kv-speed-20261116/voice-cache/voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.171068338,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.003380993
+      }
+    },
+    {
+      "voice": "/home/jetson/workspace/audio8-kv-speed-20261116/voice-cache/voice.json",
+      "cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 5.1522e-05
+      }
+    },
+    {
+      "voice": "/home/jetson/workspace/audio8-kv-speed-20261116/voice-cache/voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.170992175,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.003386593
+      }
+    },
+    {
+      "voice": "/home/jetson/workspace/audio8-kv-speed-20261116/voice-cache/voice.json",
+      "cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 5.4626e-05
+      }
+    },
+    {
+      "voice": "/home/jetson/workspace/audio8-kv-speed-20261116/voice-cache/voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.17131638,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.003061844
+      }
+    }
+  ]
+}

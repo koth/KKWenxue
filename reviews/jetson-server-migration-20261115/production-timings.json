@@ -1,0 +1,20 @@
+[
+  {
+    "characters": 12,
+    "audio_seconds": 3.0,
+    "generation_seconds": 59.696192556999904,
+    "rtf": 19.8987308523333
+  },
+  {
+    "characters": 15,
+    "audio_seconds": 3.08,
+    "generation_seconds": 12.632696115000272,
+    "rtf": 4.1015247126624255
+  },
+  {
+    "characters": 127,
+    "audio_seconds": 27.12,
+    "generation_seconds": 77.21656657199992,
+    "rtf": 2.847218531415926
+  }
+]

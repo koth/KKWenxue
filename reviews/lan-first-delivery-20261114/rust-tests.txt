@@ -1,0 +1,26 @@
+   Compiling shanye-task-relay v0.1.0 (/Users/kothchen/code/KKWenxue/relay)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.38s
+     Running unittests src/main.rs (relay/target/debug/deps/shanye_task_relay-08abc7d88d3b186f)
+
+running 16 tests
+test tests::filenames_reject_paths_and_long_unicode_without_panicking ... ok
+test tests::auth_is_required ... ok
+test tests::cleanup_reaps_crash_leftovers_but_preserves_active_uploads ... ok
+test tests::only_the_current_synthesis_owner_can_publish_a_local_result ... ok
+test tests::heartbeats_extend_the_requested_lease_and_keep_progress ... ok
+test tests::lease_expiry_obeys_max_attempts ... ok
+test tests::oversized_results_are_rejected_before_writing ... ok
+test tests::arbitrary_kinds_payloads_priority_and_deduplication ... ok
+test tests::local_completion_publishes_metadata_without_uploading_any_file ... ok
+test tests::metadata_migration_is_idempotent_for_existing_databases ... ok
+test tests::failures_are_bounded_and_nonretryable_failures_stop ... ok
+test tests::task_listing_is_paginated_filterable_and_omits_payloads ... ok
+test tests::transfer_reclaim_fences_stale_upload_and_failure_never_resynthesizes ... ok
+test tests::transfer_is_on_demand_idempotent_and_pinned_to_the_result_holder ... ok
+test tests::reclaims_are_fenced_even_with_the_same_worker_id ... ok
+test tests::streamed_results_validate_hash_download_and_expire ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+    Checking shanye-task-relay v0.1.0 (/Users/kothchen/code/KKWenxue/relay)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.94s

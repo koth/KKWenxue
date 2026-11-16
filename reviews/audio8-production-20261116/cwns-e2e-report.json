@@ -1,0 +1,17 @@
+{
+  "state": "succeeded",
+  "counts": {
+    "total": 4,
+    "completed": 4,
+    "failed": 0,
+    "skipped": 0,
+    "reused": 0
+  },
+  "engine": "audio8-realistic-air-cpp",
+  "voice": "a63c22269e594284805a0ffaadb784a1",
+  "duration_ms": 22831,
+  "cues": 4,
+  "bundle_bytes": 196542,
+  "seconds": 69.31255624300684,
+  "text": "那天傍晚，天空突然下起了雨。他站在窗前，望着对面那座早已废弃的旧楼。楼里没有灯光，却传来了清晰的脚步声，每一步都像是踩在他的心口上。他想起了昨夜收到的那封信，上面只有一句话：如果你听见了，千万不要回头。"
+}

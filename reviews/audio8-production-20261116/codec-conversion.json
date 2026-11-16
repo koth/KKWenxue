@@ -1,0 +1,1 @@
+{"decoder": "/home/jetson/workspace/Audio8-TTS-Realistic-Air/codec-decoder-bf16.safetensors", "tensors": 214, "bytes": 260785578, "materialization_weight_max_error": 0.0, "materialization_wave_max_error": 0.0048828125, "materialization_wave_rmse": 0.00036050405469723046, "baseline_rms": 0.02789733000099659}

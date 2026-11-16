@@ -1,0 +1,16 @@
+[Unit]
+Description=Shanye TTS resident GPU worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jetson/workspace/shanye-tts-service/app
+EnvironmentFile=/home/jetson/workspace/shanye-tts-service/service.env
+ExecStart=/home/jetson/workspace/shanye-tts-service/.gpu-venv/bin/python -m server.worker --role gpu --batch-size 1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=infinity
+UMask=0077
+
+[Install]
+WantedBy=default.target

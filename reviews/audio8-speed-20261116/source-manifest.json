@@ -1,0 +1,32 @@
+[
+  {
+    "group": "native",
+    "path": "include/audio8.hpp",
+    "sha256": "244167d4136f36acf5d1e7900ee501fdeab8baad88959264eb418010fbdec2cb"
+  },
+  {
+    "group": "native",
+    "path": "src/model.cpp",
+    "sha256": "ad53c33c20e1591d79d296e9d067c7bca97cbf6e5b90d7061a17e0a720d263c4"
+  },
+  {
+    "group": "native",
+    "path": "src/engine.cpp",
+    "sha256": "59272ca18af45c08ff8c8ca10d7259754a5d7dba00491a03de416248cfc578a6"
+  },
+  {
+    "group": "native",
+    "path": "src/main.cpp",
+    "sha256": "d827fb4014ec4c8dc9a7bd982741001978a99fd597909f183febce48fe5735b1"
+  },
+  {
+    "group": "service",
+    "path": "server/audio8_runtime.py",
+    "sha256": "fb395afb1a50f308f821ff76bb28cfa424c23ac3952a5f70f45ac4178bed61e7"
+  },
+  {
+    "group": "service",
+    "path": "server/presets.py",
+    "sha256": "86625d287879683b35168ebe948b6a02c9f93ded9a5b1008a6919985330e4695"
+  }
+]

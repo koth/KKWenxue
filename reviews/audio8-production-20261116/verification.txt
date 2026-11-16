@@ -1,0 +1,8 @@
+Audio8 native migration verification
+- C++17 / ARM64 LibTorch / CUDA 12.6 built natively on Orin Nano.
+- Service process keeps JSONL native runtime resident; waveform generated in C++.
+- One-time/reference-only Python codec process caches 10-codebook NPYs.
+- cwns.mp3 is the default; supplied transcript stored verbatim.
+- Service queue, source text, UTF-16 ranges, FLAC, M4A, manifest and LAN-first bundles retained.
+- Dialogue closers and punctuation-only native fragments covered by host boundary tests.
+- No Python main TTS model, CosyVoice or Qwen synthesis fallback.

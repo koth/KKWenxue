@@ -1,0 +1,52 @@
+{
+  "checks": [
+    {
+      "index": 0,
+      "projection": {
+        "max_absolute_error": 3.0517578125e-05,
+        "rmse": 4.76837158203125e-07,
+        "relative_rmse": 3.210592325331163e-08,
+        "probability_total_variation": 0.0,
+        "identical": false
+      },
+      "hidden": {
+        "max_absolute_error": 0.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "probability_total_variation": 0.0,
+        "identical": true
+      },
+      "prefix": {
+        "max_absolute_error": 0.5,
+        "rmse": 0.11563710868358612,
+        "relative_rmse": 0.007785962428897619,
+        "probability_total_variation": 0.007463466841727495,
+        "identical": false
+      }
+    },
+    {
+      "index": 1,
+      "projection": {
+        "max_absolute_error": 0.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "probability_total_variation": 0.0,
+        "identical": true
+      },
+      "hidden": {
+        "max_absolute_error": 0.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "probability_total_variation": 0.0,
+        "identical": true
+      },
+      "prefix": {
+        "max_absolute_error": 0.5,
+        "rmse": 0.11296115070581436,
+        "relative_rmse": 0.006725090090185404,
+        "probability_total_variation": 0.06422872096300125,
+        "identical": false
+      }
+    }
+  ]
+}

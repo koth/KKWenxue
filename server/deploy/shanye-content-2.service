@@ -1,0 +1,17 @@
+[Unit]
+Description=Shanye novel content worker (second lane)
+After=network-online.target shanye-content.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jetson/workspace/shanye-content
+EnvironmentFile=/home/jetson/workspace/shanye-content/content-2.env
+ExecStart=/home/jetson/workspace/shanye-tts-service/.api-venv/bin/python -m content.worker
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=default.target

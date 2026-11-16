@@ -1,0 +1,129 @@
+{
+  "id": "1af05a06fb5e4b65a1c6c9d7b0dfb90c",
+  "kind": "preview",
+  "variant_id": "ff95bba51c8cd226c10d7d563a3361ec0bb2f9fe8075faf4c0f2a146654aacf7",
+  "generation_id": "522d6d317f144d3e8ea93eae95851ad4",
+  "state": "succeeded",
+  "desired": "run",
+  "phase": "exporting",
+  "created": 1794838500.721428,
+  "updated": 1794838606.2768242,
+  "owner": null,
+  "lease_until": null,
+  "error": null,
+  "parent_job_id": null,
+  "request": {
+    "book_id": "local-f6a38e5f6131290460a62005",
+    "chapter_ids": [
+      "local-f6a38e5f6131290460a62005-1031"
+    ],
+    "export": null,
+    "inline_chapters": null,
+    "mode": "new-version",
+    "voice_preset_version_id": "clone-a63c22269e594284805a0ffaadb784a1"
+  },
+  "config": {
+    "export": {
+      "format": "m4a",
+      "normalize_loudness": true,
+      "pause_ms": 180,
+      "speed": 1.0
+    },
+    "generation": {
+      "dtype": "bfloat16",
+      "engine": "audio8-realistic-air-cpp",
+      "inference_mode": "reference-codes",
+      "language": "Chinese",
+      "model": "Edge0/Audio8-TTS-Realistic-Air",
+      "normalization": "reader-canonical+OpenCC-t2s-v1",
+      "ref_audio_path": "reference-voices/a63c22269e594284805a0ffaadb784a1.normalized.wav",
+      "ref_audio_sha256": "2a1d613e30084ce5b137d8a3ad823f402e6cc54493841765666102bf50d8cd8d",
+      "ref_text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。",
+      "revision": "6bf7a980759d8022a66922ee975dab99229a2dd9",
+      "seed": 42,
+      "segmentation": "reader-sentence-bounded160-v1",
+      "speaker": "clone:a63c22269e594284805a0ffaadb784a1",
+      "style_source": "reference-audio",
+      "temperature": 0.7,
+      "text_frontend": false,
+      "top_k": 50,
+      "top_p": 0.9,
+      "voice_clone_ref_id": "a63c22269e594284805a0ffaadb784a1"
+    },
+    "preset_name": "参考音色 · cwns.mp3",
+    "voice_preset_version_id": "clone-a63c22269e594284805a0ffaadb784a1"
+  },
+  "counts": {
+    "total": 4,
+    "completed": 4,
+    "failed": 0,
+    "skipped": 0,
+    "reused": 0
+  },
+  "skipped_segments": [],
+  "chapters": [
+    {
+      "job_id": "1af05a06fb5e4b65a1c6c9d7b0dfb90c",
+      "revision_id": "e5c3227fe1c3eaa9cf3831bcb28fa79513f32214589ea2e930bf8bf08278dc86",
+      "position": 0,
+      "artifact_id": "8abb26c6b20a4c15a47dd6eacbedb700",
+      "state": "succeeded",
+      "error": null,
+      "chapter_id": "local-f6a38e5f6131290460a62005-1031",
+      "title": "第1033章 天選之子",
+      "chapter_number": 1033,
+      "chapter_index": 1031
+    }
+  ],
+  "errors": [],
+  "events": [
+    {
+      "seq": 2458,
+      "created": 1794838500.721913,
+      "event": "accepted",
+      "data": {
+        "kind": "preview",
+        "segments": 4
+      }
+    },
+    {
+      "seq": 2459,
+      "created": 1794838552.826876,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 2460,
+      "created": 1794838563.2326875,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 2461,
+      "created": 1794838579.1130059,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 2462,
+      "created": 1794838602.374278,
+      "event": "exporting",
+      "data": {}
+    },
+    {
+      "seq": 2463,
+      "created": 1794838606.272199,
+      "event": "artifact-ready",
+      "data": {
+        "artifact_id": "8abb26c6b20a4c15a47dd6eacbedb700",
+        "revision_id": "e5c3227fe1c3eaa9cf3831bcb28fa79513f32214589ea2e930bf8bf08278dc86"
+      }
+    },
+    {
+      "seq": 2464,
+      "created": 1794838606.276911,
+      "event": "succeeded",
+      "data": {}
+    }
+  ]
+}

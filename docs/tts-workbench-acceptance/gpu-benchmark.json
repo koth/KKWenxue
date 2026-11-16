@@ -1,0 +1,89 @@
+{
+  "source": "original studio-demo, explicit isolated acceptance",
+  "model_load_and_first_batch_seconds": 43.887,
+  "warm_job_seconds": 5.961,
+  "cpu_reexport_seconds": 0.189,
+  "speed_only_gpu_calls": 0,
+  "timeline": [
+    {
+      "at": 50.159,
+      "bulk": "exporting",
+      "preview": "exporting"
+    },
+    {
+      "at": 50.311,
+      "bulk": "succeeded",
+      "preview": "exporting"
+    },
+    {
+      "at": 50.541,
+      "bulk": "succeeded",
+      "preview": "succeeded"
+    },
+    {
+      "at": 50.543,
+      "bulk": "succeeded",
+      "preview": "succeeded"
+    }
+  ],
+  "measurements": {
+    "clips": 9,
+    "audio_seconds": 33.68,
+    "synthesis_seconds": 55.38104411796667
+  },
+  "jobs": {
+    "bulk": {
+      "id": "abe66a413e4c4583b79d5897dbee92b5",
+      "state": "succeeded",
+      "counts": {
+        "total": 6,
+        "completed": 6,
+        "failed": 0,
+        "reused": 0
+      },
+      "artifacts": [
+        "7b10457320654a81aa3c0ce21cfc6871",
+        "34a476b87fdb43199a4f342e2d882d38"
+      ]
+    },
+    "preview": {
+      "id": "f5cc6819d9b4486787bbc3b39f6b76fb",
+      "state": "succeeded",
+      "counts": {
+        "total": 3,
+        "completed": 3,
+        "failed": 0,
+        "reused": 3
+      },
+      "artifacts": [
+        "98f03defcb6c4b2685c0fc07d23511d2"
+      ]
+    },
+    "warm": {
+      "id": "a1156e9400f44fbdb4af921efdd53190",
+      "state": "succeeded",
+      "counts": {
+        "total": 3,
+        "completed": 3,
+        "failed": 0,
+        "reused": 0
+      },
+      "artifacts": [
+        "c2a6bf500dc045bda3680300388a7d4c"
+      ]
+    },
+    "speed_only": {
+      "id": "5c0e456b10be48a59e7f97c32a38aab5",
+      "state": "succeeded",
+      "counts": {
+        "total": 3,
+        "completed": 3,
+        "failed": 0,
+        "reused": 3
+      },
+      "artifacts": [
+        "a85a00eea954450295d39d60fb88faa2"
+      ]
+    }
+  }
+}

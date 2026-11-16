@@ -1,0 +1,31 @@
+{
+  "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+  "gpu": "NVIDIA GeForce RTX 3090",
+  "torch": "2.3.1+cu121",
+  "load_seconds": 6.193385727005079,
+  "text_chars": 300,
+  "speed": 1.0,
+  "fp16": true,
+  "normalizer": "builtin",
+  "reference_sha256": "39ca36fd1f79bdd812c2c9c6a5420568ab0fd0973cc9bf683dbcef985035c077",
+  "results": [
+    {
+      "mode": "neutral",
+      "path": "/h/work/shanye-cosyvoice-audition-20261115/demo/cosyvoice3-0.5b-neutral-raw.wav",
+      "generation_seconds": 34.95595151401358,
+      "audio_seconds": 68.16,
+      "real_time_factor": 0.5128514013206218,
+      "chunks_seconds": [
+        13.6,
+        24.68,
+        16.0,
+        13.88
+      ],
+      "sample_rate": 24000,
+      "peak": 0.9900000095367432,
+      "rms": 0.09555931389331818,
+      "gpu_peak_allocated_mib": 4327.8896484375,
+      "instruction": "You are a helpful assistant. 用标准普通话，以平静自然的语气讲述故事，语速适中。<|endofprompt|>"
+    }
+  ]
+}

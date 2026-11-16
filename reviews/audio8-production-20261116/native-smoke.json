@@ -1,0 +1,74 @@
+[
+  {
+    "text": "窗外传来一阵脚步声。他停下手里的动作，仔细听了一会儿。",
+    "seconds": 30.745147431007354,
+    "duration": 6.594458333333334,
+    "runtime": {
+      "seed": 42,
+      "batch_size": 1,
+      "native": true,
+      "engine": "audio8-realistic-air-cpp",
+      "source_sample_rate": 44100,
+      "stored_sample_rate": 24000,
+      "generation_seconds": 14.679130794999999,
+      "decode_seconds": 1.055360285,
+      "audio_seconds": 6.594467120181406,
+      "runtime": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 5153370112,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "peak_reserved_bytes": 1499463680,
+        "peak_tensor_bytes": 1489823744,
+        "python_runtime": false,
+        "sample_rate": 44100
+      }
+    },
+    "status": {
+      "model": "ready",
+      "engine": "audio8-realistic-air-cpp",
+      "gpu": "Orin"
+    }
+  },
+  {
+    "text": "夜色渐深，街道安静下来。他推开门，看见桌上放着一封信，信封上没有写名字，只有一个熟悉的地址。",
+    "seconds": 28.606863560999045,
+    "duration": 12.260125,
+    "runtime": {
+      "seed": 43,
+      "batch_size": 1,
+      "native": true,
+      "engine": "audio8-realistic-air-cpp",
+      "source_sample_rate": 44100,
+      "stored_sample_rate": 24000,
+      "generation_seconds": 26.873273952999998,
+      "decode_seconds": 1.507428789,
+      "audio_seconds": 12.26013605442177,
+      "runtime": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 5153370112,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "peak_reserved_bytes": 1499463680,
+        "peak_tensor_bytes": 1489823744,
+        "python_runtime": false,
+        "sample_rate": 44100
+      }
+    },
+    "status": {
+      "model": "ready",
+      "engine": "audio8-realistic-air-cpp",
+      "gpu": "Orin"
+    }
+  }
+]

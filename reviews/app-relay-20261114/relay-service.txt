@@ -1,0 +1,5 @@
+MainPID=3368821
+MemoryCurrent=1572864
+ActiveState=active
+SubState=running
+30ccd43d2407571604845dc20c29b2bf998571ccb0f83a2e6fbd30e099acb22b  /opt/shanye-task-relay/shanye-task-relay

@@ -1,0 +1,354 @@
+{
+  "id": "82f9f9ce2777411099a0c4a5550a1749",
+  "kind": "synthesis",
+  "variant_id": "9624e4fc255e8193db50433a22c64c3c7cc6987c91fb3cc428f58510d4a88a5d",
+  "generation_id": "reuse",
+  "state": "succeeded",
+  "desired": "run",
+  "phase": "exporting",
+  "created": 1794718704.0429292,
+  "updated": 1794719227.8102078,
+  "owner": null,
+  "lease_until": null,
+  "error": null,
+  "parent_job_id": "ecb90572f814475fab8db22a0880eea1",
+  "request": {
+    "book_id": "local-f6a38e5f6131290460a62005",
+    "chapter_ids": [
+      "local-f6a38e5f6131290460a62005-982"
+    ],
+    "export": null,
+    "inline_chapters": null,
+    "mode": "reuse",
+    "voice_preset_version_id": "clone-9ef173d881f74a49888715b1ed92b24d"
+  },
+  "config": {
+    "export": {
+      "format": "m4a",
+      "normalize_loudness": true,
+      "pause_ms": 180,
+      "speed": 1.0
+    },
+    "generation": {
+      "dtype": "float16",
+      "engine": "cosyvoice3-0.5b-cuda",
+      "inference_mode": "instruct2",
+      "instruct": "You are a helpful assistant. 用标准普通话，以平静自然的语气讲述故事，语速适中。<|endofprompt|>",
+      "language": "Chinese",
+      "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+      "normalization": "reader-canonical+OpenCC-t2s-v1",
+      "ref_audio_path": "reference-voices/9ef173d881f74a49888715b1ed92b24d.normalized.wav",
+      "ref_audio_sha256": "dcf97f6c824b56b11df3bfb9db2dff9bb4c26f47a2601ede910e7ebdfe88f4f5",
+      "ref_text": "各位听众朋友们，今天我给大家讲一个精彩的历史故事，三国演义。这个故事发生在东汉末年，天下大乱之时。那是个英雄辈出的年代，且听我细细道来。单说这一日，在许都城外...",
+      "revision": "2512",
+      "seed": 42,
+      "segmentation": "reader-sentence-bounded160-v1",
+      "speaker": "clone:9ef173d881f74a49888715b1ed92b24d",
+      "text_frontend": false,
+      "voice_clone_ref_id": "9ef173d881f74a49888715b1ed92b24d"
+    },
+    "preset_name": "参考音色 · stf.mp3",
+    "voice_preset_version_id": "clone-9ef173d881f74a49888715b1ed92b24d"
+  },
+  "counts": {
+    "total": 83,
+    "completed": 83,
+    "failed": 0,
+    "skipped": 0,
+    "reused": 0
+  },
+  "skipped_segments": [],
+  "chapters": [
+    {
+      "job_id": "82f9f9ce2777411099a0c4a5550a1749",
+      "revision_id": "27b95a160b77027fb228c71da1418a9fe79223f5eea3eb9b3227147f1b08f189",
+      "position": 0,
+      "artifact_id": "cf5b14e1f6ee46a28bd32bcd65965fd1",
+      "state": "succeeded",
+      "error": null,
+      "chapter_id": "local-f6a38e5f6131290460a62005-982",
+      "title": "第984章 鳩山紗月",
+      "chapter_number": 984,
+      "chapter_index": 982
+    }
+  ],
+  "errors": [],
+  "events": [
+    {
+      "seq": 1099,
+      "created": 1794718704.04339,
+      "event": "accepted",
+      "data": {
+        "kind": "synthesis",
+        "segments": 83
+      }
+    },
+    {
+      "seq": 1100,
+      "created": 1794718723.2760549,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1101,
+      "created": 1794718734.6684957,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1102,
+      "created": 1794718740.2166402,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1103,
+      "created": 1794718749.8389063,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1104,
+      "created": 1794718760.5966613,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1105,
+      "created": 1794718771.4760725,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1106,
+      "created": 1794718789.3288114,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1107,
+      "created": 1794718806.9477463,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1108,
+      "created": 1794718820.9065938,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1109,
+      "created": 1794718824.030682,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1110,
+      "created": 1794718830.1671734,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1111,
+      "created": 1794718838.9091969,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1112,
+      "created": 1794718851.8221655,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1113,
+      "created": 1794718863.7993793,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1114,
+      "created": 1794718882.939131,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1115,
+      "created": 1794718897.5054264,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1116,
+      "created": 1794718910.8793316,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1117,
+      "created": 1794718928.7022305,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1118,
+      "created": 1794718936.2916195,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1119,
+      "created": 1794718940.9427733,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1120,
+      "created": 1794718952.6787956,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1121,
+      "created": 1794718969.0163782,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1122,
+      "created": 1794718982.002875,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1123,
+      "created": 1794718994.6975322,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1124,
+      "created": 1794719006.2421734,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1125,
+      "created": 1794719018.011645,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1126,
+      "created": 1794719026.8462296,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1127,
+      "created": 1794719040.0389857,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1128,
+      "created": 1794719053.4286547,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1129,
+      "created": 1794719060.1527321,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1130,
+      "created": 1794719066.6010993,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1131,
+      "created": 1794719086.3956406,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1132,
+      "created": 1794719099.477966,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1133,
+      "created": 1794719104.9140964,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1134,
+      "created": 1794719110.4143322,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1135,
+      "created": 1794719119.7887228,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1136,
+      "created": 1794719132.6215086,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1137,
+      "created": 1794719143.9339595,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1138,
+      "created": 1794719148.9493942,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1139,
+      "created": 1794719151.9486558,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1140,
+      "created": 1794719165.7538872,
+      "event": "queued",
+      "data": {}
+    },
+    {
+      "seq": 1141,
+      "created": 1794719168.1507576,
+      "event": "exporting",
+      "data": {}
+    },
+    {
+      "seq": 1142,
+      "created": 1794719227.8084452,
+      "event": "artifact-ready",
+      "data": {
+        "artifact_id": "cf5b14e1f6ee46a28bd32bcd65965fd1",
+        "revision_id": "27b95a160b77027fb228c71da1418a9fe79223f5eea3eb9b3227147f1b08f189"
+      }
+    },
+    {
+      "seq": 1143,
+      "created": 1794719227.8102305,
+      "event": "succeeded",
+      "data": {}
+    }
+  ]
+}

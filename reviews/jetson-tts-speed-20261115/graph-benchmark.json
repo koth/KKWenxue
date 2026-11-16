@@ -1,0 +1,81 @@
+[
+  {
+    "mode": "graph-model-warmup",
+    "index": 99,
+    "text": "夜色渐深，街道安静下来。",
+    "wall_seconds": 53.33923132199925,
+    "audio_seconds": 3.36,
+    "rtf": 15.874771226785493,
+    "stages": {},
+    "threads": 2,
+    "cuda_peak_allocated": 2101872128,
+    "cuda_peak_reserved": 2168455168
+  },
+  {
+    "mode": "graph-capture",
+    "index": 0,
+    "text": "窗外传来一阵脚步声。他停下手里的动作，仔细听了一会儿。",
+    "wall_seconds": 12.325157528999625,
+    "audio_seconds": 5.76,
+    "rtf": 2.1397842932291016,
+    "stages": {
+      "llm": 6.6773838580011216,
+      "flow": 5.12927799299905,
+      "vocoder": 0.5065424679996795
+    },
+    "threads": 2,
+    "cuda_peak_allocated": 2159711744,
+    "cuda_peak_reserved": 2235564032,
+    "same_samples": false
+  },
+  {
+    "mode": "cuda-graph",
+    "index": 0,
+    "text": "窗外传来一阵脚步声。他停下手里的动作，仔细听了一会儿。",
+    "wall_seconds": 11.364606228999037,
+    "audio_seconds": 5.76,
+    "rtf": 1.9730219147567774,
+    "stages": {
+      "llm": 5.90582175399868,
+      "flow": 5.093055823999748,
+      "vocoder": 0.3543706349992135
+    },
+    "threads": 2,
+    "cuda_peak_allocated": 2159711744,
+    "cuda_peak_reserved": 2235564032,
+    "same_samples": false
+  },
+  {
+    "mode": "cuda-graph",
+    "index": 1,
+    "text": "夜色渐深，街道安静下来。他推开门，看见桌上放着一封信，信封上没有写名字，只有一个熟悉的地址。",
+    "wall_seconds": 17.156991238000046,
+    "audio_seconds": 9.8,
+    "rtf": 1.7507133916326576,
+    "stages": {
+      "llm": 10.10201873099868,
+      "flow": 6.311333771000136,
+      "vocoder": 0.7295250529987243
+    },
+    "threads": 2,
+    "cuda_peak_allocated": 2201081344,
+    "cuda_peak_reserved": 2279604224,
+    "same_samples": false
+  },
+  {
+    "mode": "cuda-graph-long",
+    "index": 2,
+    "text": "那天傍晚，天空突然下起了雨。他站在窗前，望着对面那座早已废弃的旧楼。楼里没有灯光，却传来了清晰的脚步声，每一步都像是踩在他的心口上。他想起了昨夜收到的那封信，上面只有一句话：如果你听见了，千万不要回头。",
+    "wall_seconds": 33.52809086399975,
+    "audio_seconds": 21.48,
+    "rtf": 1.5608980849161895,
+    "stages": {
+      "llm": 21.766692500999852,
+      "flow": 10.359966777999944,
+      "vocoder": 1.3806460100004188
+    },
+    "threads": 2,
+    "cuda_peak_allocated": 2320687104,
+    "cuda_peak_reserved": 2428502016
+  }
+]

@@ -1,0 +1,22 @@
+[
+  {
+    "elapsed": 51.968259891989874,
+    "runtime_json": "{\"audio_seconds\":20.990839002267574,\"batch_size\":1,\"decode_seconds\":2.723432995,\"engine\":\"audio8-realistic-air-cpp\",\"generation_seconds\":45.38699827,\"native\":true,\"packages\":{\"numpy\":\"1.26.4\",\"soundfile\":\"0.12.1\"},\"runtime\":{\"backend\":\"libtorch_cpp_cuda\",\"batch_size\":1,\"compute_capability\":\"8.7\",\"context\":2048,\"cuda_free_bytes\":4977266688,\"cuda_total_bytes\":7990009856,\"dtype\":\"BFloat16\",\"gpu\":\"Orin\",\"graphs\":true,\"peak_reserved_bytes\":1499463680,\"peak_tensor_bytes\":1489823744,\"python_runtime\":false,\"sample_rate\":44100},\"seed\":103100042,\"source_sample_rate\":44100,\"stored_sample_rate\":24000}",
+    "error": null
+  },
+  {
+    "elapsed": 10.352815459002159,
+    "runtime_json": "{\"audio_seconds\":4.365351473922902,\"batch_size\":1,\"decode_seconds\":0.551664213,\"engine\":\"audio8-realistic-air-cpp\",\"generation_seconds\":9.617104748,\"native\":true,\"packages\":{\"numpy\":\"1.26.4\",\"soundfile\":\"0.12.1\"},\"runtime\":{\"backend\":\"libtorch_cpp_cuda\",\"batch_size\":1,\"compute_capability\":\"8.7\",\"context\":2048,\"cuda_free_bytes\":4977266688,\"cuda_total_bytes\":7990009856,\"dtype\":\"BFloat16\",\"gpu\":\"Orin\",\"graphs\":true,\"peak_reserved_bytes\":1499463680,\"peak_tensor_bytes\":1489823744,\"python_runtime\":false,\"sample_rate\":44100},\"seed\":103100043,\"source_sample_rate\":44100,\"stored_sample_rate\":24000}",
+    "error": null
+  },
+  {
+    "elapsed": 15.830113467003684,
+    "runtime_json": "{\"audio_seconds\":6.780226757369615,\"batch_size\":1,\"decode_seconds\":0.828536337,\"engine\":\"audio8-realistic-air-cpp\",\"generation_seconds\":14.814096969,\"native\":true,\"packages\":{\"numpy\":\"1.26.4\",\"soundfile\":\"0.12.1\"},\"runtime\":{\"backend\":\"libtorch_cpp_cuda\",\"batch_size\":1,\"compute_capability\":\"8.7\",\"context\":2048,\"cuda_free_bytes\":4977266688,\"cuda_total_bytes\":7990009856,\"dtype\":\"BFloat16\",\"gpu\":\"Orin\",\"graphs\":true,\"peak_reserved_bytes\":1499463680,\"peak_tensor_bytes\":1489823744,\"python_runtime\":false,\"sample_rate\":44100},\"seed\":103100044,\"source_sample_rate\":44100,\"stored_sample_rate\":24000}",
+    "error": null
+  },
+  {
+    "elapsed": 23.203168666994316,
+    "runtime_json": "{\"audio_seconds\":10.031020408163265,\"batch_size\":1,\"decode_seconds\":1.196832996,\"engine\":\"audio8-realistic-air-cpp\",\"generation_seconds\":21.807871053,\"native\":true,\"packages\":{\"numpy\":\"1.26.4\",\"soundfile\":\"0.12.1\"},\"runtime\":{\"backend\":\"libtorch_cpp_cuda\",\"batch_size\":1,\"compute_capability\":\"8.7\",\"context\":2048,\"cuda_free_bytes\":4977266688,\"cuda_total_bytes\":7990009856,\"dtype\":\"BFloat16\",\"gpu\":\"Orin\",\"graphs\":true,\"peak_reserved_bytes\":1499463680,\"peak_tensor_bytes\":1489823744,\"python_runtime\":false,\"sample_rate\":44100},\"seed\":103100045,\"source_sample_rate\":44100,\"stored_sample_rate\":24000}",
+    "error": null
+  }
+]

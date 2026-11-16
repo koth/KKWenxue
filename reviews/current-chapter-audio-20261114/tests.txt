@@ -1,0 +1,9 @@
+
+com.kkwenxue.shanye.AudioEntryInstrumentedTest:...
+com.kkwenxue.shanye.AudioLibraryInstrumentedTest:...
+
+Time: 11.688
+
+OK (6 tests)
+
+

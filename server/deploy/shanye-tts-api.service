@@ -1,0 +1,15 @@
+[Unit]
+Description=Shanye TTS API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jetson/workspace/shanye-tts-service/app
+EnvironmentFile=/home/jetson/workspace/shanye-tts-service/service.env
+ExecStart=/home/jetson/workspace/shanye-tts-service/.api-venv/bin/python -m uvicorn server.app:app_factory --factory --host 127.0.0.1 --port 17860
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target

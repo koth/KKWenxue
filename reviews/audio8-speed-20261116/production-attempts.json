@@ -1,0 +1,214 @@
+[
+  {
+    "segment_id": "43f6cb5e2af899a8aa03a934c6d6f0c6134c17039b80ca33e4683f99df67f192",
+    "number": 1,
+    "elapsed": 51.00872231600806,
+    "error": null,
+    "runtime": {
+      "audio_seconds": 21.640997732426303,
+      "batch_size": 1,
+      "decode_seconds": 2.820269909,
+      "engine": "audio8-realistic-air-cpp",
+      "fragments": [
+        {
+          "autoregressive_seconds": 43.722250373,
+          "frames": 466,
+          "prefill_seconds": 0.061029075
+        }
+      ],
+      "generation_seconds": 43.964405378,
+      "native": true,
+      "packages": {
+        "numpy": "1.26.4",
+        "soundfile": "0.12.1"
+      },
+      "reference_cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.18112577,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.022623296
+      },
+      "runtime": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 4404211712,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "inference_revision": "compact-prefix-v2",
+        "peak_reserved_bytes": 1499463680,
+        "peak_tensor_bytes": 1497199104,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "seed": 103100042,
+      "source_sample_rate": 44100,
+      "stored_sample_rate": 24000
+    }
+  },
+  {
+    "segment_id": "ef0febd220c0822f1aeae75458cd504d07db935dd17cac446787b17d6ff5d211",
+    "number": 1,
+    "elapsed": 6.574794639003812,
+    "error": null,
+    "runtime": {
+      "audio_seconds": 2.9257142857142857,
+      "batch_size": 1,
+      "decode_seconds": 0.390283015,
+      "engine": "audio8-realistic-air-cpp",
+      "fragments": [
+        {
+          "autoregressive_seconds": 5.950847203,
+          "frames": 63,
+          "prefill_seconds": 0.056382322
+        }
+      ],
+      "generation_seconds": 6.007229813,
+      "native": true,
+      "packages": {
+        "numpy": "1.26.4",
+        "soundfile": "0.12.1"
+      },
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.000149477
+      },
+      "runtime": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 4404211712,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "inference_revision": "compact-prefix-v2",
+        "peak_reserved_bytes": 1499463680,
+        "peak_tensor_bytes": 1497199104,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "seed": 103100043,
+      "source_sample_rate": 44100,
+      "stored_sample_rate": 24000
+    }
+  },
+  {
+    "segment_id": "45ab62ea93a4de85e2f59ffd34a19dbfaa224897991460ccfe7cc4c18dd9f22a",
+    "number": 1,
+    "elapsed": 15.390385592007078,
+    "error": null,
+    "runtime": {
+      "audio_seconds": 7.058866213151927,
+      "batch_size": 1,
+      "decode_seconds": 0.859295239,
+      "engine": "audio8-realistic-air-cpp",
+      "fragments": [
+        {
+          "autoregressive_seconds": 14.289874701,
+          "frames": 152,
+          "prefill_seconds": 0.055315238
+        }
+      ],
+      "generation_seconds": 14.345190195,
+      "native": true,
+      "packages": {
+        "numpy": "1.26.4",
+        "soundfile": "0.12.1"
+      },
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.000147014
+      },
+      "runtime": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 4404211712,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "inference_revision": "compact-prefix-v2",
+        "peak_reserved_bytes": 1499463680,
+        "peak_tensor_bytes": 1497199104,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "seed": 103100044,
+      "source_sample_rate": 44100,
+      "stored_sample_rate": 24000
+    }
+  },
+  {
+    "segment_id": "0a18530b593b7e91fe31aeb92f116b4fe5ed94e0b6fd18b8e28d5c5aa98c84ab",
+    "number": 1,
+    "elapsed": 22.52816370599612,
+    "error": null,
+    "runtime": {
+      "audio_seconds": 10.402539682539683,
+      "batch_size": 1,
+      "decode_seconds": 1.235978544,
+      "engine": "audio8-realistic-air-cpp",
+      "fragments": [
+        {
+          "autoregressive_seconds": 21.04042591,
+          "frames": 224,
+          "prefill_seconds": 0.056132932
+        }
+      ],
+      "generation_seconds": 21.096559034,
+      "native": true,
+      "packages": {
+        "numpy": "1.26.4",
+        "soundfile": "0.12.1"
+      },
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.00015447
+      },
+      "runtime": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 4404211712,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "inference_revision": "compact-prefix-v2",
+        "peak_reserved_bytes": 1499463680,
+        "peak_tensor_bytes": 1497199104,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "seed": 103100045,
+      "source_sample_rate": 44100,
+      "stored_sample_rate": 24000
+    }
+  }
+]

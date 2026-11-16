@@ -1,0 +1,1 @@
+623611d1b1310d7c9fefac5eea8fdb225796886c037bb85a99b5ba3476c9eacf  dist/shanye-0.8.8-debug.apk

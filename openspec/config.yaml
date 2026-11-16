@@ -1,0 +1,28 @@
+schema: spec-driven
+
+context: |
+  山页（KKWenxue）是 Kotlin + Jetpack Compose 小说阅读器。
+  tts/ 已有 Python 合成脚本：Qwen3-TTS、PyTorch/CUDA、MLX、SQLite、FFmpeg。
+  规范原文、父句与片段使用 UTF-16 范围，对齐 Android Chapter.text；简繁显示转换不修改锚点。
+  已确认的默认旁白：Dylan，明亮沉稳、中性语气，成品速度 1.0，句间停顿 180ms。
+  GPU 服务器为 koth@192.168.3.32，RTX 3090 24GB。
+  2026-11-11 用户已停止合成并清空服务器小说数据库、音频、试听、日志和临时文件。
+  保留目录 /h/work/shanye-tts-emengshitu-20261109 下的模型、Python/CUDA 环境、依赖缓存和脚本。
+  本地 Web 只读加载本地阅读器 SQLite。服务器从空服务库启动，正式提交时只保存选中章节的任务快照；不上传整本书或恢复旧任务。
+  克隆音色使用 Qwen3-TTS Base，参考音频及逐字稿由用户选择上传，实际音色与节奏以试听为准。
+  提案文档用中文；OpenSpec 结构标题、SHALL/MUST、WHEN/THEN 与任务复选框遵守 schema。
+
+rules:
+  proposal:
+    - 仅定义本次变更范围，区分首版交付和后续能力。
+    - 每项 New Capability 必须有对应的 delta spec。
+  specs:
+    - 每项 requirement 使用 SHALL 或 MUST，并至少有一个 WHEN/THEN 场景。
+    - 描述可观察行为与失败边界，不把部署细节写成用户功能。
+    - 禁止把章号或 chapter_index 当作跨书籍唯一的章节标识。
+  design:
+    - 明确模型常驻、GPU 独占调度、原文定位、生成缓存与导出缓存的边界。
+    - 以服务器清理后的状态设计初始化；历史结果导入只能是显式操作。
+  tasks:
+    - 使用分组的编号复选任务，并包含与 specs 对应的验收。
+    - 所有实施任务在提案阶段保持未完成状态。

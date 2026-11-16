@@ -1,0 +1,13 @@
+
+com.kkwenxue.shanye.AudioLibraryInstrumentedTest:...
+com.kkwenxue.shanye.BookDatabaseInstrumentedTest:.
+com.kkwenxue.shanye.PageTurnInstrumentedTest:........
+com.kkwenxue.shanye.ReaderAudioAcceptanceTest:.
+com.kkwenxue.shanye.ReaderInstrumentedTest:......
+com.kkwenxue.shanye.SentenceHighlightInstrumentedTest:..
+
+Time: 37.233
+
+OK (21 tests)
+
+

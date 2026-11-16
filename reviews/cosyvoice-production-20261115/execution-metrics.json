@@ -1,0 +1,7 @@
+{
+  "segments": 83,
+  "raw_audio_seconds": 887.72,
+  "gpu_unit_seconds_including_cold_model_load": 456.1127065770561,
+  "attempts": 83,
+  "failed_attempts": 0
+}

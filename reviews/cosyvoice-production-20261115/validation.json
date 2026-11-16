@@ -1,0 +1,42 @@
+{
+  "job_id": "82f9f9ce2777411099a0c4a5550a1749",
+  "artifact_id": "cf5b14e1f6ee46a28bd32bcd65965fd1",
+  "bundle_id": "9c75a40c02e54b6ebceeaca462f3de9c",
+  "state": "succeeded",
+  "counts": {
+    "total": 83,
+    "completed": 83,
+    "failed": 0,
+    "skipped": 0,
+    "reused": 0
+  },
+  "duration_ms": 902480,
+  "cues": 83,
+  "source_revision_matches_current_android_book": true,
+  "all_cue_utf16_text_matches": true,
+  "full_aac_decode": true,
+  "audio_sha256": "218e1e9b976776addebf4fbede6798304ee3c77212fd5c01d8ad547d0a779626",
+  "zip_sha256": "5185629e7af3a445a0f55c4826f15729604888b638bc675e6537cb1808db328b",
+  "zip_crc_valid": true,
+  "loudness": {
+    "input_i": -18.77,
+    "input_tp": -1.04,
+    "input_lra": 3.3,
+    "input_thresh": -29.17,
+    "target_offset": -0.08
+  },
+  "catalogue": {
+    "entries": [
+      {
+        "artifact_id": "cf5b14e1f6ee46a28bd32bcd65965fd1",
+        "audio": "第984章 鳩山紗月-cf5b14e1f6ee46a28bd32bcd65965fd1.m4a",
+        "audio_sha256": "218e1e9b976776addebf4fbede6798304ee3c77212fd5c01d8ad547d0a779626",
+        "chapter_id": "local-f6a38e5f6131290460a62005-982",
+        "manifest": "第984章 鳩山紗月-cf5b14e1f6ee46a28bd32bcd65965fd1.json",
+        "manifest_sha256": "6efcd3c1a4a7ff3c7a26a767aadbb575936f3121ac7043f7101325306239de29",
+        "title": "第984章 鳩山紗月"
+      }
+    ],
+    "schema_version": 1
+  }
+}

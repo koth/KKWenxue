@@ -1,0 +1,34 @@
+{
+  "torch": "2.8.0",
+  "cuda": "12.6",
+  "gpu": "Orin",
+  "onnxruntime": "1.23.0",
+  "providers": [
+    "TensorrtExecutionProvider",
+    "CUDAExecutionProvider",
+    "CPUExecutionProvider"
+  ],
+  "status": {
+    "model": "ready",
+    "gpu": "Orin"
+  },
+  "peak_rss_kib": 7169900,
+  "cuda_peak_allocated": 2136452096,
+  "cuda_peak_reserved": 2195718144,
+  "samples": [
+    {
+      "characters": 27,
+      "audio_seconds": 5.92,
+      "wall_seconds": 72.2691542980001,
+      "rtf": 12.20762741520272,
+      "path": "/home/jetson/workspace/migration-20261115/stf-smoke-0.wav"
+    },
+    {
+      "characters": 27,
+      "audio_seconds": 4.84,
+      "wall_seconds": 17.686616834000233,
+      "rtf": 3.6542596764463293,
+      "path": "/home/jetson/workspace/migration-20261115/stf-smoke-1.wav"
+    }
+  ]
+}

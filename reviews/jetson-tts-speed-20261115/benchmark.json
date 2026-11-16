@@ -1,0 +1,118 @@
+[
+  {
+    "mode": "warmup",
+    "index": 99,
+    "text": "夜色渐深，街道安静下来。",
+    "wall_seconds": 56.200096079001014,
+    "audio_seconds": 3.36,
+    "rtf": 16.726219071131254,
+    "stages": {},
+    "threads": 2,
+    "cuda_peak_allocated": 2101872128,
+    "cuda_peak_reserved": 2168455168
+  },
+  {
+    "mode": "baseline",
+    "index": 0,
+    "text": "窗外传来一阵脚步声。他停下手里的动作，仔细听了一会儿。",
+    "wall_seconds": 18.77790944499975,
+    "audio_seconds": 5.88,
+    "rtf": 3.19352201445574,
+    "stages": {
+      "llm": 13.07953109600021,
+      "flow": 5.15902129800088,
+      "vocoder": 0.52557602899833
+    },
+    "threads": 2,
+    "cuda_peak_allocated": 2135765504,
+    "cuda_peak_reserved": 2191523840
+  },
+  {
+    "mode": "baseline",
+    "index": 1,
+    "text": "夜色渐深，街道安静下来。他推开门，看见桌上放着一封信，信封上没有写名字，只有一个熟悉的地址。",
+    "wall_seconds": 27.216289977999622,
+    "audio_seconds": 9.2,
+    "rtf": 2.958292388913003,
+    "stages": {
+      "llm": 20.473190787999556,
+      "flow": 5.926511064000806,
+      "vocoder": 0.7992333830006828
+    },
+    "threads": 2,
+    "cuda_peak_allocated": 2169761792,
+    "cuda_peak_reserved": 2256535552
+  },
+  {
+    "mode": "decoder-only",
+    "index": 0,
+    "text": "窗外传来一阵脚步声。他停下手里的动作，仔细听了一会儿。",
+    "wall_seconds": 17.881831061999037,
+    "audio_seconds": 5.88,
+    "rtf": 3.041127731632489,
+    "stages": {
+      "llm": 12.397315714000797,
+      "flow": 5.103371761000744,
+      "vocoder": 0.37005743900044763
+    },
+    "threads": 2,
+    "cuda_peak_allocated": 2169761792,
+    "cuda_peak_reserved": 2256535552,
+    "same_samples": true,
+    "max_sample_error": 0.0
+  },
+  {
+    "mode": "decoder-only",
+    "index": 1,
+    "text": "夜色渐深，街道安静下来。他推开门，看见桌上放着一封信，信封上没有写名字，只有一个熟悉的地址。",
+    "wall_seconds": 25.857909230000587,
+    "audio_seconds": 9.2,
+    "rtf": 2.8106423076087594,
+    "stages": {
+      "llm": 19.380218154999966,
+      "flow": 5.907191819998843,
+      "vocoder": 0.5568343440008903
+    },
+    "threads": 2,
+    "cuda_peak_allocated": 2169761792,
+    "cuda_peak_reserved": 2256535552,
+    "same_samples": true,
+    "max_sample_error": 0.0
+  },
+  {
+    "mode": "decoder-only-1thread",
+    "index": 0,
+    "text": "窗外传来一阵脚步声。他停下手里的动作，仔细听了一会儿。",
+    "wall_seconds": 17.871979924000698,
+    "audio_seconds": 5.88,
+    "rtf": 3.0394523680273298,
+    "stages": {
+      "llm": 12.386078163999628,
+      "flow": 5.1043884019982215,
+      "vocoder": 0.37004278200038243
+    },
+    "threads": 1,
+    "cuda_peak_allocated": 2169761792,
+    "cuda_peak_reserved": 2256535552,
+    "same_samples": true,
+    "max_sample_error": 0.0
+  },
+  {
+    "mode": "decoder-only-1thread",
+    "index": 1,
+    "text": "夜色渐深，街道安静下来。他推开门，看见桌上放着一封信，信封上没有写名字，只有一个熟悉的地址。",
+    "wall_seconds": 25.866768755999146,
+    "audio_seconds": 9.2,
+    "rtf": 2.811605299565125,
+    "stages": {
+      "llm": 19.390954434000378,
+      "flow": 5.906166268998277,
+      "vocoder": 0.5561863540006016
+    },
+    "threads": 1,
+    "cuda_peak_allocated": 2169761792,
+    "cuda_peak_reserved": 2256535552,
+    "same_samples": true,
+    "max_sample_error": 0.0
+  }
+]

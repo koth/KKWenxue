@@ -1,0 +1,92 @@
+# ============================================================
+# 山页仓库忽略规则
+# 原则：源码、文档、测试夹具、随包发布的资源要提交；
+#       构建产物、运行期数据、凭据、可重建的缓存不提交。
+# ============================================================
+
+# ---------- 系统 / 编辑器 ----------
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# ---------- Android / Gradle ----------
+.gradle/
+.kotlin/
+build/
+**/build/
+local.properties
+*.apk
+*.aab
+*.hprof
+.cxx/
+captures/
+
+# 注意：app/src/main/assets/shanye.db（16 MB 种子书库）和
+#       app/src/main/res/font/reader_serif.ttf（24 MB 字体）是随包资源，必须提交。
+
+# ---------- Rust ----------
+target/
+**/target/
+**/*.rs.bk
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+**/.venv/
+.pytest_cache/
+.ruff_cache/
+tts/.wheels/
+
+# ---------- Node ----------
+node_modules/
+web/dist/
+
+# ---------- 运行期数据 / 本地库 ----------
+relay/relay.sqlite*
+relay/relay-temp/
+catalog/*.sqlite
+catalog/*.sqlite-wal
+catalog/*.sqlite-shm
+content/*.sqlite*
+*.db-wal
+*.db-shm
+.workbench/
+
+# ---------- 生成物：音频 / 日志 ----------
+tts/output/
+reviews/**/*.wav
+reviews/**/*.m4a
+reviews/**/*.flac
+# reviews 里的大体积交付物与第三方刷机包（可再生成 / 可再下载）
+reviews/**/*.zip
+reviews/**/*.tbz2
+reviews/**/*.tar.gz
+*.log
+replay_pid*.log
+
+# 根目录的 cwns.mp3 / stf.mp3 / xspb.mp3 / sound.m4a / demo.m4a 是音色参考样本，
+# 被 server/voices.py 和 App 引用，必须提交——所以不要全局忽略 *.mp3 / *.m4a。
+
+# ---------- 可重建的依赖缓存 ----------
+audio8-cpp/dependency-cache/
+
+# ---------- 本地草稿 ----------
+dist/private/
+scratch/
+tmp/
+
+# ---------- 凭据 ----------
+*.env
+!*.env.example
+**/service.env
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+token*.txt
+secrets*.json

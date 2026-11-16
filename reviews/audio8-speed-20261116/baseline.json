@@ -1,0 +1,499 @@
+{
+  "binary": "/home/jetson/workspace/audio8-speed-20261116/audio8-tts-baseline",
+  "ready": {
+    "engine": {
+      "backend": "libtorch_cpp_cuda",
+      "batch_size": 1,
+      "compute_capability": "8.7",
+      "context": 2048,
+      "cuda_free_bytes": 5245009920,
+      "cuda_total_bytes": 7990009856,
+      "dtype": "BFloat16",
+      "gpu": "Orin",
+      "graphs": true,
+      "peak_reserved_bytes": 1558183936,
+      "peak_tensor_bytes": 1498670080,
+      "python_runtime": false,
+      "sample_rate": 44100
+    },
+    "main_to_ready_seconds": 1.791191173,
+    "stage": "ready"
+  },
+  "startup_seconds": 2.3127399289951427,
+  "reports": [
+    {
+      "audio_seconds": 4.365351473922902,
+      "decode_and_save_seconds": 0.781703727,
+      "engine": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 3751235584,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "peak_reserved_bytes": 2113929216,
+        "peak_tensor_bytes": 1778958848,
+        "python_runtime": false,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 4.365351473922902,
+          "decode_and_save_seconds": 0.781703727,
+          "eos": true,
+          "frames": 94,
+          "generation_seconds": 9.632411877,
+          "index": 1,
+          "path": "/home/jetson/workspace/audio8-speed-20261116/baseline/0/1.wav",
+          "text": "「清水组长，它..它还在后面！」"
+        }
+      ],
+      "generation_seconds": 9.632411877,
+      "request": {
+        "op": "synthesize",
+        "output_dir": "/home/jetson/workspace/audio8-speed-20261116/baseline/0",
+        "pause": 0,
+        "seed": 103100043,
+        "split_sentences": false,
+        "text": "「清水组长，它..它还在后面！」",
+        "voice": "/home/jetson/workspace/shanye-tts-service/audio/audio8-voices/5116b2367b728ab371c56aa54fc63369a65d6b1edf5b234a669aa40282f99a33/voice.json"
+      },
+      "request_seconds": 11.705548237,
+      "state": "completed",
+      "text": "「清水组长，它..它还在后面！」",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "77f5ffd05c0686776d6be00076efc7e031033d6aa8014444ef0c76375b1debce",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "2a1d613e30084ce5b137d8a3ad823f402e6cc54493841765666102bf50d8cd8d",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "/home/jetson/workspace/audio8-speed-20261116/baseline/0/audio8.wav",
+      "wall_seconds": 11.706517262995476,
+      "codes_sha256": "8b5c83a3026618e4655f469045bee2738041df3c8b3b7ef229b3ca4f3e7006ba"
+    },
+    {
+      "audio_seconds": 4.365351473922902,
+      "decode_and_save_seconds": 0.542871316,
+      "engine": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 3747885056,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "peak_reserved_bytes": 2113929216,
+        "peak_tensor_bytes": 1778958848,
+        "python_runtime": false,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 4.365351473922902,
+          "decode_and_save_seconds": 0.542871316,
+          "eos": true,
+          "frames": 94,
+          "generation_seconds": 9.608584049,
+          "index": 1,
+          "path": "/home/jetson/workspace/audio8-speed-20261116/baseline/1/1.wav",
+          "text": "「清水组长，它..它还在后面！」"
+        }
+      ],
+      "generation_seconds": 9.608584049,
+      "request": {
+        "op": "synthesize",
+        "output_dir": "/home/jetson/workspace/audio8-speed-20261116/baseline/1",
+        "pause": 0,
+        "seed": 103100043,
+        "split_sentences": false,
+        "text": "「清水组长，它..它还在后面！」",
+        "voice": "/home/jetson/workspace/shanye-tts-service/audio/audio8-voices/5116b2367b728ab371c56aa54fc63369a65d6b1edf5b234a669aa40282f99a33/voice.json"
+      },
+      "request_seconds": 10.164632121,
+      "state": "completed",
+      "text": "「清水组长，它..它还在后面！」",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "77f5ffd05c0686776d6be00076efc7e031033d6aa8014444ef0c76375b1debce",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "2a1d613e30084ce5b137d8a3ad823f402e6cc54493841765666102bf50d8cd8d",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "/home/jetson/workspace/audio8-speed-20261116/baseline/1/audio8.wav",
+      "wall_seconds": 10.165495288005332,
+      "codes_sha256": "8b5c83a3026618e4655f469045bee2738041df3c8b3b7ef229b3ca4f3e7006ba"
+    },
+    {
+      "audio_seconds": 20.990839002267574,
+      "decode_and_save_seconds": 2.797633701,
+      "engine": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 1596661760,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "peak_reserved_bytes": 4208984064,
+        "peak_tensor_bytes": 2767092736,
+        "python_runtime": false,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 20.990839002267574,
+          "decode_and_save_seconds": 2.797633701,
+          "eos": true,
+          "frames": 452,
+          "generation_seconds": 45.338813644,
+          "index": 1,
+          "path": "/home/jetson/workspace/audio8-speed-20261116/baseline/2/1.wav",
+          "text": "因为下雨的缘故，脚下的路泥泞坎坷，跑在最前面的清水苍介跌倒了两次，但又很快爬起来，咬著牙继续跑，这孩子鬼比他所想的更加难缠，死咬著他们不放，令他心惊的是，即便他们冲到了山脚下，孩子鬼依旧在追。"
+        }
+      ],
+      "generation_seconds": 45.338813644,
+      "request": {
+        "op": "synthesize",
+        "output_dir": "/home/jetson/workspace/audio8-speed-20261116/baseline/2",
+        "pause": 0,
+        "seed": 103100042,
+        "split_sentences": false,
+        "text": "因为下雨的缘故，脚下的路泥泞坎坷，跑在最前面的清水苍介跌倒了两次，但又很快爬起来，咬著牙继续跑，这孩子鬼比他所想的更加难缠，死咬著他们不放，令他心惊的是，即便他们冲到了山脚下，孩子鬼依旧在追。",
+        "voice": "/home/jetson/workspace/shanye-tts-service/audio/audio8-voices/5116b2367b728ab371c56aa54fc63369a65d6b1edf5b234a669aa40282f99a33/voice.json"
+      },
+      "request_seconds": 48.177692626,
+      "state": "completed",
+      "text": "因为下雨的缘故，脚下的路泥泞坎坷，跑在最前面的清水苍介跌倒了两次，但又很快爬起来，咬著牙继续跑，这孩子鬼比他所想的更加难缠，死咬著他们不放，令他心惊的是，即便他们冲到了山脚下，孩子鬼依旧在追。",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "77f5ffd05c0686776d6be00076efc7e031033d6aa8014444ef0c76375b1debce",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "2a1d613e30084ce5b137d8a3ad823f402e6cc54493841765666102bf50d8cd8d",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "/home/jetson/workspace/audio8-speed-20261116/baseline/2/audio8.wav",
+      "wall_seconds": 48.182651522991364,
+      "codes_sha256": "ff69e29fb3072e9cd86e8fb46fe47370d52cc6704720bfb20c7de50b96bfbcc3"
+    },
+    {
+      "audio_seconds": 10.031020408163265,
+      "decode_and_save_seconds": 1.199582064,
+      "engine": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 1589280768,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "peak_reserved_bytes": 4208984064,
+        "peak_tensor_bytes": 2767092736,
+        "python_runtime": false,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 10.031020408163265,
+          "decode_and_save_seconds": 1.199582064,
+          "eos": true,
+          "frames": 216,
+          "generation_seconds": 21.803618219,
+          "index": 1,
+          "path": "/home/jetson/workspace/audio8-speed-20261116/baseline/3/1.wav",
+          "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。"
+        }
+      ],
+      "generation_seconds": 21.803618219,
+      "request": {
+        "op": "synthesize",
+        "output_dir": "/home/jetson/workspace/audio8-speed-20261116/baseline/3",
+        "pause": 0,
+        "seed": 103100045,
+        "split_sentences": false,
+        "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。",
+        "voice": "/home/jetson/workspace/shanye-tts-service/audio/audio8-voices/5116b2367b728ab371c56aa54fc63369a65d6b1edf5b234a669aa40282f99a33/voice.json"
+      },
+      "request_seconds": 23.028637607,
+      "state": "completed",
+      "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "77f5ffd05c0686776d6be00076efc7e031033d6aa8014444ef0c76375b1debce",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "2a1d613e30084ce5b137d8a3ad823f402e6cc54493841765666102bf50d8cd8d",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "/home/jetson/workspace/audio8-speed-20261116/baseline/3/audio8.wav",
+      "wall_seconds": 23.030013783005415,
+      "codes_sha256": "9d63585025e91796e269ed3e394f50510eb7893a14183676dcba51a27a2894d7"
+    }
+  ],
+  "warm_wall": 81.37816059400211,
+  "warm_audio": 35.38721088435374,
+  "events": [
+    {
+      "python_runtime": false,
+      "stage": "loading_engine"
+    },
+    {
+      "stage": "loading_codec"
+    },
+    {
+      "engine": {
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compute_capability": "8.7",
+        "context": 2048,
+        "cuda_free_bytes": 5245009920,
+        "cuda_total_bytes": 7990009856,
+        "dtype": "BFloat16",
+        "gpu": "Orin",
+        "graphs": true,
+        "peak_reserved_bytes": 1558183936,
+        "peak_tensor_bytes": 1498670080,
+        "python_runtime": false,
+        "sample_rate": 44100
+      },
+      "main_to_ready_seconds": 1.791191173,
+      "stage": "ready"
+    },
+    {
+      "stage": "capturing_cuda_graphs"
+    },
+    {
+      "seconds": 1.275953682,
+      "stage": "cuda_graphs_ready"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 387,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "audio_seconds": 4.365351473922902,
+      "fragment": 1,
+      "generation_seconds": 9.632411877,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 4.365351473922902,
+      "generation_seconds": 9.632411877,
+      "request_seconds": 11.705759956,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 387,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "audio_seconds": 4.365351473922902,
+      "fragment": 1,
+      "generation_seconds": 9.608584049,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 4.365351473922902,
+      "generation_seconds": 9.608584049,
+      "request_seconds": 10.164843649,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 451,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "fragment": 1,
+      "frames": 121,
+      "stage": "progress",
+      "unsaved_audio_seconds": 5.61922902494331
+    },
+    {
+      "fragment": 1,
+      "frames": 161,
+      "stage": "progress",
+      "unsaved_audio_seconds": 7.476825396825397
+    },
+    {
+      "fragment": 1,
+      "frames": 201,
+      "stage": "progress",
+      "unsaved_audio_seconds": 9.334421768707482
+    },
+    {
+      "fragment": 1,
+      "frames": 241,
+      "stage": "progress",
+      "unsaved_audio_seconds": 11.19201814058957
+    },
+    {
+      "fragment": 1,
+      "frames": 281,
+      "stage": "progress",
+      "unsaved_audio_seconds": 13.049614512471654
+    },
+    {
+      "fragment": 1,
+      "frames": 321,
+      "stage": "progress",
+      "unsaved_audio_seconds": 14.907210884353741
+    },
+    {
+      "fragment": 1,
+      "frames": 361,
+      "stage": "progress",
+      "unsaved_audio_seconds": 16.764807256235827
+    },
+    {
+      "fragment": 1,
+      "frames": 401,
+      "stage": "progress",
+      "unsaved_audio_seconds": 18.622403628117915
+    },
+    {
+      "fragment": 1,
+      "frames": 441,
+      "stage": "progress",
+      "unsaved_audio_seconds": 20.48
+    },
+    {
+      "audio_seconds": 20.990839002267574,
+      "fragment": 1,
+      "generation_seconds": 45.338813644,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 20.990839002267574,
+      "generation_seconds": 45.338813644,
+      "request_seconds": 48.177969915,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 409,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "fragment": 1,
+      "frames": 121,
+      "stage": "progress",
+      "unsaved_audio_seconds": 5.61922902494331
+    },
+    {
+      "fragment": 1,
+      "frames": 161,
+      "stage": "progress",
+      "unsaved_audio_seconds": 7.476825396825397
+    },
+    {
+      "fragment": 1,
+      "frames": 201,
+      "stage": "progress",
+      "unsaved_audio_seconds": 9.334421768707482
+    },
+    {
+      "audio_seconds": 10.031020408163265,
+      "fragment": 1,
+      "generation_seconds": 21.803618219,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 10.031020408163265,
+      "generation_seconds": 21.803618219,
+      "request_seconds": 23.028903856,
+      "stage": "completed"
+    }
+  ],
+  "warm_rtf": 2.299648900274958
+}

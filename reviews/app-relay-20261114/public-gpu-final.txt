@@ -1,0 +1,8 @@
+
+com.kkwenxue.shanye.SynthesisServerAcceptanceTest:.
+
+Time: 13.062
+
+OK (1 test)
+
+

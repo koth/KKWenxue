@@ -1,0 +1,9 @@
+{
+  "segments": 4,
+  "retries": 0,
+  "elapsed_seconds": 101.35435748499003,
+  "audio_seconds": 42.16743764172335,
+  "engine": "audio8-realistic-air-cpp",
+  "default_voice": "cwns.mp3",
+  "rtf": 2.403616704105897
+}
