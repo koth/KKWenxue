@@ -11,8 +11,8 @@ p.add_argument("baseline",type=Path)
 p.add_argument("optimized",type=Path)
 p.add_argument("--output",type=Path,required=True)
 a=p.parse_args()
-b=json.loads((a.baseline/'benchmark.json').read_text())
-n=json.loads((a.optimized/'benchmark.json').read_text())
+b=json.loads((a.baseline/'benchmark.json').read_text(encoding='utf-8'))
+n=json.loads((a.optimized/'benchmark.json').read_text(encoding='utf-8'))
 assert len(b['reports'])==len(n['reports'])
 rows=[]
 for i,(old,new) in enumerate(zip(b['reports'],n['reports'])):
@@ -34,5 +34,5 @@ result=dict(rows=rows,baseline_rtf=b['warm_rtf'],optimized_rtf=n['warm_rtf'],
             speedup=b['warm_rtf']/n['warm_rtf'],
             old_peak_reserved=b['reports'][-1]['engine']['peak_reserved_bytes'],
             new_peak_reserved=n['reports'][-1]['engine']['peak_reserved_bytes'])
-a.output.write_text(json.dumps(result,ensure_ascii=False,indent=2))
+a.output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(result,ensure_ascii=False,indent=2),flush=True)

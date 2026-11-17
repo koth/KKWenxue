@@ -10,6 +10,38 @@
 
 核心使用已编码的声音参考（10 行编码 + 匹配的参考文稿）。外层 `server/audio8_runtime.py` 已接入数据库和 Web 队列，默认音色为用户提供的 cwns.mp3。`server/audio8_prepare.py` 负责一次性 codec 转换和新参考编码；M4A、音量处理、章节包与原文索引由现有导出器处理。
 
+## Windows 本机提速（2026-11-17）
+
+新增可选 `--fused-kernels`，推理版本为 `fused-decode-v6`。在本机 RTX 3080 / PyTorch 2.5.1+cu124 上，同文热机基准由 **0.277 降到 0.167 秒生成 1 秒音频**，吞吐约 **1.66 倍**，耗时减少约 39.7%，尚未达到两倍。三段正文分别预热后重复三轮，55.31 秒音频从 15.29 秒降至 9.22 秒；全部 12 次输出（含预热）的生成编码、WAV/PCM 与旧版逐字节一致。完整数据和验证边界见 [本机实测](../reviews/audio8-local-speed-20261117/README.md)。
+
+优化包括保持 BF16 中间舍入的 RMSNorm、RoPE、SwiGLU 和 QKV 缓存写入融合；逐帧合并前馈层的 gate/up 投影；缓存 math 注意力使用的 FP32 缩放 K；以及复用语义采样的 CUDA Graph。保留完整 2048 注意力位置、原采样参数与音频时长，codec 不变。省略 `--fused-kernels` 仍运行原路径；本轮未将新路径部署到 Jetson。
+
+本机已有 CUDA 12.4、MSVC 14.38 和下述 PyTorch 原生库，可以直接构建：
+
+```powershell
+& audio8-cpp/build-windows.ps1 `
+  -TorchRoot D:/conda_envs/koth310/Lib/site-packages/torch `
+  -CudaArchitectures 86 -Toolset 'v143,version=14.38'
+$env:PATH = 'D:/conda_envs/koth310/Lib/site-packages/torch/lib;' + $env:PATH
+.\audio8-cpp\build\Release\audio8-tts.exe `
+  --model tmp/audio8-model `
+  --codec tmp/audio8-model/codec-decoder-bf16.safetensors `
+  --server --fused-kernels
+```
+
+当前本机模型与预编码 cwns 音色位于忽略目录 `tmp/audio8-model`，音色文件为 `tmp/audio8-model/voices/cwns/voice.json`。其他机器通过 `-TorchRoot` 或 `LIBTORCH_ROOT` 指定匹配的库，按 GPU 调整 CUDA 架构。CMake 默认构建融合 CUDA 算子；可设置 `AUDIO8_CUDA_KERNELS=OFF` 仅构建旧路径，此时不能传 `--fused-kernels`。
+
+可跨平台运行新的常驻基准，输出目录必须尚不存在：
+
+```powershell
+python audio8-cpp/benchmark.py `
+  --binary audio8-cpp/build/Release/audio8-tts.exe `
+  --model tmp/audio8-model --voice tmp/audio8-model/voices/cwns/voice.json `
+  --output tmp/audio8-benchmark-new --repeat 3 --flag=--fused-kernels
+```
+
+每个样本先预热一次，再统计三轮热机请求；报告保留启动、预热与完整请求耗时。短样本结果不能直接视作整章速度。原生算子检查可构建并运行 `audio8-kernel-check`；`tests/validate_fused_graphs.py` 检查采样图复用、参数切换后重建和多句生成的完整编码/PCM。
+
 ## JetPack 6.2 依赖
 
 [NVIDIA JetPack 6.2 说明](https://docs.nvidia.com/jetson/jetpack/6.2/release-notes/index.html)列出 CUDA 12.6、TensorRT 10.3、cuDNN 9.3。第一版使用 LibTorch，不加载 TensorRT engine。

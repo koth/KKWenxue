@@ -40,16 +40,16 @@ class Tokenizer {
 };
 
 Tensor rope(int length, int dim, double base, const at::Device& device);
-Tensor apply_rope(const Tensor& x, const Tensor& values);
-Tensor norm(const Tensor& x, const Tensor& weight, double eps);
+Tensor apply_rope(const Tensor& x, const Tensor& values, bool fused=false);
+Tensor norm(const Tensor& x, const Tensor& weight, double eps, bool fused=false);
 Tensor linear(const Tensor& x, const Weights& w, const std::string& name);
-Tensor feed_forward(const Tensor& x, const Weights& w, const std::string& prefix);
+Tensor feed_forward(const Tensor& x, const Weights& w, const std::string& prefix, bool fused=false);
 struct Cache { Tensor keys, values; };
 struct Sampling { double temperature=0.7, top_p=0.9; int top_k=50; uint64_t seed=111135; };
 
 class Model {
  public:
-  explicit Model(const Path& directory, at::Device device, bool compact_semantics=true, bool expanded_kv=true, bool dynamic_kv=false, bool fp16=false);
+  explicit Model(const Path& directory, at::Device device, bool compact_semantics=true, bool expanded_kv=true, bool dynamic_kv=false, bool fp16=false, bool fused_kernels=false);
   std::pair<Tensor, Tensor> slow(const Tensor& ids, const Tensor& position, const Tensor& rope_position, const Tensor& mask);
   Tensor fast(const Tensor& hidden, const Tensor& semantic, const Sampling& options);
   Tensor semantic(const Tensor& logits, const Tensor& previous, const Sampling& options);
@@ -67,6 +67,7 @@ class Model {
   bool expanded_kv;
   bool dynamic_kv;
   bool fp16;
+  bool fused_kernels;
  private:
   Tensor semantic_weights_, semantic_ids_;
   Tensor attention(const Tensor& x, const std::string& name, const Tensor& values, const Tensor& mask, Cache& cache, const Tensor& position, bool fast);
@@ -90,7 +91,7 @@ class Codec {
 
 class Engine {
  public:
-  Engine(const Path& directory, const Path& codec_path, bool graphs, Event event, bool prefix_cache=true, bool compact_semantics=true, bool expanded_kv=true, bool dynamic_kv=false, bool fp16=false);
+  Engine(const Path& directory, const Path& codec_path, bool graphs, Event event, bool prefix_cache=true, bool compact_semantics=true, bool expanded_kv=true, bool dynamic_kv=false, bool fp16=false, bool fused_kernels=false);
   Json synthesize(const Json& request);
   Json inspect() const;
   Tokenizer tokenizer;
@@ -109,12 +110,14 @@ class Engine {
   std::vector<Cache> reference_cache_;
   bool load_voice(const Path& path);
   Sampling captured_;
-  std::unique_ptr<at::cuda::CUDAGraph> slow_graph_, fast_graph_;
+  std::unique_ptr<at::cuda::CUDAGraph> slow_graph_, fast_graph_, semantic_graph_;
   std::unordered_map<int,std::unique_ptr<at::cuda::CUDAGraph>> slow_graphs_;
   std::unordered_map<int,std::pair<Tensor,Tensor>> slow_results_;
   Tensor ids_, position_, rope_position_, mask_, hidden_, semantic_, codes_, logits_, slow_hidden_;
+  Tensor sample_logits_, sample_previous_, sampled_semantic_;
   void capture(const Sampling& options);
   std::pair<Tensor,Tensor> slow(const Tensor& ids, const Tensor& position, const Tensor& rope_position, const Tensor& mask);
   Tensor fast(const Tensor& hidden, const Tensor& semantic, const Sampling& options);
+  Tensor semantic(const Tensor& logits, const Tensor& previous, const Sampling& options);
 };
 } // namespace audio8

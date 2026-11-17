@@ -13,20 +13,22 @@ p.add_argument("--model",type=Path,required=True)
 p.add_argument("--voice",type=Path,required=True)
 p.add_argument("--alternate-voice",type=Path,required=True)
 p.add_argument("--output",type=Path,required=True)
+p.add_argument("--flag",action="append",default=[])
 a = p.parse_args()
+a.model, a.voice, a.alternate_voice, a.output = [path.resolve() for path in (a.model,a.voice,a.alternate_voice,a.output)]
 a.output.mkdir(parents=True,exist_ok=False)
-voice = json.loads(a.voice.read_text())
+voice = json.loads(a.voice.read_text(encoding="utf-8"))
 codes = Path(voice["codes"])
 if not codes.is_absolute():
     codes = a.voice.parent/codes
 shutil.copyfile(codes,a.output/"reference.npy")
 voice["codes"] = str(a.output/"reference.npy")
 mutable = a.output/"voice.json"
-mutable.write_text(json.dumps(voice,ensure_ascii=False))
+mutable.write_text(json.dumps(voice,ensure_ascii=False),encoding="utf-8")
 checks = []
 with (a.output/"stderr.log").open("w") as err:
     proc = subprocess.Popen([a.binary,"--model",str(a.model),"--codec",str(a.model/"codec-decoder-bf16.safetensors"),
-                             "--server","--no-graphs"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,text=True)
+                             "--server","--no-graphs",*a.flag],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,text=True,encoding="utf-8")
     try:
         for line in proc.stdout:
             if json.loads(line).get("stage")=="ready":
@@ -43,7 +45,7 @@ with (a.output/"stderr.log").open("w") as err:
                     break
             else:
                 raise RuntimeError("Native process ended")
-            report = json.loads((directory/"report.json").read_text())
+            report = json.loads((directory/"report.json").read_text(encoding="utf-8"))
             cache = report["reference_cache"]
             assert cache["voice_hit"] is hit and cache["prefix_hit"] is hit,cache
             assert not (directory/"audio8.wav").exists()
@@ -56,14 +58,14 @@ with (a.output/"stderr.log").open("w") as err:
         check(mutable,False)
         check(mutable,True)
         voice["text"] += "。"
-        mutable.write_text(json.dumps(voice,ensure_ascii=False))
+        mutable.write_text(json.dumps(voice,ensure_ascii=False),encoding="utf-8")
         check(mutable,False)
         check(mutable,True)
         data = np.load(a.output/"reference.npy")
         data[0,0] = (data[0,0]+1)%4096
         np.save(a.output/"reference.npy",data)
         check(mutable,False)
-        (a.output/"validation.json").write_text(json.dumps(dict(checks=checks),ensure_ascii=False,indent=2))
+        (a.output/"validation.json").write_text(json.dumps(dict(checks=checks),ensure_ascii=False,indent=2),encoding="utf-8")
         print("Voice cache: 10 checks passed",flush=True)
     finally:
         if proc.poll() is None:

@@ -12,7 +12,7 @@ def diagnostic(binary, model, voice, output, flags):
     command = [binary, "--model", str(model), "--codec", str(model/"codec-decoder-bf16.safetensors"),
                "--server", "--no-graphs", *flags]
     with (output/"stderr.log").open("w") as err:
-        proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, text=True)
+        proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, text=True,encoding='utf-8')
         try:
             for line in proc.stdout:
                 event = json.loads(line)
@@ -62,12 +62,13 @@ def main():
     p.add_argument("--model",type=Path,required=True)
     p.add_argument("--voice",type=Path,required=True)
     p.add_argument("--output",type=Path,required=True)
+    p.add_argument("--flag",action="append",default=[])
     args = p.parse_args()
     modes = {"full": ["--full-vocab","--no-prefix-cache"],
              "compact": ["--no-prefix-cache"], "cached": [], "legacy_kv": ["--legacy-kv"]}
-    outputs = {name: diagnostic(args.binary,args.model,args.voice,args.output/name,flags)
+    outputs = {name: diagnostic(args.binary,args.model.resolve(),args.voice.resolve(),args.output.resolve()/name,flags+args.flag)
                for name,flags in modes.items()}
-    config = json.loads((args.model/"config.json").read_text())
+    config = json.loads((args.model/"config.json").read_text(encoding='utf-8'))
     ids = [*range(config["semantic_begin_id"],config["semantic_end_id"]+1),config["eos_token_id"]]
     checks = []
     for i in range(2):

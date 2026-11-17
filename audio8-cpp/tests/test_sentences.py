@@ -19,7 +19,7 @@ class SentenceTests(unittest.TestCase):
         ]
         result = subprocess.run([BINARY, '--split-text'],
                                 input=''.join(json.dumps({'text': text}, ensure_ascii=False)+'\n' for text, _ in cases),
-                                capture_output=True, text=True, check=True, timeout=30)
+                                capture_output=True, text=True, encoding='utf-8', check=True, timeout=30)
         actual = [json.loads(line)['sentences'] for line in result.stdout.splitlines()]
         self.assertEqual([expected for _, expected in cases], actual)
 

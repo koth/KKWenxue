@@ -23,8 +23,8 @@ struct FrameProfile {
     return rows;
   }
 };
-Engine::Engine(const Path& directory,const Path& codec_path,bool graphs,Event event,bool prefix_cache,bool compact_semantics,bool expanded_kv,bool dynamic_kv,bool fp16)
- :tokenizer(directory/"tokenizer.json"),model_(directory,at::Device(at::kCUDA,0),compact_semantics,expanded_kv,dynamic_kv,fp16),codec_path_(codec_path),event_(event),use_graphs_(graphs),use_prefix_cache_(prefix_cache){
+Engine::Engine(const Path& directory,const Path& codec_path,bool graphs,Event event,bool prefix_cache,bool compact_semantics,bool expanded_kv,bool dynamic_kv,bool fp16,bool fused_kernels)
+ :tokenizer(directory/"tokenizer.json"),model_(directory,at::Device(at::kCUDA,0),compact_semantics,expanded_kv,dynamic_kv,fp16,fused_kernels),codec_path_(codec_path),event_(event),use_graphs_(graphs),use_prefix_cache_(prefix_cache){
   event_({{"stage","loading_codec"}});codec_=std::make_unique<Codec>(codec_path,model_.device);
 }
 bool Engine::load_voice(const Path& path){
@@ -55,7 +55,7 @@ bool Engine::load_voice(const Path& path){
 void Engine::capture(const Sampling& options){
   if(!use_graphs_)return;
   if((model_.dynamic_kv?!slow_graphs_.empty():bool(slow_graph_))&&captured_.top_k==options.top_k&&captured_.top_p==options.top_p&&captured_.temperature==options.temperature)return;
-  slow_graph_.reset();slow_graphs_.clear();slow_results_.clear();fast_graph_.reset();captured_=options;
+  slow_graph_.reset();slow_graphs_.clear();slow_results_.clear();fast_graph_.reset();semantic_graph_.reset();captured_=options;
   auto began=Clock::now();auto integer=at::TensorOptions().device(model_.device).dtype(at::kLong);
   ids_=at::zeros({1,11,1},integer);ids_.select(1,0).fill_(model_.config["semantic_begin_id"].get<int>());
   position_=at::zeros({1},integer);rope_position_=at::zeros({1,1},integer);mask_=at::zeros({1,2048},integer);mask_.select(1,0).fill_(1);
@@ -84,6 +84,15 @@ void Engine::capture(const Sampling& options){
     stream.synchronize();
     fast_graph_=std::make_unique<at::cuda::CUDAGraph>();fast_graph_->register_generator_state(at::cuda::detail::getDefaultCUDAGenerator());
     fast_graph_->capture_begin();codes_=model_.fast(hidden_,semantic_,options);fast_graph_->capture_end();stream.synchronize();
+    if(model_.fused_kernels){
+      int vocab=model_.compact_semantics?model_.config["semantic_end_id"].get<int>()-model_.config["semantic_begin_id"].get<int>()+2:model_.config["vocab_size"].get<int>();
+      sample_logits_=at::zeros({1,vocab},hidden_.options());
+      sample_previous_=at::zeros({1,model_.config["ras_window_size"].get<int>()},integer);
+      for(int i=0;i<3;++i)model_.semantic(sample_logits_,sample_previous_,options);
+      stream.synchronize();
+      semantic_graph_=std::make_unique<at::cuda::CUDAGraph>();semantic_graph_->register_generator_state(at::cuda::detail::getDefaultCUDAGenerator());
+      semantic_graph_->capture_begin();sampled_semantic_=model_.semantic(sample_logits_,sample_previous_,options);semantic_graph_->capture_end();stream.synchronize();
+    }
   }
   event_({{"stage","cuda_graphs_ready"},{"seconds",seconds(began)}});
 }
@@ -99,10 +108,27 @@ Tensor Engine::fast(const Tensor& hidden,const Tensor& semantic,const Sampling& 
   if(!use_graphs_)return model_.fast(hidden,semantic,options);
   hidden_.copy_(hidden);semantic_.copy_(semantic);fast_graph_->replay();return codes_.clone();
 }
+Tensor Engine::semantic(const Tensor& logits,const Tensor& previous,const Sampling& options){
+  if(!semantic_graph_)return model_.semantic(logits,previous,options);
+  sample_logits_.copy_(logits);
+  // Speech/EOS ids cannot match zero. This also preserves the first frame's
+  // behavior when the release has no repetition window yet.
+  if(previous.defined())sample_previous_.copy_(previous);else sample_previous_.zero_();
+  semantic_graph_->replay();return sampled_semantic_;
+}
 Json Engine::inspect()const{
   size_t free=0,total=0;cudaMemGetInfo(&free,&total);cudaDeviceProp device{};cudaGetDeviceProperties(&device,0);
   auto stats=c10::cuda::CUDACachingAllocator::getDeviceStats(0);
-  return {{"backend","libtorch_cpp_cuda"},{"inference_revision",model_.fp16?"fp16-expanded-kv-v5":(model_.dynamic_kv?"bucket-kv-v4":(model_.expanded_kv?"expanded-kv-v3":"compact-prefix-v2"))},{"fp16_model",model_.fp16},{"expanded_fp32_kv",model_.expanded_kv},{"dynamic_kv",model_.dynamic_kv},{"attention_graph_buckets",model_.dynamic_kv?Json::array({512,1024,2048}):Json::array()},{"compact_semantics",model_.compact_semantics},{"reference_prefix_cache",use_prefix_cache_},{"python_runtime",false},{"graphs",use_graphs_},{"dtype",c10::toString(model_.dtype)},{"sample_rate",44100},{"context",2048},{"batch_size",1},{"gpu",device.name},{"compute_capability",std::to_string(device.major)+"."+std::to_string(device.minor)},{"cuda_free_bytes",free},{"cuda_total_bytes",total},{"peak_tensor_bytes",stats.allocated_bytes[0].peak},{"peak_reserved_bytes",stats.reserved_bytes[0].peak}};
+  return {{"backend","libtorch_cpp_cuda"},
+    {"inference_revision",model_.fused_kernels?"fused-decode-v6":(model_.fp16?"fp16-expanded-kv-v5":(model_.dynamic_kv?"bucket-kv-v4":(model_.expanded_kv?"expanded-kv-v3":"compact-prefix-v2")))},
+    {"fused_kernels",model_.fused_kernels},{"scaled_fp32_keys",model_.fused_kernels&&model_.expanded_kv&&model_.dtype==at::kBFloat16},
+    {"fp16_model",model_.fp16},{"expanded_fp32_kv",model_.expanded_kv},{"dynamic_kv",model_.dynamic_kv},
+    {"attention_graph_buckets",model_.dynamic_kv?Json::array({512,1024,2048}):Json::array()},
+    {"compact_semantics",model_.compact_semantics},{"reference_prefix_cache",use_prefix_cache_},
+    {"python_runtime",false},{"graphs",use_graphs_},{"dtype",c10::toString(model_.dtype)},
+    {"sample_rate",44100},{"context",2048},{"batch_size",1},{"gpu",device.name},
+    {"compute_capability",std::to_string(device.major)+"."+std::to_string(device.minor)},
+    {"cuda_free_bytes",free},{"cuda_total_bytes",total},{"peak_tensor_bytes",stats.allocated_bytes[0].peak},{"peak_reserved_bytes",stats.reserved_bytes[0].peak}};
 }
 Json Engine::synthesize(const Json& request){
   auto started=Clock::now();Sampling options;
@@ -154,7 +180,7 @@ Json Engine::synthesize(const Json& request){
       for(int64_t step=0;step<budget;++step){
         if(request.contains("cancel_file")&&std::filesystem::exists(std::filesystem::u8path(request["cancel_file"].get<std::string>())))throw std::runtime_error("Synthesis cancelled");
         bool measured=step<profiling;if(measured)profile.start();
-        auto semantic=model_.semantic(output.first,previous,options);if(measured)profile.mark(1);
+        auto semantic=this->semantic(output.first,previous,options);if(measured)profile.mark(1);
         auto codes=fast(output.second,semantic,options);if(measured)profile.mark(2);
         if(semantic.item<int64_t>()==model_.config["eos_token_id"].get<int>()){if(measured)profile.mark(3);eos=true;break;}
         frames.push_back(codes);
