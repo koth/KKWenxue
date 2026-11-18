@@ -4,6 +4,7 @@ import json
 import socket
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -13,7 +14,8 @@ from server.db import connect
 from server.presets import snapshot
 from server.tests.fixtures import install_test_voice
 from server.voices import DEFAULT_PRESET_ID,HAORAN_PRESET_ID
-from server.zonos_runtime import ZonosEngine,content_report,generation_seed
+from server.zonos_runtime import ZonosEngine,content_report,generation_seed,VERIFICATION,LEGACY_VERIFICATION
+from server.speech_quality import compare_transcript
 
 FAKE='''#!{python}
 from http.server import HTTPServer,BaseHTTPRequestHandler
@@ -92,27 +94,67 @@ class ZonosTests(unittest.TestCase):
         with patch.object(self.engine.verifier,'verify',return_value=failed):
             value=self.engine.generate([self.row()],self.config)[0]
         self.assertIsInstance(value,Exception)
-        req=self.requests();self.assertEqual(2,len(req))
-        self.assertNotEqual(req[0]['seed'],req[1]['seed'])
+        req=self.requests();self.assertEqual(1,len(req))
         self.assertEqual('failed',self.engine.last_execution['sentence']['state'])
         added=dict(accepted=True,differences=[dict(expected_units=[],actual_units=['duo','yu','zi'])])
         self.assertFalse(content_report(added)['accepted'])
         with patch.object(self.engine.verifier,'verify',side_effect=RuntimeError('QA unavailable')):
             self.assertIsInstance(self.engine.generate([self.row()],self.config)[0],Exception)
 
-    def test_failed_check_retries_once_then_records_verification(self):
-        reports=[dict(accepted=False,differences=[]),dict(accepted=True,differences=[])]
-        with patch.object(self.engine.verifier,'verify',side_effect=reports):
-            value=self.engine.generate([self.row()],self.config)[0]
+    def test_small_difference_passes_once_even_for_queued_legacy_config(self):
+        report=compare_transcript('林川推开木门。','林川推木门。')
+        with patch.object(self.engine.verifier,'verify',return_value=report):
+            value=self.engine.generate([self.row()],{**self.config,'verification':LEGACY_VERIFICATION})[0]
         self.assertEqual((19200,),value.shape)
-        parts=self.engine.last_execution['sentence']['parts']
-        self.assertEqual(['rejected-content','completed'],[p['state'] for p in parts])
+        execution=self.engine.last_execution['sentence']
+        self.assertEqual(['completed'],[p['state'] for p in execution['parts']])
+        self.assertTrue(execution['content_tolerated'])
+        self.assertEqual(VERIFICATION,execution['verification_policy'])
+        self.assertEqual(LEGACY_VERIFICATION,execution['requested_verification_policy'])
+        self.assertEqual(1,len(self.requests()))
+
+    def test_minor_spelling_number_letter_differences_are_warnings_only(self):
+        for text,transcript in [
+            ('还上这户人家的欠款比较难。','还上这户人家的欠款比较。'),
+            ('我也就放心了，期待新剧ing）','我也就放心了期待新剧应'),
+            ('等登上那列鬼电车，你先去456号车厢搜索，我帮你盯着这里。','等登上那列鬼电车你先去四十五六日车厢搜索我帮你盯着这里'),
+            ('呼，呼，一间废弃的办公室中，年轻的女孩喘着粗气。','呼一间废弃的办公室中年轻的女孩喘着粗气'),
+            ('林川推开木门，看着桌上那封信。','林川推开木门看着桌上那本信'),
+        ]:
+            with self.subTest(text=text):
+                report=content_report(compare_transcript(text,transcript))
+                self.assertTrue(report['accepted'],report)
+                self.assertTrue(report['tolerated'],report)
+
+    def test_large_omissions_and_unrelated_hallucinations_still_fail(self):
+        for text,transcript in [
+            ('我已经把他们欠下的款项全都还清了。','我我。'),
+            ('林川推开木门，看着桌上那封信。','林川推开木门。'),
+            ('山本春奈忙道。','亚马莫特苦群戴美琪是吉富'),
+            ('呼。','小朋友大家好欢迎收听今天的节目'),
+            ('现在开始。',''),
+        ]:
+            with self.subTest(text=text):
+                report=content_report(compare_transcript(text,transcript))
+                self.assertFalse(report['accepted'],report)
+                self.assertTrue(report['rejection_reasons'])
 
     def test_port_conflict_does_not_attach_to_another_process(self):
+        self.settings.zonos_timeout=.02
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',self.settings.zonos_port));sock.listen()
             with self.assertRaises(OSError):self.engine.generate([self.row()],self.config)
         self.assertIsNone(self.engine.process)
+
+    def test_startup_waits_for_transient_port_release_without_generating_retries(self):
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1',self.settings.zonos_port));sock.listen()
+            timer=threading.Timer(.05,sock.close);timer.start()
+            try:
+                with patch.object(self.engine.verifier,'verify',return_value=dict(accepted=True,differences=[])):
+                    self.assertEqual((19200,),self.engine.generate([self.row()],self.config)[0].shape)
+            finally:timer.join()
+        self.assertEqual(1,len(self.requests()))
 
     def test_timeout_kills_uncertain_native_request_before_retry(self):
         self.settings.zonos_timeout=1
@@ -136,4 +178,5 @@ class ZonosTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'旧合成配置'):
             self.engine.generate([],{**self.config,'engine':'audio8-realistic-air-cpp'})
         self.assertNotEqual(generation_seed(self.row(),self.config),generation_seed(self.row(attempt=2),self.config))
+        self.assertNotEqual(generation_seed(self.row(),self.config),generation_seed({**self.row(),'retry_round':1},self.config))
         self.assertEqual(ENGINE,self.config['engine'])

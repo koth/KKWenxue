@@ -93,7 +93,10 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
     }
 
     /** Validate the entire package before committing. Re-import is idempotent. */
-    fun importBundle(input: InputStream, books: List<Book>): Int {
+    fun importBundle(input: InputStream, books: List<Book>): Int = synchronized(importLock) {
+        importBundleLocked(input, books)
+    }
+    private fun importBundleLocked(input: InputStream, books: List<Book>): Int {
         val staging = File(context.cacheDir, "audio-import-${UUID.randomUUID()}").apply { mkdirs() }
         val moved = mutableListOf<File>()
         try {
@@ -217,6 +220,7 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
     }
 
     companion object {
+        private val importLock = Any()
         private val importChanges = MutableStateFlow(0L)
         val changes = importChanges.asStateFlow()
         private const val MAX_PACKAGE = 4L * 1024 * 1024 * 1024

@@ -30,7 +30,7 @@
 | POST | `/v1/tasks/{id}/transfer/heartbeat` | 续租中转上传 |
 | POST | `/v1/tasks/{id}/transfer/fail` | 上传失败，单独重试，不重新执行任务 |
 | POST | `/v1/tasks/{id}/result` | 上传一个二进制结果文件并完成任务 |
-| GET | `/v1/tasks/{id}/result` | 流式下载结果文件 |
+| GET | `/v1/tasks/{id}/result` | 流式下载结果文件，支持 Range 续传 |
 | GET | `/healthz` | 检查服务与数据库 |
 
 创建任务，payload 可以是任意 JSON；请求体上限 16MiB：
@@ -91,6 +91,8 @@ Content-Type: application/zip
 也可上传其他格式，缺省类型为 `application/octet-stream`。`X-Filename` 建议使用 ASCII 文件名，最长 180 字节，不允许路径。服务流式写入任务临时目录，校验大小、哈希和当前租约后原子发布；上传失败不会完成任务。上传期间 worker 仍须续租。单任务一个结果，多文件由 worker 自行打包。
 
 完成后任务状态为 `completed`，`result` 包含文件名、类型、SHA-256、字节数、`expires_at` 和 `download_path`，不暴露服务器路径。默认文件保留 24 小时；过期下载返回 410，清理后 `result` 为 null，任务历史仍保留。结果保存在 `SHANYE_RELAY_TEMP_DIR/<task-id>/`，内部文件名与租约关联，原文件名保存于数据库和下载头。
+
+结果下载支持单个 `Range: bytes=<起点>-<终点可省略>`，返回 `206` 和 `Content-Range`；不支持的范围返回 `416`。响应包含 `Accept-Ranges: bytes` 和以 SHA-256 为值的带引号 `ETag`。携带匹配的 `If-Range` 才续传，不匹配时返回完整 `200`，客户端须覆盖旧文件。鉴权、结果过期和清理规则不变。
 
 ## 先通知、直连优先、按需中转
 

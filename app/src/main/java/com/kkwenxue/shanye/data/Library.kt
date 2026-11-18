@@ -237,6 +237,8 @@ object Library {
         ))
     )
     val books = mutableStateListOf<Book>().apply { addAll(bundledBooks) }
+    fun loadForBackground(context: android.content.Context): List<Book> =
+        (bundledBooks + BookDatabase(context).use { it.load() }).associateBy { it.id }.values.toList()
     fun restoreImported(imported: List<Book>) {
         books.removeAll { it.id.startsWith("local-") }
         books.addAll(imported)

@@ -28,7 +28,21 @@ class ReaderSystemBarsTest {
             SystemClock.sleep(100)
             passed = condition()
         }
-        assertTrue(label, passed)
+        if (!passed) {
+            val context = instrumentation.targetContext
+            instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+                java.io.File(context.filesDir,"navigation-test-failure.png").outputStream().use {
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)
+                }
+            }
+            val labels=mutableListOf<String>()
+            fun collect(node: AccessibilityNodeInfo) {
+                node.text?.toString()?.let {labels.add(it)}
+                repeat(node.childCount) {node.getChild(it)?.let(::collect)}
+            }
+            instrumentation.uiAutomation.rootInActiveWindow?.let(::collect)
+            throw AssertionError("$label: $labels")
+        }
     }
 
     private fun click(label: String): Boolean {
@@ -52,6 +66,25 @@ class ReaderSystemBarsTest {
         var result = false
         instrumentation.runOnMainSync { result = block() }
         return result
+    }
+    private fun hasText(text: String): Boolean {
+        val queue=java.util.ArrayDeque<AccessibilityNodeInfo>()
+        instrumentation.uiAutomation.rootInActiveWindow?.let {queue.add(it)}
+        while (queue.isNotEmpty()) {
+            val node=queue.removeFirst()
+            if (node.text?.toString() == text) return true
+            repeat(node.childCount) {node.getChild(it)?.let {child -> queue.add(child)}}
+        }
+        return false
+    }
+    private fun scrollForm() {
+        val queue = java.util.ArrayDeque<AccessibilityNodeInfo>()
+        instrumentation.uiAutomation.rootInActiveWindow?.let { queue.add(it) }
+        while (queue.isNotEmpty()) {
+            val node=queue.removeFirst()
+            if (node.isScrollable && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return
+            repeat(node.childCount) {index -> node.getChild(index)?.let {queue.add(it)} }
+        }
     }
 
     private fun bars(activity: MainActivity, visible: Boolean): Boolean = mainBoolean {
@@ -112,6 +145,20 @@ class ReaderSystemBarsTest {
         await("Open player from reader") { click("听书") }
         await("Player shows bars and allows screen sleep") { bars(activity, true) }
         await("Open synthesis") { click("合成与导入") }
+        await("Open the current ZONOS3 voice menu") {
+            if (click("稍后")) false
+            else if (click("林川 · 克隆音色")) true
+            else { scrollForm();false }
+        }
+        await("Haoran and Linchuan are both offered") { hasText("Haoran · 中文男声") && hasText("林川 · 克隆音色") }
+        assertTrue("Old voices must be absent",!hasText("默认 · cwns.mp3") && !hasText("xsbbn.mp3"))
+        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+            java.io.File(context.filesDir,"voice-menu-0.9.9.png").outputStream().use {
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)
+            }
+        }
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        await("Synthesis shows system bars") { bars(activity,true) }
         // Connection settings load asynchronously and may open a dialog.
         await("Close synthesis after any connection dialog") {
             if (click("稍后")) false else click("返回听书")

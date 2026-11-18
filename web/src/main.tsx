@@ -1119,7 +1119,8 @@ function App() {
                       <p key={e.segment_id}>
                         {e.original_text}
                         <small>
-                          {e.attempts} 次尝试 · {e.error}
+                          {e.attempts_total ?? e.attempts} 次尝试
+                          {e.split_attempts > 0 ? `（含子片段 ${e.split_attempts} 次）` : ""} · {e.error}
                         </small>
                       </p>
                     ))}

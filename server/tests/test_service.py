@@ -455,7 +455,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual("failed", result["state"], result)
         self.assertEqual(0, result["counts"]["skipped"])
         self.assertEqual(1, result["counts"]["failed"])
-        self.assertEqual(3, result["errors"][0]["attempts"])
+        self.assertEqual(2, result["errors"][0]["attempts"])
 
     def test_bounded_split_and_failure_retry(self):
         job = submit(
@@ -501,8 +501,8 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual("succeeded", detail(self.db, job)["state"])
         parent = next(row for row in seen if row["depth"] == 0)
         attempts = list(self.db.execute("SELECT * FROM attempts WHERE job_id=? AND segment_id=? ORDER BY number", (job, parent["id"])))
-        self.assertEqual([1, 2, 3], [a["number"] for a in attempts])
-        self.assertEqual(3, len({a["seed"] for a in attempts}))
+        self.assertEqual([1, 2], [a["number"] for a in attempts])
+        self.assertEqual(2, len({a["seed"] for a in attempts}))
         children = list(self.db.execute("SELECT * FROM segments WHERE parent_segment_id=? ORDER BY start_utf16", (parent["id"],)))
         self.assertEqual(2, len(children))
         self.assertTrue(children[0]["original_text"].endswith("，"))
@@ -519,6 +519,62 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(utf16_len(parent["original_text"]), children[-1]["end_utf16"] - children[0]["start_utf16"])
         with self.assertRaisesRegex(ValueError, "too short"):
             recovery_split_position("　　嗯。")
+
+    def test_split_failure_is_bounded_keeps_valid_sibling_and_releases_later_jobs(self):
+        chapter = self.symbol_chapter("第一段文字一直延续，后来的人走进房间，接着讲述那些往事，最后把故事慢慢说完。")
+        generate = self.engine.generate
+        seen = []
+        first_child = None
+        def recovery(rows, config):
+            nonlocal first_child
+            output = generate(rows, config)
+            for i, row in enumerate(rows):
+                seen.append(dict(row))
+                if row["depth"] == 1 and first_child is None:
+                    first_child = row["id"]
+                if row["depth"] == 0 or (row["depth"] == 1 and row["id"] != first_child):
+                    output[i] = ValueError("内容校验未通过")
+            return output
+        self.engine.generate = recovery
+        job = submit(self.db, self.settings, self.request([chapter["id"]]), "nested-split")
+        self.finish()
+        self.assertEqual("failed", detail(self.db, job)["state"])
+        self.assertEqual(1, sum(r["id"] == first_child for r in seen))
+        self.assertEqual(1,max(r["depth"] for r in seen))
+        self.assertLessEqual(len(seen),6)
+        parent = next(r for r in seen if r["depth"] == 0)
+        children = self.db.execute("SELECT * FROM segments WHERE parent_segment_id=? ORDER BY start_utf16",(parent["id"],)).fetchall()
+        self.assertEqual(parent["original_text"], "".join(c["original_text"] for c in children))
+        self.assertEqual(children[0]["end_utf16"],children[1]["start_utf16"])
+        self.assertIsNotNone(self.db.execute("SELECT id FROM segment_audio WHERE segment_id=? AND ready=1",(first_child,)).fetchone())
+        self.engine.generate=generate
+        later=submit(self.db,self.settings,self.request([self.chapters[0]['id']]),'later-chapter')
+        self.finish()
+        self.assertEqual('succeeded',detail(self.db,later)['state'])
+
+    def test_retry_of_failed_job_uses_new_seeds_and_only_regenerates_failed_content(self):
+        chapter = self.symbol_chapter("第一句话说完了。第二句话也说完了。")
+        generate = self.engine.generate
+        self.engine.generate = lambda rows,c: [ValueError("内容校验未通过") if "第二" in r["original_text"] else generate([r],c)[0] for r in rows]
+        job = submit(self.db,self.settings,self.request([chapter["id"]]),"retry-seeds")
+        self.finish()
+        failed = detail(self.db,job)
+        self.assertEqual("partial_failed",failed["state"])
+        self.assertGreater(failed["errors"][0]["split_attempts"],0)
+        self.assertGreater(failed["errors"][0]["attempts_total"],3)
+        seen=[]
+        def recovery(rows,c):
+            seen.extend(dict(r) for r in rows)
+            return generate(rows,c)
+        self.engine.generate=recovery
+        retry=action(self.db,self.settings,job,"retry-failed","retry-new-seeds")
+        self.finish()
+        self.assertEqual("succeeded",detail(self.db,retry)["state"])
+        self.assertTrue(all("第一" not in r["original_text"] for r in seen))
+        for row in seen:
+            self.assertEqual(1,row["retry_round"])
+            self.assertNotEqual(generation_seed(row,failed["config"]["generation"]),
+                                generation_seed({**row,"retry_round":0},failed["config"]["generation"]))
 
     def test_pause_cancel_and_recovery_fencing(self):
         job = submit(self.db, self.settings, self.request(), "control")

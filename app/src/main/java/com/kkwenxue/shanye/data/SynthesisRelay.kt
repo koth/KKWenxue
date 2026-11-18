@@ -41,8 +41,16 @@ class RelaySettings(private val context: Context) {
         }.generateKey()
     }
     fun load(): RelayConnection? {
-        if (!file.exists()) return null
-        val encoded = JSONObject(file.readText())
+        return read(file)
+    }
+    fun load(endpoint: String): RelayConnection? {
+        val current = load()
+        return if (current?.endpoint == endpoint) current else read(profile(endpoint))
+    }
+    private fun profile(endpoint: String) = File(context.noBackupFilesDir, "relay-connections/${AudioLibrary.sha256(endpoint.toByteArray())}")
+    private fun read(source: File): RelayConnection? {
+        if (!source.exists()) return null
+        val encoded = JSONObject(android.util.AtomicFile(source).openRead().bufferedReader().use { it.readText() })
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(encoded.getString("iv"), Base64.NO_WRAP)))
         val raw = JSONObject(String(cipher.doFinal(Base64.decode(encoded.getString("data"), Base64.NO_WRAP)), Charsets.UTF_8))
@@ -50,11 +58,20 @@ class RelaySettings(private val context: Context) {
     }
     fun save(connection: RelayConnection) {
         val config = connection.validated()
+        // Older installs have only the active connection; preserve it before switching servers.
+        runCatching { load() }.getOrNull()?.takeIf { it.endpoint != config.endpoint }?.let {
+            write(profile(it.endpoint), it)
+        }
+        write(profile(config.endpoint), config)
+        write(file, config)
+    }
+    private fun write(target: File, config: RelayConnection) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         val raw = JSONObject().put("endpoint", config.endpoint).put("token", config.token).toString().toByteArray()
         val encoded = JSONObject().put("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
             .put("data", Base64.encodeToString(cipher.doFinal(raw), Base64.NO_WRAP)).toString()
-        val atomic = android.util.AtomicFile(file)
+        target.parentFile?.mkdirs()
+        val atomic = android.util.AtomicFile(target)
         val output = atomic.startWrite()
         try { output.write(encoded.toByteArray()); atomic.finishWrite(output) }
         catch (error: Throwable) { atomic.failWrite(output); throw error }
@@ -66,6 +83,8 @@ data class RelayResult(val bytes: Long, val sha256: String, val expiresAt: Long,
     val direct: DirectResult? = null, val relayState: String = "ready", val localAvailable: Boolean = false,
     val relayError: String? = null)
 class DirectUnavailable(message: String, cause: Throwable? = null): java.io.IOException(message, cause)
+class PackageIntegrityError(message: String): java.io.IOException(message)
+class DeliveryPending(val phase: String, val delaySeconds: Long = 15): java.io.IOException(phase)
 data class RelayTask(
     val id: String, val state: String, val title: String, val bookId: String,
     val voice: String, val createdAt: Long, val progress: JSONObject, val result: RelayResult?,
@@ -186,33 +205,60 @@ class SynthesisRelay(connection: RelayConnection) {
         try {
             require(expected.bytes in 1..MAX_PACKAGE && expected.sha256.matches(Regex("[a-fA-F0-9]{64}"))) { "结果大小或校验信息无效（每包最多 4GB）" }
             require(expected.expiresAt > System.currentTimeMillis() / 1000) { "结果已过期，请重新派发合成" }
-            if (direct) {
-                if (network { response.responseCode } !in 200..299) throw DirectUnavailable("局域网下载暂不可用")
-            } else check(response)
+            if (target.length() > expected.bytes) target.delete()
+            if (target.length() == expected.bytes) {
+                if (fileSha(target).equals(expected.sha256, true)) { progress(expected.bytes, expected.bytes); return }
+                target.delete()
+            }
+            val offset = target.length()
+            response.setRequestProperty("Accept-Encoding", "identity")
+            if (offset > 0) {
+                response.setRequestProperty("Range", "bytes=$offset-")
+                response.setRequestProperty("If-Range", "\"${expected.sha256}\"")
+            }
+            val code = network { response.responseCode }
+            if (direct && code !in 200..299) throw DirectUnavailable("局域网下载暂不可用")
+            if (!direct) check(response)
+            val append = code == 206
+            if (append) {
+                val range = Regex("bytes (\\d+)-(\\d+)/(\\d+)").matchEntire(response.getHeaderField("Content-Range") ?: "")
+                if (range == null || range.groupValues[1].toLongOrNull() != offset ||
+                    range.groupValues[2].toLongOrNull() != expected.bytes - 1 || range.groupValues[3].toLongOrNull() != expected.bytes) {
+                    throw PackageIntegrityError("断点续传范围不匹配，将重新下载")
+                }
+            } else if (code != 200) throw PackageIntegrityError("下载响应无效")
             val length = response.contentLengthLong
-            require(length < 0 || length == expected.bytes) { "服务器结果长度发生变化，请刷新任务" }
-            val digest = MessageDigest.getInstance("SHA-256")
-            var received = 0L
+            if (length >= 0 && length != expected.bytes - (if (append) offset else 0L)) throw PackageIntegrityError("服务器结果长度发生变化，将重新下载")
+            var received = if (append) offset else 0L
             var lastProgress = 0L
-            network { response.inputStream }.use { input -> target.outputStream().use { output ->
+            progress(received, expected.bytes)
+            network { response.inputStream }.use { input -> java.io.FileOutputStream(target, append).use { output ->
                 val buffer = ByteArray(65536)
                 while (true) {
                     if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("下载已取消")
                     val count = network { input.read(buffer) }
                     if (count < 0) break
                     received += count
-                    require(received <= expected.bytes) { "听书包长度不匹配" }
+                    if (received > expected.bytes) throw PackageIntegrityError("听书包长度不匹配，将重新下载")
                     output.write(buffer, 0, count)
-                    digest.update(buffer, 0, count)
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (now - lastProgress >= 100) { progress(received, expected.bytes); lastProgress = now }
                 }
+                output.fd.sync()
             } }
-            val sha = digest.digest().joinToString("") { "%02x".format(it) }
-            require(received == expected.bytes && sha.equals(expected.sha256, true)) { "听书包下载不完整或校验失败，请重试" }
+            network { if (received != expected.bytes) throw java.io.EOFException("下载中断，稍后继续") }
+            if (!fileSha(target).equals(expected.sha256, true)) throw PackageIntegrityError("听书包校验失败，将重新下载")
             progress(received, expected.bytes)
-        } catch (error: Throwable) { target.delete(); throw error }
+        } catch (error: PackageIntegrityError) { target.delete(); throw error }
         finally { response.disconnect() }
+    }
+    private fun fileSha(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { source ->
+            val buffer = ByteArray(65536)
+            while (true) { val count = source.read(buffer); if (count < 0) break; digest.update(buffer, 0, count) }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
     companion object {
         const val MAX_PACKAGE = 4L * 1024 * 1024 * 1024

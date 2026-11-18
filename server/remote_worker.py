@@ -30,7 +30,7 @@ from .app import JobRequest
 from .catalog import DomainError
 from .config import Settings
 from .db import connect, initialize
-from .jobs import TERMINAL, detail, submit
+from .jobs import TERMINAL, detail, submit, action
 from .relay_results import ResultStore, ResultServer
 
 log = logging.getLogger("shanye.remote_worker")
@@ -43,7 +43,9 @@ class RelayError(RuntimeError):
 
 
 class LocalJobFailed(RelayError):
-    pass
+    def __init__(self, message, retryable=False):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class RelayConfig:
@@ -253,10 +255,58 @@ class RemoteWorker:
         request = JobRequest.model_validate(payload.get("request", payload)).model_dump()
         key = f"relay:{task['id']}"
         local_id = self.local_job(key)
-        if local_id:
-            return local_id
-        with closing(connect(self.settings)) as db:
-            return submit(db, self.settings, request, key, "synthesis")
+        if not local_id:
+            retry_of = payload.get("retry_of")
+            if retry_of:
+                try:
+                    import uuid
+                    uuid.UUID(retry_of)
+                except (ValueError, TypeError, AttributeError):
+                    raise DomainError("重试任务 ID 无效") from None
+                parent_id = self.local_job(f"relay:{retry_of}")
+                if not parent_id:
+                    raise DomainError("找不到原合成任务，请重新派发所需章节", 404)
+                with closing(connect(self.settings)) as db:
+                    # Follow automatic/local retries so a repeated manual retry reuses the latest work.
+                    while child := db.execute("SELECT id FROM jobs WHERE parent_job_id=? ORDER BY created DESC LIMIT 1", (parent_id,)).fetchone():
+                        parent_id = child[0]
+                    parent = detail(db, parent_id)
+                    if request != parent["request"]:
+                        raise DomainError("重试必须沿用原任务的文本、音色和参数", 409)
+                    if parent["state"] in {"failed", "partial_failed"}:
+                        local_id = action(db, self.settings, parent_id, "retry-failed", key)
+                    elif parent["state"] != "cancelled":
+                        # Already recovering/completed: wait for/reuse it, never duplicate synthesis.
+                        local_id = submit(db, self.settings, request, key, "synthesis",
+                                          db.execute("SELECT * FROM jobs WHERE id=?", (parent_id,)).fetchone(), parent["config"])
+                    else:
+                        raise DomainError("原任务已取消，请重新派发", 409)
+            else:
+                with closing(connect(self.settings)) as db:
+                    local_id = submit(db, self.settings, request, key, "synthesis")
+        # Relay redelivery must resume a fresh failed-only local retry rather than replaying
+        # the same terminal job. Keys are stable across worker restarts and lease loss.
+        for attempt in range(2, min(20, int(task.get("attempts", 1))) + 1):
+            retry_key = f"relay-retry:{task['id']}:{attempt}"
+            existing = self.local_job(retry_key)
+            if existing:
+                local_id = existing
+                continue
+            current = self.local_detail(local_id)
+            if not self.retryable_synthesis(current):
+                break
+            with closing(connect(self.settings)) as db:
+                local_id = action(db, self.settings, local_id, "retry-failed", retry_key)
+        return local_id
+
+    @staticmethod
+    def retryable_synthesis(job):
+        if job["state"] not in {"failed", "partial_failed"} or job.get("counts", {}).get("failed", 0) < 1:
+            return False
+        # Content has already exhausted the bounded segment/split budget. Replaying
+        # whole relay rounds here starves newer chapters; leave explicit retry available.
+        messages=[job.get("error") or ""]+[item.get("error") or "" for item in job.get("errors",[])]
+        return not any("内容校验" in message or "Split child exhausted" in message for message in messages)
 
     def ensure_bundle(self, remote_id, job, attempt=1):
         key = f"relay-bundle:{remote_id}"
@@ -287,13 +337,15 @@ class RemoteWorker:
         while not self.stopping:
             lease.check()
             current = self.local_detail(local_id)
-            lease.progress = {"phase": phase, "local_job_id": local_id, "state": current["state"], "counts": current.get("counts", {})}
+            lease.progress = {"phase": phase, "local_job_id": local_id, "state": current["state"],
+                              "counts": current.get("counts", {}), "retrying": bool(current.get("parent_job_id"))}
             state = current["state"]
             if state in TERMINAL:
                 if state != "succeeded":
                     errors = current.get("errors") or []
                     message = current.get("error") or (errors[0].get("error") if errors else state)
-                    raise LocalJobFailed(f"本地 {phase} 失败: {message}")
+                    raise LocalJobFailed(f"本地 {phase} 失败: {message}",
+                                         retryable=phase == "synthesis" and self.retryable_synthesis(current))
                 return current
             time.sleep(min(self.relay.config.heartbeat_seconds, 3))
         raise RelayError("worker 正在停止")
@@ -363,7 +415,8 @@ class RemoteWorker:
             log.exception("relay task %s failed", task.get("id"))
             try:
                 self.relay.fail(task.get("id", ""), task.get("lease_token", ""), exc,
-                                retryable=not isinstance(exc, (DomainError, ValidationError, LocalJobFailed)))
+                                retryable=exc.retryable if isinstance(exc, LocalJobFailed) else
+                                not isinstance(exc, (DomainError, ValidationError)))
             except Exception:
                 log.exception("could not report relay task failure")
         return True

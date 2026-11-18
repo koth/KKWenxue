@@ -188,6 +188,63 @@ async fn transfer_is_on_demand_idempotent_and_pinned_to_the_result_holder() {
         response.into_body().collect().await.unwrap().to_bytes(),
         b"result"[..]
     );
+    let etag = format!("\"{}\"", ready["result"]["sha256"].as_str().unwrap());
+    for (range, if_range, status, body) in [
+        (
+            "bytes=2-",
+            etag.as_str(),
+            StatusCode::PARTIAL_CONTENT,
+            b"sult".as_slice(),
+        ),
+        (
+            "bytes=1-3",
+            etag.as_str(),
+            StatusCode::PARTIAL_CONTENT,
+            b"esu".as_slice(),
+        ),
+        (
+            "bytes=2-",
+            "\"different\"",
+            StatusCode::OK,
+            b"result".as_slice(),
+        ),
+        (
+            "bytes=99-",
+            etag.as_str(),
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            b"".as_slice(),
+        ),
+        (
+            "bytes=4-2",
+            etag.as_str(),
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            b"".as_slice(),
+        ),
+        (
+            "bytes=1-2,4-5",
+            etag.as_str(),
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            b"".as_slice(),
+        ),
+    ] {
+        let req = Request::builder()
+            .uri(format!("/v1/tasks/{id}/result"))
+            .header("x-relay-token", "test-token")
+            .header("Range", range)
+            .header("If-Range", if_range)
+            .body(Body::empty())
+            .unwrap();
+        let response = router(f.state.clone()).oneshot(req).await.unwrap();
+        assert_eq!(response.status(), status);
+        if status == StatusCode::PARTIAL_CONTENT {
+            assert_eq!(response.headers()["etag"], etag);
+            assert!(response.headers().contains_key("content-range"));
+        }
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            body
+        );
+    }
 }
 
 #[tokio::test]

@@ -19,7 +19,7 @@ use std::{
 };
 use tokio::{
     fs,
-    io::AsyncWriteExt,
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     time::{sleep, Duration},
 };
 use tokio_util::io::ReaderStream;
@@ -686,11 +686,64 @@ async fn download_result(
             info,
         )
     };
-    let file = fs::File::open(path)
+    let mut file = fs::File::open(path)
         .await
         .map_err(|_| ApiError(StatusCode::GONE, "结果文件不可用".into()))?;
-    let mut response = Body::from_stream(ReaderStream::new(file)).into_response();
+    let etag = format!("\"{}\"", info.sha256);
+    let total = info.bytes as u64;
+    let mut start = 0u64;
+    let mut end = total.saturating_sub(1);
+    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let partial = range.is_some()
+        && headers
+            .get(header::IF_RANGE)
+            .map(|v| v.to_str().ok() == Some(etag.as_str()))
+            .unwrap_or(true);
+    if partial {
+        let parsed = range
+            .unwrap()
+            .strip_prefix("bytes=")
+            .and_then(|v| v.split_once('-'))
+            .and_then(|(a, b)| {
+                Some((
+                    a.parse::<u64>().ok()?,
+                    if b.is_empty() {
+                        total.saturating_sub(1)
+                    } else {
+                        b.parse::<u64>().ok()?
+                    },
+                ))
+            });
+        match parsed {
+            Some((a, b)) if a < total && b >= a => {
+                start = a;
+                end = b.min(total - 1);
+            }
+            _ => {
+                let mut response = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+                response.headers_mut().insert(
+                    header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes */{total}")).unwrap(),
+                );
+                return Ok(response);
+            }
+        }
+    }
+    file.seek(std::io::SeekFrom::Start(start))
+        .await
+        .map_err(io_error)?;
+    let length = if total == 0 { 0 } else { end - start + 1 };
+    let mut response = Body::from_stream(ReaderStream::new(file.take(length))).into_response();
+    if partial {
+        *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+        response.headers_mut().insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes {start}-{end}/{total}")).unwrap(),
+        );
+    }
     let out = response.headers_mut();
+    out.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    out.insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
     out.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(&info.content_type)
@@ -698,7 +751,7 @@ async fn download_result(
     );
     out.insert(
         header::CONTENT_LENGTH,
-        HeaderValue::from_str(&info.bytes.to_string()).unwrap(),
+        HeaderValue::from_str(&length.to_string()).unwrap(),
     );
     out.insert("x-sha256", HeaderValue::from_str(&info.sha256).unwrap());
     // Percent-encode all bytes for a safe UTF-8 RFC 5987 filename.

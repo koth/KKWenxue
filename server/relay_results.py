@@ -2,6 +2,7 @@
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import re
 from pathlib import Path
 import secrets
 import sqlite3
@@ -76,14 +77,36 @@ class ResultServer:
                     return
                 try:
                     with path.open("rb") as source:
-                        self.send_response(200)
+                        size = record["bytes"]
+                        etag = '"'+record["sha256"]+'"'
+                        start, end = 0, size-1
+                        requested = self.headers.get("Range")
+                        partial = requested and self.headers.get("If-Range", etag) == etag
+                        if partial:
+                            match = re.fullmatch(r"bytes=(\d+)-(\d*)", requested)
+                            if not match or int(match[1]) >= size or (match[2] and int(match[2]) < int(match[1])):
+                                self.send_response(416)
+                                self.send_header("Content-Range", f"bytes */{size}")
+                                self.send_header("Content-Length", "0")
+                                self.end_headers()
+                                return
+                            start = int(match[1])
+                            end = min(int(match[2]), size-1) if match[2] else size-1
+                        self.send_response(206 if partial else 200)
                         self.send_header("Content-Type", "application/zip")
-                        self.send_header("Content-Length", str(record["bytes"]))
+                        self.send_header("Content-Length", str(end-start+1))
+                        self.send_header("Accept-Ranges", "bytes")
+                        self.send_header("ETag", etag)
+                        if partial:
+                            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
                         self.send_header("X-SHA256", record["sha256"])
                         self.send_header("Cache-Control", "no-store")
                         self.end_headers()
-                        while block := source.read(256 * 1024):
+                        source.seek(start)
+                        remaining = end-start+1
+                        while remaining and (block := source.read(min(256 * 1024, remaining))):
                             self.wfile.write(block)
+                            remaining -= len(block)
                 except (OSError, TimeoutError):
                     pass
 

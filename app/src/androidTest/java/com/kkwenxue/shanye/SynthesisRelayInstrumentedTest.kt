@@ -33,9 +33,11 @@ class SynthesisRelayInstrumentedTest {
         override fun openOrCreateDatabase(name:String,mode:Int,factory:SQLiteDatabase.CursorFactory?,handler:DatabaseErrorHandler?)=
             SQLiteDatabase.openDatabase(getDatabasePath(name).path,factory,SQLiteDatabase.CREATE_IF_NECESSARY,handler)
     }
-    private val book=Book("relay-test","测试小说","作者","测试","","",0,listOf(
-        Chapter("relay-test-10","第10章：风声","风🌊很轻。\n\n雨停了！"),
-        Chapter("relay-test-12","第12章：灯下","灯亮了。")))
+    private val bookId="relay-test-${java.util.UUID.randomUUID()}"
+    private val artifact=java.util.UUID.randomUUID().toString().replace("-","")
+    private val book=Book(bookId,"测试小说","作者","测试","","",0,listOf(
+        Chapter("$bookId-10","第10章：风声","风🌊很轻。\n\n雨停了！"),
+        Chapter("$bookId-12","第12章：灯下","灯亮了。")))
     private val taskId="11111111-1111-4111-8111-111111111111"
     private fun clean() { context.root.deleteRecursively(); context.root.mkdirs() }
 
@@ -61,8 +63,9 @@ class SynthesisRelayInstrumentedTest {
                     while(offset<body.size) { val n=input.read(body,offset,body.size-offset); if(n<0) break; offset+=n }
                     val reply=route(Request(path,headers,body))
                     val output=client.getOutputStream()
-                    val response="HTTP/1.1 ${reply.status} Result\r\nContent-Length: ${reply.body.size}\r\nConnection: close\r\n"+
-                        reply.headers.entries.joinToString("") {"${it.key}: ${it.value}\r\n"}+"\r\n"
+                    val length=reply.headers.entries.firstOrNull {it.key.equals("Content-Length",true)}?.value ?: reply.body.size.toString()
+                    val response="HTTP/1.1 ${reply.status} Result\r\nContent-Length: $length\r\nConnection: close\r\n"+
+                        reply.headers.entries.filterNot {it.key.equals("Content-Length",true)}.joinToString("") {"${it.key}: ${it.value}\r\n"}+"\r\n"
                     output.write(response.toByteArray()); output.write(reply.body); output.flush()
                 }
             } catch (_:java.net.SocketException) { break }
@@ -87,7 +90,6 @@ class SynthesisRelayInstrumentedTest {
     private fun bundle():ByteArray {
         val sound=audio();val chapter=book.chapters.first();val text=chapter.text
         val hash=AudioLibrary.sha256(text.toByteArray())
-        val artifact="c".repeat(32)
         val manifest=JSONObject().put("schema_version",2).put("complete",true).put("artifact_id",artifact)
             .put("book_id",book.id).put("chapter_id",chapter.id).put("duration_ms",3000)
             .put("offsets","UTF-16 into Android Chapter.text").put("source_sha256",hash)
@@ -136,6 +138,34 @@ class SynthesisRelayInstrumentedTest {
             assertEquals(2,bodies.size);assertEquals(bodies[0],bodies[1])
             assertTrue(restarted.pending(server.config().endpoint).isEmpty())
             assertEquals(1,restarted.tasks(server.config().endpoint).size)
+        }
+        clean()
+    }
+    @Test fun manualSynthesisRetryKeepsOriginalPayloadAndDurableIdempotency() {
+        clean();val data=bundle();val received=mutableListOf<JSONObject>()
+        val original=task(SynthesisPayload.create(book,listOf(0),"clone-linchuan-zonos3-v1","林川","original",.9f),data)
+            .put("state","failed").put("error","子片段内容校验未通过")
+        val newId="22222222-2222-4222-8222-222222222222"
+        HttpFixture {request ->
+            if(request.path=="/v1/tasks") {
+                val raw=JSONObject(String(request.body));received.add(raw)
+                if(received.size==1) Reply(503,ByteArray(0))
+                else Reply(body=task(raw,data).put("id",newId).put("state","queued").toString().toByteArray())
+            } else Reply(body=original.toString().toByteArray())
+        }.use {server ->
+            val repository=SynthesisRepository(context)
+            val key=repository.prepareRetry(server.config(),taskId)
+            assertEquals(1,repository.deliveries().size)
+            assertTrue(runCatching {repository.publish(server.config(),key)}.isFailure)
+            assertEquals(newId,SynthesisRepository(context).publish(server.config(),key).id)
+            assertEquals(received[0].toString(),received[1].toString())
+            val submitted=received.last()
+            assertEquals(taskId,submitted.getJSONObject("payload").getString("retry_of"))
+            assertEquals(original.getJSONObject("payload").getJSONObject("request").toString(),
+                submitted.getJSONObject("payload").getJSONObject("request").toString())
+            assertEquals("android:$key",submitted.getString("dedupe_key"))
+            assertEquals(3,submitted.getInt("max_attempts"))
+            assertEquals(newId,SynthesisRepository(context).delivery(key)!!.taskId)
         }
         clean()
     }
@@ -261,12 +291,185 @@ class SynthesisRelayInstrumentedTest {
         }
         clean()
     }
+    @Test fun automaticDeliveryPollsRetriesAndResumesAfterRepositoryRecreation() {
+        clean();val data=bundle();val cutoff=data.size/3
+        val ready=java.util.concurrent.atomic.AtomicBoolean(false)
+        var downloads=0;val ranges=mutableListOf<String?>()
+        val response=task(SynthesisPayload.create(book,listOf(0),"clone-linchuan-zonos3-v1","林川","auto"),data)
+        fun queued()=JSONObject(response.toString()).apply {put("state","queued");remove("result")}
+        HttpFixture { request -> when {
+            request.path == "/v1/tasks" -> Reply(body=queued().toString().toByteArray())
+            request.path.endsWith("/result") -> {
+                downloads++;ranges.add(request.headers["range"])
+                if (downloads==1) Reply(body=data.copyOf(cutoff),headers=mapOf("Content-Length" to data.size.toString()))
+                else {
+                    assertEquals("bytes=$cutoff-",request.headers["range"])
+                    assertEquals("\"${AudioLibrary.sha256(data)}\"",request.headers["if-range"])
+                    Reply(206,data.copyOfRange(cutoff,data.size),mapOf("Content-Range" to "bytes $cutoff-${data.size-1}/${data.size}"))
+                }
+            }
+            else -> Reply(body=(if(ready.get()) response else queued()).toString().toByteArray())
+        } }.use { server ->
+            val repo=SynthesisRepository(context);repo.settings.save(server.config())
+            val key=repo.prepare(server.config(),book,listOf(0),"clone-linchuan-zonos3-v1","林川")
+            assertEquals(15L,SynthesisDeliveryRunner(context).step(key,books={listOf(book)}))
+            assertEquals("queued",repo.tasks(server.config().endpoint).single().task.state)
+            ready.set(true)
+            assertEquals(10L,SynthesisDeliveryRunner(context).step(key,books={listOf(book)}))
+            assertEquals("retry",repo.delivery(key)!!.state)
+            val partial=File(context.noBackupFilesDir,"synthesis-downloads").walkTopDown().first {it.name.endsWith(".part")}
+            assertEquals(cutoff.toLong(),partial.length())
+            assertNull(SynthesisDeliveryRunner(context,SynthesisRepository(context)).step(key,books={listOf(book)}))
+            assertEquals("imported",SynthesisRepository(context).delivery(key)!!.state)
+            assertTrue(repo.tasks(server.config().endpoint).single().importedAt>0)
+            AudioLibrary(context).use {library -> assertEquals(1,library.load(listOf(book)).size)}
+            assertNull(SynthesisDeliveryRunner(context).step(key,books={listOf(book)}))
+            assertEquals(2,downloads);assertEquals(listOf(null,"bytes=$cutoff-"),ranges)
+            assertFalse(partial.exists())
+        }
+        clean()
+    }
+    @Test fun downloadIgnoresUnsupportedRangeSafelyAndRejectsWrongRangeOrHash() {
+        clean();val data=bundle();val target=File(context.cacheDir,"resume.part")
+        val result=RelayResult(data.size.toLong(),AudioLibrary.sha256(data),System.currentTimeMillis()/1000+3600)
+        var invalid=false
+        HttpFixture { request ->
+            assertEquals("bytes=20-",request.headers["range"])
+            if(invalid) Reply(206,data.copyOfRange(20,data.size),mapOf("Content-Range" to "bytes 10-${data.size-1}/${data.size}"))
+            else Reply(body=data)
+        }.use { server ->
+            target.writeBytes(data.copyOf(20))
+            SynthesisRelay(server.config()).download(taskId,result,target)
+            assertArrayEquals(data,target.readBytes())
+            target.writeBytes(data.copyOf(20));invalid=true
+            assertTrue(runCatching {SynthesisRelay(server.config()).download(taskId,result,target)}.exceptionOrNull() is PackageIntegrityError)
+            assertFalse(target.exists())
+        }
+        clean()
+    }
+    @Test fun completedDownloadSurvivesAnImportInterruptionWithoutRedownloading() {
+        clean();val data=bundle();var downloads=0
+        val response=task(SynthesisPayload.create(book,listOf(0),"clone-linchuan-zonos3-v1","林川","cached"),data)
+        HttpFixture { request ->
+            if(request.path.endsWith("/result")) {downloads++;Reply(body=data)}
+            else Reply(body=response.toString().toByteArray())
+        }.use { server ->
+            AudioLibrary(context).use { library ->
+                val error=runCatching {
+                    SynthesisRepository(context).importTask(server.config(),taskId,library,listOf(book)) {phase,_,_ ->
+                        if(phase=="校验并导入") throw IOException("模拟导入前被系统中断")
+                    }
+                }.exceptionOrNull()
+                assertTrue(error is IOException)
+                assertTrue(library.load(listOf(book)).isEmpty())
+                assertEquals(1,SynthesisRepository(context).importTask(server.config(),taskId,library,listOf(book)))
+                assertEquals(1,downloads)
+            }
+        }
+        clean()
+    }
+    @Test fun backgroundErrorsBackOffButBadCredentialsNeedAttentionAndOtherClientTasksAreNotAutoImported() {
+        clean();val data=bundle();var status=503
+        val response=task(SynthesisPayload.create(book,listOf(0),"zonos3-haoran-v1","Haoran","retry"),data)
+        HttpFixture { Reply(status,if(status==200) response.toString().toByteArray() else ByteArray(0)) }.use { server ->
+            val repo=SynthesisRepository(context);repo.settings.save(server.config())
+            repo.remember(server.config().endpoint,RelayTask.parse(response))
+            assertTrue(repo.deliveries().isEmpty())
+            val key=repo.requestImport(server.config(),taskId)
+            assertEquals(10L,SynthesisDeliveryRunner(context).step(key,books={listOf(book)}))
+            assertEquals(20L,SynthesisDeliveryRunner(context).step(key,books={listOf(book)}))
+            assertEquals(2,repo.delivery(key)!!.failures)
+            status=401
+            assertNull(SynthesisDeliveryRunner(context).step(key,books={listOf(book)}))
+            assertEquals("blocked",repo.delivery(key)!!.state)
+            assertTrue(repo.delivery(key)!!.error!!.contains("凭据"))
+            repo.resumeCredentials(server.config().endpoint)
+            assertEquals("waiting",repo.delivery(key)!!.state)
+        }
+        clean()
+    }
+    @Test fun relayUploadFailureRetriesAutomaticallyWithoutResubmittingSynthesis() {
+        clean();val data=bundle();var transfers=0;var submissions=0
+        val response=task(SynthesisPayload.create(book,listOf(0),"zonos3-haoran-v1","Haoran","transfer"),data)
+        response.getJSONObject("result").put("relay_state","none")
+        HttpFixture { request -> when {
+            request.path=="/v1/tasks" -> {submissions++;Reply(body=response.toString().toByteArray())}
+            request.path.endsWith("/result/request") -> {
+                transfers++
+                response.getJSONObject("result").put("relay_state",if(transfers==1) "failed" else "ready").put("relay_error","Connection reset")
+                Reply(body=response.toString().toByteArray())
+            }
+            request.path.endsWith("/result") -> Reply(body=data)
+            else -> Reply(body=response.toString().toByteArray())
+        } }.use {server ->
+            val repo=SynthesisRepository(context);repo.settings.save(server.config())
+            val key=repo.prepare(server.config(),book,listOf(0),"zonos3-haoran-v1","Haoran")
+            assertEquals(10L,SynthesisDeliveryRunner(context).step(key,books={listOf(book)}))
+            assertEquals("retry",repo.delivery(key)!!.state)
+            assertNull(SynthesisDeliveryRunner(context).step(key,books={listOf(book)}))
+            assertEquals("imported",repo.delivery(key)!!.state)
+            assertEquals(1,submissions);assertEquals(2,transfers)
+        }
+        clean()
+    }
+    @Test fun workManagerCompletesAutomaticImportWithoutAnOpenSynthesisScreen() {
+        val app=InstrumentationRegistry.getInstrumentation().targetContext
+        val settingsFile=File(app.noBackupFilesDir,"relay-connection")
+        val previous=settingsFile.takeIf {it.exists()}?.readBytes()
+        val data=bundle();val liveId=java.util.UUID.randomUUID().toString()
+        val response=task(SynthesisPayload.create(book,listOf(0),"clone-linchuan-zonos3-v1","林川","background"),data).put("id",liveId)
+        val polls=java.util.concurrent.atomic.AtomicInteger()
+        val downloads=java.util.concurrent.atomic.AtomicInteger()
+        HttpFixture { request -> when {
+            request.path == "/v1/tasks" || (request.path.endsWith("/status") && polls.incrementAndGet()==1) ->
+                Reply(body=JSONObject(response.toString()).apply {put("state","queued");remove("result")}.toString().toByteArray())
+            request.path.endsWith("/result") -> if(downloads.incrementAndGet()==1) Reply(503,ByteArray(0)) else Reply(body=data)
+            else -> Reply(body=response.toString().toByteArray())
+        } }.use { server ->
+            val repository=SynthesisRepository(app);repository.settings.save(server.config())
+            BookDatabase(app).use {it.save(book)}
+            val key=repository.prepare(server.config(),book,listOf(0),"clone-linchuan-zonos3-v1","林川")
+            val manager=androidx.work.WorkManager.getInstance(app)
+            try {
+                SynthesisDownloads.enqueue(app,key)
+                val deadline=android.os.SystemClock.elapsedRealtime()+90000
+                while(repository.delivery(key)?.state!="imported" && android.os.SystemClock.elapsedRealtime()<deadline) Thread.sleep(200)
+                assertEquals(repository.delivery(key)?.error,"imported",repository.delivery(key)?.state)
+                AudioLibrary(app).use {library -> assertEquals(1,library.load(listOf(book)).size)}
+                assertEquals(2,downloads.get())
+                assertTrue(polls.get()>=3)
+                assertTrue(repository.tasks(server.config().endpoint).single().importedAt>0)
+            } finally {
+                manager.cancelUniqueWork("synthesis-delivery-$key").result.get()
+                android.database.sqlite.SQLiteDatabase.openDatabase(File(app.noBackupFilesDir,"synthesis.sqlite").path,null,0).use {db ->
+                    db.delete("outbox","key=?",arrayOf(key));db.delete("deliveries","key=?",arrayOf(key))
+                    db.delete("tasks","endpoint=?",arrayOf(server.config().endpoint))
+                }
+                AudioLibrary(app).use {it.writableDatabase.delete("artifacts","id=?",arrayOf(artifact))}
+                File(app.filesDir,"audiobooks/$artifact").deleteRecursively()
+                BookDatabase(app).use {
+                    it.writableDatabase.delete("chapters","book_id=?",arrayOf(book.id))
+                    it.writableDatabase.delete("books","id=?",arrayOf(book.id))
+                }
+                val name=AudioLibrary.sha256("${server.config().endpoint}:$liveId".toByteArray())
+                File(app.noBackupFilesDir,"synthesis-downloads/$name").deleteRecursively()
+                File(app.noBackupFilesDir,"synthesis-downloads/$name.lock").delete()
+                File(app.noBackupFilesDir,"relay-connections/${AudioLibrary.sha256(server.config().endpoint.toByteArray())}").delete()
+                if(previous==null) settingsFile.delete() else settingsFile.writeBytes(previous)
+            }
+        }
+    }
     @Test fun credentialsAreEncryptedAndRedirectsNeverReceiveThem() {
         clean()
         val config=RelayConnection("http://127.0.0.1:17870","private-test-credential")
         RelaySettings(context).save(config)
         assertEquals(config,RelaySettings(context).load())
         assertFalse(File(context.noBackupFilesDir,"relay-connection").readText().contains(config.token))
+        File(context.noBackupFilesDir,"relay-connections").deleteRecursively() // Simulate the previous single-profile format.
+        val other=RelayConnection("http://127.0.0.1:17872","other-private-test-credential")
+        RelaySettings(context).save(other)
+        assertEquals(other,RelaySettings(context).load())
+        assertEquals(config,RelaySettings(context).load(config.endpoint))
         var leaked=false
         HttpFixture {leaked=true;Reply(body="{}".toByteArray())}.use {target ->
             HttpFixture {Reply(status=302,body=ByteArray(0),headers=mapOf("Location" to "http://127.0.0.1:${target.port}/stolen"))}.use {source ->

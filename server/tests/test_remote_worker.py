@@ -22,6 +22,8 @@ from server.remote_worker import (
 )
 from server.tests.test_service import TestEngine
 from server.worker import Worker
+from server.jobs import detail
+from server.catalog import DomainError
 
 
 class ClientTests(unittest.TestCase):
@@ -191,6 +193,67 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(self.relay.fail.call_args.kwargs["transfer"])
         self.assertFalse(self.relay.fail.call_args.kwargs["retryable"])
         self.assertIsNone(self.worker.local_job("relay:" + self.task["id"]))
+
+    def fail_one_segment(self):
+        identifier=self.worker.submit_local(self.task)
+        with connect(self.settings) as db:
+            segment=db.execute("SELECT segment_id FROM job_items WHERE job_id=? ORDER BY position LIMIT 1",(identifier,)).fetchone()[0]
+        engine=TestEngine();valid=engine.generate
+        engine.generate=lambda rows,config: [ValueError("GPU connection reset") if r['id']==segment or r.get('depth') else valid([r],config)[0] for r in rows]
+        gpu=Worker(self.settings,engine=engine);cpu=Worker(self.settings,role='cpu')
+        for _ in range(40):
+            if not (gpu.tick() | cpu.tick()):break
+        self.assertTrue(self.worker.retryable_synthesis(self.worker.local_detail(identifier)))
+        return identifier
+
+    def test_relay_retries_only_failed_local_parts_and_resume_is_idempotent(self):
+        first=self.fail_one_segment()
+        self.relay.claim.return_value=self.task
+        with self.assertLogs('shanye.remote_worker',level='ERROR'):
+            self.worker.run_once()
+        self.assertTrue(self.relay.fail.call_args.kwargs['retryable'])
+        retry_task={**self.task,'attempts':2,'lease_token':'lease-2'}
+        second=self.worker.submit_local(retry_task)
+        self.assertNotEqual(first,second)
+        self.assertEqual(second,self.worker.submit_local(retry_task))
+        self.assertEqual(first,self.worker.local_detail(second)['parent_job_id'])
+        self.assertGreater(self.worker.local_detail(second)['counts']['reused'],0)
+        engine=TestEngine();gpu=Worker(self.settings,engine=engine);cpu=Worker(self.settings,role='cpu')
+        for _ in range(40):
+            if not (gpu.tick() | cpu.tick()):break
+        self.assertEqual('succeeded',self.worker.local_detail(second)['state'])
+        self.assertEqual(second,self.worker.submit_local({**retry_task,'attempts':3}))
+        with self.assertRaises(LocalJobFailed) as raised:
+            self.worker.wait_for_local(Mock(),first,'synthesis')
+        self.assertTrue(raised.exception.retryable)
+
+    def test_manual_retry_freezes_original_config_and_rejects_changed_text_or_voice(self):
+        first=self.fail_one_segment()
+        task={**self.task,'id':'22222222-2222-4222-8222-222222222222',
+              'payload':{**self.task['payload'],'retry_of':self.task['id']}}
+        retry=self.worker.submit_local(task)
+        self.assertEqual(retry,self.worker.submit_local(task))
+        original=self.worker.local_detail(first);current=self.worker.local_detail(retry)
+        self.assertEqual(original['config'],current['config'])
+        self.assertEqual(original['generation_id'],current['generation_id'])
+        self.assertGreater(current['counts']['reused'],0)
+        changed={**task,'id':'33333333-3333-4333-8333-333333333333','payload':{
+            **task['payload'],'request':{**task['payload']['request'],'voice_preset_version_id':'other-voice'}}}
+        with self.assertRaisesRegex(DomainError,'沿用原任务'):
+            self.worker.submit_local(changed)
+
+    def test_cancelled_or_export_failure_does_not_trigger_synthesis_retry(self):
+        for current in [{'state':'cancelled','counts':{'failed':1}}, {'state':'failed','counts':{'failed':0}}]:
+            self.assertFalse(self.worker.retryable_synthesis(current))
+
+    def test_exhausted_content_check_never_replays_whole_relay_rounds(self):
+        for message in ['朗读内容校验未通过，存在明显漏读', 'Split child exhausted retries: text']:
+            current={'state':'partial_failed','counts':{'failed':1},'errors':[{'error':message}]}
+            self.assertFalse(self.worker.retryable_synthesis(current))
+            self.worker.local_detail=Mock(return_value=current)
+            with self.assertRaises(LocalJobFailed) as raised:
+                self.worker.wait_for_local(Mock(),'content-failure','synthesis')
+            self.assertFalse(raised.exception.retryable)
 
 
 if __name__ == "__main__":

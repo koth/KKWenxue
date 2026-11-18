@@ -10,8 +10,8 @@ android {
         applicationId = "com.kkwenxue.shanye"
         minSdk = 26
         targetSdk = 35
-        versionCode = 28
-        versionName = "0.9.8"
+        versionCode = 30
+        versionName = "0.9.10"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -24,6 +24,7 @@ android {
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.04.01"))
     implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.work:work-runtime-ktx:2.10.5")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")

@@ -25,12 +25,12 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import com.kkwenxue.shanye.data.*
+import com.kkwenxue.shanye.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.ensureActive
 import java.text.DateFormat
 import java.util.Date
 
@@ -77,8 +77,6 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
     var busy by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     var networkError by remember { mutableStateOf<String?>(null) }
-    var transfer by remember { mutableStateOf<Triple<String, Long, Long>?>(null) }
-    var transferId by remember { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
     fun notify(message: String) { scope.launch { snackbar.showSnackbar(message) } }
 
@@ -105,7 +103,7 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
             try { action() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { notify(error.message ?: "操作失败，请重试") }
-            finally { busy = false; transfer = null; transferId = null }
+            finally { busy = false }
         }
     }
     LaunchedEffect(Unit) {
@@ -118,11 +116,16 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
     LaunchedEffect(connection) {
         val config = connection ?: return@LaunchedEffect
         loadedOlder = false; cursor = null
+        withContext(Dispatchers.IO) { SynthesisDownloads.resume(context) }
         loadSaved(config)
         while (true) {
             if (!busy && !refreshing && ((activity as? LifecycleOwner)?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) != false)) refresh(config)
             delay(5000)
         }
+    }
+    LaunchedEffect(connection, repository) {
+        val config = connection ?: return@LaunchedEffect
+        SynthesisRepository.changes.collect { loadSaved(config) }
     }
     OverlaySystemBars(SystemBarsMode.SYNTHESIS)
     BackHandler { if (settingsOpen) settingsOpen = false else onClose() }
@@ -152,7 +155,7 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                 LazyColumn(Modifier.weight(1f), contentPadding=PaddingValues(24.dp), verticalArrangement=Arrangement.spacedBy(18.dp)) {
                     item {
                         Text("把下一段故事，变成声音。", fontFamily=Serif, fontSize=23.sp, color=Ink)
-                        Text("只上传选中的章节。合成在服务器进行，退出 App 后仍会继续。", Modifier.padding(top=8.dp), fontSize=12.sp, lineHeight=20.sp, color=Muted)
+                        Text("只上传选中的章节。合成完成后自动下载并导入，退出此页仍会继续。", Modifier.padding(top=8.dp), fontSize=12.sp, lineHeight=20.sp, color=Muted)
                     }
                     item {
                         Text("选择书籍", fontSize=12.sp, color=Muted)
@@ -197,7 +200,7 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                 Glyph("next", Muted, size=16.dp)
                             }
                             DropdownMenu(expanded=voiceMenu, onDismissRequest={voiceMenu=false}) {
-                                DropdownMenuItem(onClick={}, enabled=false, text={Text("参考音色", color=Muted, fontSize=11.sp)})
+                                DropdownMenuItem(onClick={}, enabled=false, text={Text("ZONOS3 音色", color=Muted, fontSize=11.sp)})
                                 SynthesisVoices.forEach { voice -> DropdownMenuItem(text={Text(voice.name)}, onClick={voiceId=voice.id; voiceMenu=false}) }
                             }
                         }
@@ -223,12 +226,16 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                     val indices=SynthesisPayload.resolve(selectedBook, expression)
                                     selectedIndices=indices; parsedExpression=expression
                                     val selected=SynthesisVoices.first { it.id == voiceId }
-                                    val key=withContext(Dispatchers.IO) { repository.prepare(config, selectedBook, indices, selected.id, selected.name, exportSpeed) }
+                                    val key=withContext(Dispatchers.IO) {
+                                        repository.prepare(config, selectedBook, indices, selected.id, selected.name, exportSpeed).also {
+                                            SynthesisDownloads.enqueue(context,it,5)
+                                        }
+                                    }
                                     tab=1
                                     try {
                                         withContext(Dispatchers.IO) { repository.publish(config, key) }
                                     } finally { loadSaved(config) }
-                                    notify("已派发 ${indices.size} 章，服务器将排队合成")
+                                    notify("已派发 ${indices.size} 章，完成后将自动下载并导入")
                                 }
                             }) {
                             if (busy) CircularProgressIndicator(Modifier.size(18.dp).padding(end=5.dp), strokeWidth=2.dp, color=Paper)
@@ -262,11 +269,15 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                     }
                     items(tasks, key={it.task.id}) { saved ->
                         val task=saved.task
-                        val downloading=transferId == task.id
+                        val delivery=saved.delivery
+                        val downloading=delivery?.state == "running" && task.state == "completed"
                         val expired=task.result?.expiresAt?.let { it <= System.currentTimeMillis()/1000 } ?: true
                         val localBook=task.bookId.isBlank() || Library.books.any { it.id == task.bookId }
                         val label=when {
                             saved.importedAt>0 -> "已导入"
+                            delivery?.state == "blocked" -> "需要处理"
+                            delivery?.state == "retry" -> "自动重试中"
+                            downloading -> "自动导入中"
                             task.state == "completed" && expired -> "结果已过期"
                             else -> taskState(task.state)
                         }
@@ -276,6 +287,13 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                 Text(label, Modifier.padding(start=12.dp), fontSize=11.sp, color=if(saved.importedAt>0) ColorGreen else Accent)
                             }
                             if (task.voice.isNotBlank()) Text(task.voice, Modifier.padding(top=8.dp), fontSize=11.sp, color=Muted)
+                            if (delivery != null && saved.importedAt == 0L) {
+                                Text(delivery.phase,Modifier.padding(top=9.dp),fontSize=12.sp,color=Accent)
+                                if (delivery.total > 0 && task.state == "completed") {
+                                    Text("${delivery.received * 100 / delivery.total}%",Modifier.padding(top=6.dp),fontSize=11.sp,color=Muted)
+                                    LinearProgressIndicator(progress={(delivery.received.toFloat()/delivery.total).coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth().padding(top=6.dp),color=Accent,trackColor=Rule)
+                                }
+                            }
                             if (task.state == "completed" && !expired && saved.importedAt == 0L) Text(when(task.result?.relayState) {
                                 "queued" -> "合成已完成 · 等待按需上传中转包"
                                 "uploading" -> "合成已完成 · 正在上传中转包"
@@ -291,32 +309,29 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                 Text(when(task.progress.optString("phase")) {
                                     "bundle" -> "正在打包听书包"
                                     "upload" -> "正在上传结果"
-                                    "synthesis" -> if (total>0) "合成进度 $completed / $total 段" else "等待合成"
+                                    "synthesis" -> (if (task.progress.optBoolean("retrying")) "重试失败片段" else "合成进度") +
+                                        (if (total>0) " $completed / $total 段" else " · 等待合成")
                                     else -> "等待 worker 处理"
                                 }, Modifier.padding(top=12.dp), fontSize=12.sp, color=Muted)
                                 if (total>0) LinearProgressIndicator(progress={completed.toFloat()/total}, modifier=Modifier.fillMaxWidth().padding(top=10.dp).height(3.dp), color=Accent, trackColor=Rule)
                             }
-                            (saved.error ?: task.error)?.let { Text(it, Modifier.padding(top=9.dp), color=Accent, fontSize=11.sp, maxLines=3) }
-                            if (downloading && transfer != null) {
-                                val current=transfer!!
-                                Text("${current.first} · ${(current.second * 100 / current.third.coerceAtLeast(1))}%", Modifier.padding(top=12.dp), fontSize=12.sp, color=Accent)
-                                LinearProgressIndicator(progress={current.second.toFloat()/current.third.coerceAtLeast(1)}, modifier=Modifier.fillMaxWidth().padding(top=8.dp), color=Accent, trackColor=Rule)
+                            (delivery?.error ?: saved.error ?: task.error)?.let { Text(it, Modifier.padding(top=9.dp), color=Accent, fontSize=11.sp, maxLines=3) }
+                            if (task.state == "failed") {
+                                TextButton(enabled=!busy,onClick={connection?.let {config -> runAction {
+                                    val key=withContext(Dispatchers.IO) {
+                                        repository.prepareRetry(config,task.id).also {SynthesisDownloads.enqueue(context,it,5)}
+                                    }
+                                    try {withContext(Dispatchers.IO) {repository.publish(config,key)}}
+                                    finally {loadSaved(config)}
+                                    notify("已重试失败片段，成功音频会复用；完成后自动导入")
+                                }}}) {Text("重试失败片段",color=Accent)}
                             }
-                            if (task.state == "completed" && saved.importedAt == 0L && !expired) {
+                            if (task.state == "completed" && saved.importedAt == 0L && !expired && (delivery == null || delivery.state == "blocked")) {
                                 TextButton(enabled=!busy && localBook, onClick={connection?.let {config -> runAction {
-                                    transferId=task.id
-                                    try {
-                                        val count=withContext(Dispatchers.IO) {
-                                            val operationContext=coroutineContext
-                                            repository.importTask(config, task.id, audioLibrary, Library.books.toList()) {phase, received, total ->
-                                                operationContext.ensureActive()
-                                                transfer=Triple(phase, received, total)
-                                            }
-                                        }
-                                        onImported()
-                                        notify(if (count==0) "这些章节已经在本机" else "已导入 $count 个章节，可返回听书播放")
-                                    } finally { loadSaved(config) }
-                                }}}) { Glyph("download", if(localBook) Accent else Muted, size=16.dp); Text(if(localBook) "下载并导入" else "请先导入对应小说", Modifier.padding(start=6.dp), color=if(localBook) Accent else Muted) }
+                                    withContext(Dispatchers.IO) { SynthesisDownloads.retry(context,config,task.id) }
+                                    loadSaved(config)
+                                    notify("已加入后台下载，完成后会自动导入")
+                                }}}) { Glyph("download", if(localBook) Accent else Muted, size=16.dp); Text(if(localBook) (if(delivery==null) "下载并导入" else "重试自动导入") else "请先导入对应小说", Modifier.padding(start=6.dp), color=if(localBook) Accent else Muted) }
                             }
                         }
                     }
@@ -341,6 +356,8 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
     }
     if (settingsOpen) RelaySettingsDialog(connection, repository, onDismiss={settingsOpen=false}, onSaved={
         connection=it; settingsOpen=false; tasks=emptyList(); pending=emptyList(); networkError=null
+        val config=it
+        scope.launch { withContext(Dispatchers.IO) { repository.resumeCredentials(config.endpoint);SynthesisDownloads.resume(context) } }
     })
 }
 
@@ -386,6 +403,7 @@ private fun RelaySettingsDialog(current: RelayConnection?, repository: Synthesis
             OutlinedTextField(token, {token=it}, Modifier.fillMaxWidth(), enabled=!testing, label={Text("接入凭据")}, singleLine=true,
                 visualTransformation=PasswordVisualTransformation(), keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password))
             Text("凭据仅保存在本机。IP 联调使用 HTTP，域名部署可改用 HTTPS。", fontSize=11.sp, lineHeight=18.sp, color=Muted)
+            Text("山页 ${BuildConfig.VERSION_NAME}",fontSize=10.sp,color=Muted)
             TextButton(enabled=!testing, onClick={importConnection.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))}) {
                 Text("导入连接配置文件", color=Accent)
             }

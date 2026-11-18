@@ -33,6 +33,21 @@ class LanResultsTests(unittest.TestCase):
                 with urlopen(Request(url, headers=headers)) as response:
                     self.assertEqual(path.read_bytes(), response.read())
                     self.assertEqual(result["sha256"], response.headers["X-SHA256"])
+                    self.assertEqual('bytes',response.headers['Accept-Ranges'])
+                etag='"'+result['sha256']+'"'
+                with urlopen(Request(url,headers={**headers,'Range':'bytes=5-','If-Range':etag})) as response:
+                    self.assertEqual(206,response.status)
+                    self.assertEqual(path.read_bytes()[5:],response.read())
+                    self.assertEqual(f'bytes 5-{path.stat().st_size-1}/{path.stat().st_size}',response.headers['Content-Range'])
+                with urlopen(Request(url,headers={**headers,'Range':'bytes=2-6'})) as response:
+                    self.assertEqual(path.read_bytes()[2:7],response.read())
+                with urlopen(Request(url,headers={**headers,'Range':'bytes=5-','If-Range':'"other-version"'})) as response:
+                    self.assertEqual(200,response.status)
+                    self.assertEqual(path.read_bytes(),response.read())
+                for value in ['bytes=999-','bytes=7-2','bytes=1-2,4-5','bytes=-5']:
+                    with self.assertRaises(HTTPError) as error:
+                        urlopen(Request(url,headers={**headers,'Range':value}))
+                    self.assertEqual(416,error.exception.code)
                 with self.assertRaises(HTTPError):
                     urlopen(Request(url+"/../../chapter.zip", headers=headers))
                 with closing(restarted.connect()) as db:

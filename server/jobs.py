@@ -248,6 +248,15 @@ def detail(db, identifier, after=0):
             (identifier,),
         )
     ]
+    for failure in result["errors"]:
+        total = db.execute(
+            """WITH RECURSIVE branch(id) AS (SELECT ? UNION ALL
+            SELECT s.id FROM segments s JOIN branch b ON s.parent_segment_id=b.id)
+            SELECT count(*) FROM attempts WHERE job_id=? AND segment_id IN (SELECT id FROM branch)""",
+            (failure["segment_id"], identifier),
+        ).fetchone()[0]
+        failure["attempts_total"] = total
+        failure["split_attempts"] = max(0, total - failure["attempts"])
     events = [
         dict(r)
         for r in db.execute(

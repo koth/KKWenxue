@@ -12,7 +12,7 @@
 
 新任务使用 `zonos-native-laci-bounded160-v1` 策略，启用中文 LACI 与短句处理。阅读器的章节、句子 ID、原文与 UTF-16 cue 保持不变。
 
-默认启用 `sensevoice-coverage-additions-v2` 内容校验：CPU 常驻 SenseVoice INT8 识别整个原文片段，按读音与数字值对照，容忍同音字和常见数字写法，同时检查明显增词。疑似异常最多内部重试一次，仍未通过则交回队列的有限重试预算；不写入有效音频或发布缺段章节。校验器超时或缺失也不会放行。历史任务快照及音频保持原样。识别校验仍可能误判，不能保证逐字和读音绝对准确。
+默认启用 `sensevoice-tolerant-coverage-v3` 宽容内容校验：CPU 常驻 SenseVoice INT8 识别整个原文片段，按读音与数字值粗查。个别错字、小幅漏字、数字或英文尾缀的识别差异直接通过并记录警告；仅明显漏掉较长内容、整段偏离或大量增词才拒绝。有效音频不再在引擎内部额外生成第二份，异常交给有限片段预算。已排队的 v2 配置也按宽容策略执行，并在 execution 中分别记录原请求策略和实际策略。校验器超时或缺失仍视为服务故障。历史任务快照及音频不覆盖；该策略优先保证连贯收听，不保证逐字准确。
 
 校验使用独立 Python 3.11 环境 `/home/jetson/workspace/shanye-tts-service/.qa-venv`，依赖见 `server/requirements-qa.txt`。[SenseVoice INT8 固定模型](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/tree/6a65851692da9706cbddfac66ea9b96ebb1dee21) 的 `model.int8.onnx` 和 `tokens.txt` 位于 `/home/jetson/workspace/sensevoice-int8-20240717/`。配置 `SHANYE_SPEECH_VERIFY=1`、`SHANYE_SPEECH_VERIFY_PYTHON` 和 `SHANYE_SPEECH_VERIFY_MODEL`；CPU 识别进程由 GPU worker 按需启动并复用，无需另建 systemd unit。关闭校验仅用于隔离对照测试。
 
@@ -54,6 +54,8 @@ python3 -m local.launcher --open
 正式引擎为 ZONOS3-Mini C++/GGML CUDA，使用 `backbone-ptq.gguf` 和 `zac-keep2.gguf`。GPU worker 与 API/CPU 共用轻量 Python 3.11 环境，不依赖 Python torch、Transformers 或 Audio8 GPU 环境。原生进程由 GPU worker 拉起并常驻，通过 loopback HTTP 调用；中文 `cmn`，reference 模式，启用中文 LACI 对齐纠错与短句处理。所有新任务的引擎、权重版本、编码音色哈希和校验策略均冻结到快照，旧引擎缓存不会混用。
 
 配置入口见 `server/deploy/service.env.example`：`SHANYE_ZONOS_ROOT`、`SHANYE_ZONOS_PORT`、`SHANYE_ZONOS_TIMEOUT` 和 `SHANYE_SPEECH_VERIFY*`。线上两种音色为 **Haoran**（预置）和 **林川**（用户参考录音预先克隆，默认）；Android 0.9.7 对应同一组稳定 ID。部署验收见 [记录](../reviews/zonos3-production-20261118/README.md)。
+
+原生引擎重启时，私有端口若尚未释放，会先等待至多 65 秒（不超过 `SHANYE_ZONOS_TIMEOUT`），再开始实际生成，避免瞬时端口占用耗尽排队片段的尝试次数。不连接或终止占用端口的其他进程。宽容校验与队列恢复验收见 [记录](../reviews/tts-tolerant-qa-20261118/README.md)。
 
 首次部署从 `server/deploy/service.env.example` 建立私有配置，再初始化：
 
@@ -105,15 +107,15 @@ systemctl --user status shanye-tts-api shanye-tts-cpu shanye-tts-gpu
 
 同目录文件结构：`Haoran.mp3` / `Haoran.codes.npy`、`LinChuan.mp3` / `LinChuan.codes.npy` 及 `voices.json`。清单冻结 speaker、native_name、相对于音频根目录的 audio_path/codes_path 和各自 SHA-256。可选的 `.embedding.npy` 不会额外显示为音色。参考转写留在清单供审计；ZONOS3 的 reference 模式不需要将逐字稿输入生成模型。
 
-逐段生成后使用常驻 CPU ASR 检查缺词与明显增词；疑似异常先有限重试，仍不通过就交回队列，缺段不能发布成完整章节。ASR 容忍同音字，不能替代人名、多音字的人工听评。音色、权重或策略变化须发布新版本，不覆盖既有任务快照。
+逐段生成后使用常驻 CPU ASR 粗查明显的大段漏读和增词；小幅差异放行并留记录，严重异常才有限重试，缺段不能发布成完整章节。ASR 容忍同音字，不能替代人名、多音字的人工听评。音色、权重或策略变化须发布新版本，不覆盖既有任务快照。
 
 ## 任务与结果
 
 - 试听由完整语音片段组成，目标约 30–60 秒，显示真实时长。当前 GPU 批次完成后插队；连续 3 个试听批次后让等待的普通任务执行一批。
 - 暂停/取消等待当前 GPU 批次或 CPU 导出单元落盘，过渡状态会保留。暂停后显式继续，取消保留有效缓存。
-- 每段最多初次加 2 次重试；必要时最多拆一层，子段各有有限预算。同批有效段独立提交，缺段不会发布为完整章节。
+- 每段最多初次加 1 次重试；失败分支必要时最多切一层，每个子段最多尝试 2 次，过短片段停止继续切分。每个原片段最多 6 次原生生成调用，不再叠加引擎内部重试或内容失败的中转整轮重试。成功子段和同批有效段独立保存复用，缺段不会发布为完整章节。错误显示父段与子段总尝试次数、具体校验原因及原文/识别结果。
 - 仅含空白、标点或符号的片段（如章末 `>`）标为 `skipped`，不调用模型或消耗重试；单字、数字及混合正文仍需有效音频。进度与预估单独计数，manifest 的 `skipped_segments` 保留原文和 UTF-16 范围，正文 cue 不移位。全章无朗读内容时标记章节跳过，不生成空音频。
-- `retry-failed` 创建关联新任务，快照原配置并复用有效结果；历史终态不覆盖。
+- `retry-failed` 创建关联新任务，快照原配置并复用有效结果；历史终态不覆盖。关联重试轮次使用不同种子，避免重复生成同一份坏音频；语音内容校验继续保留。
 - 新版本有独立音频及 JSON 地址。UTF-16 cue 对应原文 revision，点击句子从首个 cue 播放，停顿时不提前高亮下一句。
 - 单章 M4A、JSON 和 ZIP 经同源代理流式传输，支持 Range。ZIP 含目录与哈希，文件名含身份后缀，同号章节不覆盖。
 - 浏览器决定保存位置，界面“下载已发起”不表示已经写到某个目录。
@@ -169,7 +171,7 @@ systemctl --user enable --now shanye-tts-relay-worker
 journalctl --user -u shanye-tts-relay-worker -f
 ```
 
-需要现有 GPU 和 CPU worker 同时运行；适配器不直接加载模型。未配置外网地址时不要启用该 unit。每次领取都有独立租约凭据，适配器在排队、合成、打包、计算哈希和上传期间持续续租。断线重新领取后，同一 GPU 服务库按远端任务 ID 复用本地任务，避免重复生成。网络故障按中转服务预算重试；无效请求或已失败的本地合成会报告为不可重试，不会反复提交同一个失败任务。停止适配器不取消已经提交到本地队列的工作。
+需要现有 GPU 和 CPU worker 同时运行；适配器不直接加载模型。未配置外网地址时不要启用该 unit。每次领取都有独立租约凭据，适配器在排队、合成、打包、计算哈希和上传期间持续续租。断线重新领取后，同一 GPU 服务库按远端任务 ID 复用本地任务，避免重复生成。网络等临时故障按中转服务预算重试（App 默认 3 轮）；片段内容校验耗尽本地预算后直接报告终态，不自动重跑整轮，释放后续任务，用户仍可手动重试。重新领取时按远端轮次创建幂等的本地失败项重试，沿用原音色、配置和 generation，复用成功片段，而不是再次查询同一个终态失败任务。无效请求、取消和纯导出失败不自动重排语音合成。App 手动重试使用新的跟踪任务和原远端任务 ID `payload.retry_of`，在本地关联冻结快照；文本或音色参数被更改会拒绝。停止适配器不取消已经提交到本地队列的工作。
 
 成品先保留在 GPU 主机，默认不会上传 ZIP。稳定的 worker ID 用于重启后领取先前结果的中转请求，不能每次启动换一个 ID。局域网服务与轮询适配器同进程，使用持久的 `relay-results.sqlite` 记录单包访问凭据；不开放 GPU 管理 API，不向手机分享管理 token。局域网和公网下载都验证 SHA-256、长度及有效期；按需中转上传使用独立租约和最多 3 次尝试，不改变已完成的合成状态。上传不会删除已确认音频；公网包上传完成后默认保留 24 小时。此功能独立于现有本地工作台和 SSH 连接。
 
@@ -177,7 +179,7 @@ journalctl --user -u shanye-tts-relay-worker -f
 
 ### 在 Android 阅读器中听合成结果
 
-山页 0.8.1 支持「听书 → 合成与导入」直接派发到通用任务中转服务，完成后从「服务器任务」下载并导入，优先局域网直连、不可达才申请中转上传。App 保存独立中转凭据，不保存 GPU 管理凭据；连接配置、派发快照与任务日志排除备份，凭据由 Android Keystore 加密。操作步骤见 [App 云端合成](../docs/android-cloud-synthesis.md)。
+山页 0.9.10 支持「听书 → 合成与导入」直接派发到通用任务中转服务，完成后由持久后台任务自动下载并导入，优先局域网直连、不可达才申请中转上传；两条下载路径支持 Range 断点续传，网络错误自动重试。App 保存独立中转凭据，不保存 GPU 管理凭据；连接配置、派发快照与任务日志排除备份，凭据由 Android Keystore 加密。操作步骤见 [App 云端合成](../docs/android-cloud-synthesis.md)。
 
 原有手动导入继续可用：在工作台选择完整成品版本，点「打包听书包（App 导入）」并从任务队列下载 ZIP；传到手机后，在「听书 → 导入听书包」中选取。也可从阅读菜单进入。首次导入须已拥有同 ID、同章节文本的本地书籍。原文 revision/hash、UTF-16 cue、目录/音频哈希及媒体时长校验通过后，音频进入 App 私有存储和独立 SQLite 索引，目录显示「可听」。可保留多个版本，各自记忆进度，离线播放与定位原文；后台和锁屏使用系统媒体会话。
 

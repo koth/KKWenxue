@@ -31,6 +31,8 @@ from .db import connect, transaction, encoded, event, initialize
 from .jobs import claim, assert_owner, cached_audio, release, verified_file
 
 log = logging.getLogger(__name__)
+MAX_SPLIT_DEPTH = 1
+SEGMENT_ATTEMPTS = 2
 
 
 def recovery_split_position(text):
@@ -299,12 +301,16 @@ class Worker:
             )
 
     def split_fallback(self, db, job, part, config):
-        """One bounded split level, with durable child attempts and reusable valid children."""
+        """Recover only failing branches, with bounded depth and durable reusable children."""
         from opencc import OpenCC
         import numpy as np
         import soundfile as sf
 
         text = part["original_text"]
+        if part.get("depth", 0) >= MAX_SPLIT_DEPTH or (
+            part.get("depth", 0) and sum(c.isalnum() for c in text) < 12
+        ):
+            raise ValueError("片段已到安全切分边界")
         middle = recovery_split_position(text)
         children, ids, arrays = [], [], []
         for start, end in ((0, middle), (middle, len(text))):
@@ -316,7 +322,7 @@ class Worker:
                 spoken_text=OpenCC("t2s").convert(original).strip(),
                 start_utf16=part["start_utf16"] + utf16_len(text[:start]),
                 end_utf16=part["start_utf16"] + utf16_len(text[:end]),
-                depth=1,
+                depth=part.get("depth", 0) + 1,
             )
             if not has_spoken_content(child["spoken_text"]):
                 continue
@@ -337,7 +343,7 @@ class Worker:
                         "spoken_text",
                     )
                 )
-                + (part["id"], 1),
+                + (part["id"], child["depth"]),
             )
             audio = cached_audio(
                 db,
@@ -350,8 +356,14 @@ class Worker:
                 "SELECT count(*) FROM attempts WHERE job_id=? AND segment_id=?",
                 (job["id"], child["id"]),
             ).fetchone()[0]
-            while not audio and count < 3:
-                runtime = {"batch_size": 1, "split_parent": part["id"]}
+            last_error = db.execute(
+                "SELECT error FROM attempts WHERE job_id=? AND segment_id=? ORDER BY number DESC LIMIT 1",
+                (job["id"], child["id"]),
+            ).fetchone()
+            last_error = last_error[0] if last_error else None
+            while not audio and count < SEGMENT_ATTEMPTS:
+                runtime = {"batch_size": 1, "split_parent": part["id"], "split_depth": child["depth"],
+                           "retry_round": child.get("retry_round", 0)}
                 number = self.begin_attempt(
                     db, job, child, runtime
                 )
@@ -376,15 +388,25 @@ class Worker:
                     self.finish_attempt(
                         db, job, child, number, time.monotonic() - started
                     )
+                except DomainError:
+                    raise
                 except Exception as exc:
+                    last_error = str(exc)
                     self.finish_attempt(
                         db, job, child, number, time.monotonic() - started, str(exc)
                     )
                 count += 1
             if not audio:
-                raise ValueError(
-                    f"Split child exhausted retries: {child['original_text']}"
-                )
+                try:
+                    identifier = self.split_fallback(db, job, child, config)
+                    audio = db.execute("SELECT * FROM segment_audio WHERE id=?", (identifier,)).fetchone()
+                except DomainError:
+                    raise
+                except Exception as exc:
+                    raise ValueError(
+                        f"子片段第 {child['depth']} 层已尝试 {count} 次；{last_error or '合成失败'}；"
+                        f"后续切分：{exc}；可重试失败片段。原文：{child['original_text']}"
+                    ) from exc
             arrays.append(
                 sf.read(self.settings.audio / audio["path"], dtype="float32")[0]
             )
@@ -404,6 +426,12 @@ class Worker:
 
     def gpu_unit(self, db, job):
         config = json.loads(job["config_json"])["generation"]
+        retry_round = db.execute(
+            """WITH RECURSIVE lineage(id,parent_job_id) AS (
+            SELECT id,parent_job_id FROM jobs WHERE id=? UNION ALL
+            SELECT j.id,j.parent_job_id FROM jobs j JOIN lineage l ON j.id=l.parent_job_id)
+            SELECT count(*)-1 FROM lineage""", (job["id"],)
+        ).fetchone()[0]
         parts = [
             dict(r)
             for r in db.execute(
@@ -416,6 +444,7 @@ class Worker:
         ]
         pending, numbers = [], []
         for part in parts:
+            part["retry_round"] = retry_round
             audio = cached_audio(
                 db,
                 self.settings,
@@ -435,12 +464,19 @@ class Worker:
                 "SELECT count(*) FROM attempts WHERE job_id=? AND segment_id=?",
                 (job["id"], part["id"]),
             ).fetchone()[0]
-            if count >= 3:
+            if count >= SEGMENT_ATTEMPTS:
                 try:
                     identifier = self.split_fallback(db, job, part, config)
                     self.commit_item(db, job, part, identifier)
+                except DomainError:
+                    raise
                 except Exception as exc:
-                    self.fail_item(db, job, part, str(exc), terminal=True)
+                    previous = db.execute(
+                        "SELECT error FROM attempts WHERE job_id=? AND segment_id=? ORDER BY number DESC LIMIT 1",
+                        (job["id"], part["id"]),
+                    ).fetchone()
+                    self.fail_item(db, job, part,
+                        f"原片段已尝试 {count} 次；{previous[0] if previous else '合成失败'}；切分恢复失败：{exc}", terminal=True)
                 continue
             pending.append(part)
         if pending:
@@ -458,6 +494,7 @@ class Worker:
                 "batch_size": len(pending),
                 "engine": type(self.engine).__name__,
                 "packages": packages,
+                "retry_round": retry_round,
             }
             numbers = [self.begin_attempt(db, job, part, runtime) for part in pending]
             started = time.monotonic()
