@@ -2,15 +2,19 @@
 
 本地 React 页面与 Python 启动器只读加载本地阅读器 SQLite；提交选中章节后，经复用的 SSH 隧道发送到 FastAPI，GPU worker 合成，CPU 导出器生成音频。
 
-正式合成使用 Audio8 Realistic Air 0.6B 的原生 C++ / LibTorch CUDA 引擎，默认参考音色为 `cwns.mp3`，跟随参考录音的音色与节奏。成品默认 1.0 倍速、180ms 句间停顿。Web 与 App 均可选择已保存的参考音色。修改成品速度或停顿复用同一配置下的有效 FLAC，播放器倍速只影响播放。
+正式合成使用 ZONOS3-Mini 的原生 C++ / GGML CUDA 引擎，提供 Haoran 预置音色与林川克隆音色，默认林川。成品默认 1.0 倍速、180ms 句间停顿。Web 与 App 均可选择已发布的音色。修改成品速度或停顿复用同一配置下的有效 FLAC，播放器倍速只影响播放。
 
 新任务默认开启“统一成品音量”（`export.normalize_loudness=true`）：拼接与倍速处理后，CPU 使用 FFmpeg 两遍响度处理，目标为单声道 -18 LUFS、PCM 真峰值 -2 dBTP，并检查 AAC 成品不超过 -1 dBTP。manifest 记录处理版本、输入/输出实测值；不足 400ms 的极短内容使用有界峰值增益。关闭可导出原音量。该设置只改变导出缓存键，复用原始 FLAC，不修改参考音频、克隆提示或文本时间索引。旧任务与旧成品保持原配置，需新建复用任务导出均衡版本。
 
-模型为 `Edge0/Audio8-TTS-Realistic-Air`，版本固定为 `6bf7a980759d8022a66922ee975dab99229a2dd9`，使用 BF16 与 CUDA Graph。任务与缓存身份包含新引擎和参考文本，旧音频仍可播放，旧引擎任务需要重新派发。不会自动回退到 CosyVoice 或 Qwen。
+模型为 `Zyphra/ZONOS3-Mini`，权重版本固定为 `2921b8821772b0bd10a04456863d21abf9d2f283`，使用 PTQ 主干与 keep2 音频解码器。任务与缓存身份包含引擎版本、预编码音色哈希和内容校验策略。旧音频仍可播放，旧引擎任务需要重新派发。
 
-正文沿用阅读器的简体规范化与分段。常驻 C++ 进程按 JSONL 接收任务，生成 44.1kHz WAV，适配层转为既有 24kHz FLAC；章节导出、原文与 UTF-16 cue 协议保持一致。参考音频需要匹配的逐字稿；首次使用时由短期 Python codec 进程编码，结果按模型版本、音频哈希与逐字稿缓存。正文合成不加载 Python AR 模型。Audio8 不使用原来的语气指令。
+正文沿用阅读器的简体规范化与分段。常驻 C++ 进程通过 loopback HTTP 接收任务，生成 44.1kHz WAV，适配层转为既有 24kHz FLAC；章节导出、原文与 UTF-16 cue 协议保持一致。管理员提前编码参考录音并发布缓存，正文合成直接读取参考码，不加载克隆编码模型。旧的语气指令不传入当前模型。
 
-常驻进程还复用 GPU 参考码、参考文稿分词与参考前缀 KV；切换音色或参考内容变化时重建。当前推理版本为 `expanded-kv-v3`：压缩语音输出词表，并将慢模型 KV 预存为 math SDPA 实际使用的 FP32 展开格式，减少每帧的整块复制和转换。同文热机基准约由 2.15 降至 1.66 秒生成 1 秒音频，本轮测试编码与 PCM 一致，详见 [测量与验收](../reviews/audio8-kv-speed-20261116/README.md)。这与 App 播放倍速独立。较长中文结果明显过短时进入原有重试/拆分流程，不作为完整分段发布；时长检查不能代替内容验证。
+新任务使用 `zonos-native-laci-bounded160-v1` 策略，启用中文 LACI 与短句处理。阅读器的章节、句子 ID、原文与 UTF-16 cue 保持不变。
+
+默认启用 `sensevoice-coverage-additions-v2` 内容校验：CPU 常驻 SenseVoice INT8 识别整个原文片段，按读音与数字值对照，容忍同音字和常见数字写法，同时检查明显增词。疑似异常最多内部重试一次，仍未通过则交回队列的有限重试预算；不写入有效音频或发布缺段章节。校验器超时或缺失也不会放行。历史任务快照及音频保持原样。识别校验仍可能误判，不能保证逐字和读音绝对准确。
+
+校验使用独立 Python 3.11 环境 `/home/jetson/workspace/shanye-tts-service/.qa-venv`，依赖见 `server/requirements-qa.txt`。[SenseVoice INT8 固定模型](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/tree/6a65851692da9706cbddfac66ea9b96ebb1dee21) 的 `model.int8.onnx` 和 `tokens.txt` 位于 `/home/jetson/workspace/sensevoice-int8-20240717/`。配置 `SHANYE_SPEECH_VERIFY=1`、`SHANYE_SPEECH_VERIFY_PYTHON` 和 `SHANYE_SPEECH_VERIFY_MODEL`；CPU 识别进程由 GPU worker 按需启动并复用，无需另建 systemd unit。关闭校验仅用于隔离对照测试。
 
 ## 本地启动
 
@@ -43,21 +47,13 @@ python3 -m local.launcher --open
 | 正式服务库 / 凭据 | `/home/jetson/.local/share/shanye-tts` |
 | 正式音频 | `/home/jetson/workspace/shanye-tts-service/audio` |
 | 环境配置 | `/home/jetson/workspace/shanye-tts-service/service.env` |
-| Audio8 原生引擎 | `/home/jetson/workspace/audio8-cpp/build/audio8-tts` |
-| Audio8 模型和 codec | `/home/jetson/workspace/Audio8-TTS-Realistic-Air` |
-| GPU 环境 | `/home/jetson/workspace/shanye-tts-service/.gpu-venv` |
+| ZONOS3 原生引擎与 GGUF 模型 | `/home/jetson/workspace/zonos3-mini` |
+| 两种预编码音色 | `/home/jetson/workspace/shanye-tts-service/audio/zonos3-voices` |
+| CPU 内容校验环境 | `/home/jetson/workspace/shanye-tts-service/.qa-venv` |
 
-API/CPU 环境使用 Python 3.11 和 `server/requirements-lock.txt`。原生引擎在 Jetson 本机以 C++17、ARM64 LibTorch 和 CUDA 12.6 编译；构建方法见 `audio8-cpp/README.md`。参考编码/部署转换使用现有 Python 3.10 GPU 环境中的 torch、NumPy、safetensors，不需要加载 Transformers AR 模型。
+正式引擎为 ZONOS3-Mini C++/GGML CUDA，使用 `backbone-ptq.gguf` 和 `zac-keep2.gguf`。GPU worker 与 API/CPU 共用轻量 Python 3.11 环境，不依赖 Python torch、Transformers 或 Audio8 GPU 环境。原生进程由 GPU worker 拉起并常驻，通过 loopback HTTP 调用；中文 `cmn`，reference 模式，启用中文 LACI 对齐纠错与短句处理。所有新任务的引擎、权重版本、编码音色哈希和校验策略均冻结到快照，旧引擎缓存不会混用。
 
-下载固定版本模型后，一次性导出 C++ codec：
-
-```sh
-python -m server.audio8_prepare decoder \
-  --model /home/jetson/workspace/Audio8-TTS-Realistic-Air \
-  --output /home/jetson/workspace/Audio8-TTS-Realistic-Air/codec-decoder-bf16.safetensors
-```
-
-转换检查权重物化前后完全一致，并单独报告 BF16 波形舍入误差。服务配置 `SHANYE_AUDIO8_BINARY`、`SHANYE_AUDIO8_MODEL_PATH`、`SHANYE_AUDIO8_CODEC_PATH`、`SHANYE_AUDIO8_PYTHON`、`SHANYE_AUDIO8_CUDA_GRAPH=1`。参考编码与正文生成共用 worker 的 GPU 锁；新参考编码前释放常驻进程，编码后重新加载。原 CosyVoice 环境和模型保留用于回退，正式 worker 不调用它们。迁移和实测见 [Audio8 验收](../reviews/audio8-production-20261116/README.md)。
+配置入口见 `server/deploy/service.env.example`：`SHANYE_ZONOS_ROOT`、`SHANYE_ZONOS_PORT`、`SHANYE_ZONOS_TIMEOUT` 和 `SHANYE_SPEECH_VERIFY*`。线上两种音色为 **Haoran**（预置）和 **林川**（用户参考录音预先克隆，默认）；Android 0.9.7 对应同一组稳定 ID。部署验收见 [记录](../reviews/zonos3-production-20261118/README.md)。
 
 首次部署从 `server/deploy/service.env.example` 建立私有配置，再初始化：
 
@@ -70,7 +66,7 @@ cd /home/jetson/workspace/shanye-tts-service/app
 ../.api-venv/bin/python -m server.cli check-storage
 ```
 
-初始化只创建服务库和权限为 0600 的服务凭据，已有默认 cwns 参考录音时补齐默认预设；书籍和任务保持为空。新服务器先通过音色上传接口安装参考音频。元数据放本机 Linux 文件系统，模型和大文件放 `/home/jetson/workspace`。`check-storage` 实测临时文件 flush 和同目录替换，不能代替硬件断电保证。
+初始化创建服务库和权限为 0600 的服务凭据，安装 Haoran 预设，并在林川参考记录存在时补齐默认预设。新服务器还需发布预编码音色文件和 voices.json；没有缓存时不能提交任务。书籍和任务须显式导入。元数据放本机 Linux 文件系统，模型和大文件放 `/home/jetson/workspace`。`check-storage` 实测临时文件 flush 和同目录替换，不能代替硬件断电保证。
 
 复制 `server/deploy/shanye-tts-*.service` 到 `~/.config/systemd/user/`，核对路径后：
 
@@ -103,9 +99,13 @@ systemctl --user status shanye-tts-api shanye-tts-cpu shanye-tts-gpu
 
 ## 用参考音频克隆音色
 
-声音设置中展开“用参考音频创建 Audio8 音色”，选择 3–30 秒干净的单人录音（接口接受 1–30 秒，最多 50MiB），支持 M4A、WAV、MP3、FLAC、AAC。逐字稿必填且必须与录音内容一致；无文本模式明确拒绝。上传后得到独立音色预设，选章后先试听。音色及节奏跟随参考，成品倍速和句间停顿仍可调整。
+当前采用管理员预先克隆并发布的方式，Web/App 直接选择 **林川** 或 **Haoran**，不在每次任务中上传、重新编码或训练参考音频。即时参考上传入口已关闭，避免产生不可合成的预设。
 
-上传经同源代理/SSH；服务器解码为单声道 WAV 并保存哈希。首次使用由 GPU worker 将其编码为 Audio8 的十组参考码，后续复用编码缓存并校验文件哈希。完整引擎/模型未就绪时可以保存参考，但合成会明确拒绝。
+一次性准备林川：使用官方 `zac-encoder-cli`，载入 `zac-encoder.gguf` 和 `ssl-teacher.gguf`，将干净单人录音编码成 `LinChuan.codes.npy`（普通 `[T,10]` 编码）；可额外用 `spk-encoder-cli` 保存 `LinChuan.embedding.npy`。编码完成后只将录音、编码和哈希清单发布到服务端。正式合成走 reference 模式，优先复用同名 `.codes.npy`，无需部署约 5.6GB 的克隆编码模型。它是音色参考编码，不是微调模型。
+
+同目录文件结构：`Haoran.mp3` / `Haoran.codes.npy`、`LinChuan.mp3` / `LinChuan.codes.npy` 及 `voices.json`。清单冻结 speaker、native_name、相对于音频根目录的 audio_path/codes_path 和各自 SHA-256。可选的 `.embedding.npy` 不会额外显示为音色。参考转写留在清单供审计；ZONOS3 的 reference 模式不需要将逐字稿输入生成模型。
+
+逐段生成后使用常驻 CPU ASR 检查缺词与明显增词；疑似异常先有限重试，仍不通过就交回队列，缺段不能发布成完整章节。ASR 容忍同音字，不能替代人名、多音字的人工听评。音色、权重或策略变化须发布新版本，不覆盖既有任务快照。
 
 ## 任务与结果
 
@@ -136,7 +136,7 @@ TTS payload 使用现有 `JobRequest` 格式，例如：
     "request": {
       "book_id": "本地书籍 ID",
       "chapter_ids": ["选中章节 ID"],
-      "voice_preset_version_id": "clone-9ef173d881f74a49888715b1ed92b24d",
+      "voice_preset_version_id": "clone-linchuan-zonos3-v1",
       "mode": "reuse",
       "inline_chapters": []
     }
@@ -214,6 +214,6 @@ tts/.venv/bin/python -m unittest discover -s tts -p 'test_*.py' -v
 cd web && npm ci && npm run build
 ```
 
-真实 GPU 验收使用原创试音小书与独立目录，显式运行 `python -m server.benchmark` 前必须设置 `SHANYE_BENCHMARK_CONFIRM=studio-demo-only`、独立的 `SHANYE_STATE` 与 `SHANYE_AUDIO`，并确保正式 GPU worker 已停止。先在隔离 API 上传参考音色，将返回的版本 ID 填入 `SHANYE_BENCHMARK_PRESET`。它不读取正式书库或自动复制正式参考录音。Audio8 正式验证记录见 [切换验收](../reviews/audio8-production-20261116/README.md)，旧引擎历史记录见 [验收报告](../docs/tts-workbench-acceptance/README.md)。
+真实 GPU 验收使用原创试音小书与独立目录，先协调正式队列并取得 GPU 锁；通过已发布的预编码音色跑完整合成、内容校验、M4A 导出及 App ZIP 校验。可复核脚本与结果见 [ZONOS3 上线验收](../reviews/zonos3-production-20261118/README.md)。旧 `server.benchmark` 的即时上传流程属于历史引擎工具，不适用于当前预编码音色发布方式。
 
 API 由 FastAPI 生成 OpenAPI；通过本地代理读取 `/openapi.json`。契约快照为 `server/openapi.json`。需要将此服务暴露到公网或引入多人权限时，另行设计鉴权和部署。

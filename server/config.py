@@ -5,9 +5,9 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL = "Edge0/Audio8-TTS-Realistic-Air"
-REVISION = "6bf7a980759d8022a66922ee975dab99229a2dd9"
-ENGINE = "audio8-realistic-air-cpp"
+MODEL = "Zyphra/ZONOS3-Mini"
+REVISION = "2921b8821772b0bd10a04456863d21abf9d2f283"
+ENGINE = "zonos3-mini-ggml-cuda"
 NORMALIZATION = "reader-canonical+OpenCC-t2s-v1"
 SEGMENTATION = "reader-sentence-bounded160-v1"
 
@@ -41,6 +41,36 @@ class Settings:
     lease_seconds: int = 30
     batch_size: int = 4
     bundle_ttl: int = 86400
+    zonos_root: Path = field(default_factory=lambda: Path(os.environ.get(
+        'SHANYE_ZONOS_ROOT', '~/workspace/zonos3-mini')).expanduser())
+    zonos_port: int = field(default_factory=lambda: int(os.environ.get('SHANYE_ZONOS_PORT', '17868')))
+    zonos_timeout: int = field(default_factory=lambda: int(os.environ.get('SHANYE_ZONOS_TIMEOUT', '180')))
+    speech_verify: bool = field(default_factory=lambda: os.environ.get('SHANYE_SPEECH_VERIFY', '1') == '1')
+    speech_verify_python: Path = field(default_factory=lambda: Path(os.environ.get(
+        'SHANYE_SPEECH_VERIFY_PYTHON', '~/workspace/shanye-tts-service/.qa-venv/bin/python')).expanduser())
+    speech_verify_model: Path = field(default_factory=lambda: Path(os.environ.get(
+        'SHANYE_SPEECH_VERIFY_MODEL', '~/workspace/sensevoice-int8-20240717')).expanduser())
+    speech_verify_threads: int = 2
+    speech_verify_timeout: int = 60
+
+    @property
+    def zonos_binary(self):
+        return self.zonos_root / 'bin/zonos3-server'
+
+    @property
+    def zonos_model_path(self):
+        return self.zonos_root / 'models'
+
+    @property
+    def zonos_voice_path(self):
+        return self.audio / 'zonos3-voices'
+
+    @property
+    def zonos_ready(self):
+        return (self.zonos_binary.is_file() and os.access(self.zonos_binary, os.X_OK)
+                and all((self.zonos_model_path / name).is_file() for name in
+                        ('backbone-ptq.gguf', 'zac-keep2.gguf'))
+                and (self.zonos_root / 'zh-heads.json').is_file())
     cosyvoice_low_memory: bool = field(
         default_factory=lambda: os.environ.get("SHANYE_COSYVOICE_LOW_MEMORY", "0") == "1"
     )
@@ -60,8 +90,21 @@ class Settings:
         "SHANYE_AUDIO8_PYTHON", "python3"))
     audio8_cuda_graph: bool = field(default_factory=lambda: os.environ.get(
         "SHANYE_AUDIO8_CUDA_GRAPH", "1") == "1")
+    audio8_fused_kernels: bool = field(default_factory=lambda: os.environ.get(
+        "SHANYE_AUDIO8_FUSED_KERNELS", "0") == "1")
     audio8_timeout: int = field(default_factory=lambda: int(os.environ.get(
         "SHANYE_AUDIO8_TIMEOUT", "600")))
+    audio8_verify: bool = field(default_factory=lambda: os.environ.get('SHANYE_AUDIO8_VERIFY', '1') == '1')
+    audio8_verify_python: Path = field(default_factory=lambda: Path(os.environ.get(
+        'SHANYE_AUDIO8_VERIFY_PYTHON', '~/workspace/shanye-tts-service/.qa-venv/bin/python')).expanduser())
+    audio8_verify_model: Path = field(default_factory=lambda: Path(os.environ.get(
+        'SHANYE_AUDIO8_VERIFY_MODEL', '~/workspace/sensevoice-int8-20240717')).expanduser())
+    audio8_verify_threads: int = field(default_factory=lambda: int(os.environ.get('SHANYE_AUDIO8_VERIFY_THREADS', '2')))
+    audio8_verify_timeout: int = field(default_factory=lambda: int(os.environ.get('SHANYE_AUDIO8_VERIFY_TIMEOUT', '60')))
+
+    @property
+    def audio8_inference_revision(self):
+        return "fused-decode-v6" if self.audio8_fused_kernels else "expanded-kv-v3"
 
     @property
     def audio8_ready(self):
@@ -102,7 +145,7 @@ class Settings:
     @property
     def clone_model_ready(self):
         """Compatibility name used by the existing health/UI payload."""
-        return self.audio8_ready
+        return self.zonos_ready
 
     def prepare(self):
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)

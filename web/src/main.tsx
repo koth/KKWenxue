@@ -119,6 +119,7 @@ function App() {
   const [referenceFile, setReferenceFile] = useState<File | null>(null),
     [referenceText, setReferenceText] = useState(""),
     [cloneReady, setCloneReady] = useState(false);
+  const [referenceUpload, setReferenceUpload] = useState(false);
   const [health, setHealth] = useState<any>(null),
     [connected, setConnected] = useState(false),
     [jobs, setJobs] = useState<any[]>([]),
@@ -190,6 +191,7 @@ function App() {
         setPresets(p.items);
         setVoices(v.voices);
         setCloneReady(v.voice_cloning);
+        setReferenceUpload(v.reference_upload === true);
         setPreset((current) =>
           p.items.some((item: any) => item.id === current)
             ? current
@@ -440,7 +442,7 @@ function App() {
         <div className="engine-badge">
           <Icon name="wave" size={30} />
           <div>
-            <b>Audio8 · 0.6B C++</b>
+            <b>ZONOS3-Mini</b>
             <small>
               {gpu?.alive
                 ? gpu.model === "ready"
@@ -918,9 +920,9 @@ function App() {
               切换旁白预设后，可直接试听当前章节。
             </p>
           )}
-          <details className="clone-box">
+          {referenceUpload && <details className="clone-box">
             <summary>
-              用参考音频创建 Audio8 音色
+              用参考音频创建 ZONOS3 音色
             </summary>
             <p className="helper">
               选择 3–30 秒干净的单人录音，支持
@@ -948,12 +950,12 @@ function App() {
             </button>
             <small>
               {cloneReady
-                ? "Audio8 已就绪，实际音色和节奏以试听为准。"
-                : "服务器正在准备 Audio8 模型；可以先保存参考音频和逐字稿。"}
+                ? "ZONOS3 已就绪，实际音色和节奏以试听为准。"
+                : "服务器正在准备 ZONOS3 模型；请稍后重试。"}
             </small>
-          </details>
+          </details>}
               <p className="helper">
-                音色与讲述节奏跟随参考录音。Audio8 不使用语气指令；成品语速可在下方调整。
+                Haoran 为预置中文男声，林川来自参考录音克隆。成品语速可在下方调整。
               </p>
           {dirty && (
             <div className="save-preset">

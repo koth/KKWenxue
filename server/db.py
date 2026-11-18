@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .config import Settings
-from .voices import DEFAULT_CLONE_ID, DEFAULT_PRESET_ID, DEFAULT_VOICE_NAME, NARRATOR_INSTRUCTION
+from .voices import DEFAULT_CLONE_ID, DEFAULT_PRESET_ID, DEFAULT_VOICE_NAME, NARRATOR_INSTRUCTION, HAORAN_PRESET_ID
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
@@ -113,6 +113,9 @@ def initialize(settings: Settings):
         db.executescript(SCHEMA)
         if db.execute("SELECT max(version) FROM schema_version").fetchone()[0] != 1:
             raise RuntimeError("Unsupported service schema")
+        db.execute('INSERT OR IGNORE INTO presets VALUES (?,?,?,?,?,?,?)',
+            (HAORAN_PRESET_ID,'Haoran','zonos:haoran',NARRATOR_INSTRUCTION,
+             encoded(dict(speed=1.0,pause_ms=180,format='m4a')),time.time(),1))
         # Keep the approved reference's stable ID shared by Android and web.
         reference = db.execute(
             "SELECT 1 FROM voice_clone_refs WHERE id=? AND ready=1",

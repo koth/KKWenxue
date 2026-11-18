@@ -18,13 +18,14 @@ from server.artifacts import available, create_bundle
 from server.catalog import DomainError, import_sqlite, resolve
 from server.cli import create_demo, import_artifact, audit
 from server.config import ENGINE, Settings
-from server.voices import DEFAULT_PRESET_ID, DEFAULT_CLONE_ID
+from server.voices import DEFAULT_PRESET_ID, DEFAULT_CLONE_ID, HAORAN_PRESET_ID
 from server.tests.fixtures import install_test_voice
 from server.db import initialize, connect, backup
 from server.jobs import submit, detail, action, claim, release, recover, assert_owner
 from server.presets import create_preset
-from server.worker import Worker
-from tts.common import GPULock, has_spoken_content
+from server.worker import Worker, recovery_split_position
+from server.zonos_runtime import generation_seed
+from tts.common import GPULock, has_spoken_content, utf16_len
 
 
 class TestEngine:
@@ -197,11 +198,11 @@ class ServiceTests(unittest.TestCase):
         client = TestClient(create_app(self.settings))
         client.headers["X-Service-Token"] = self.settings.token_file.read_text()
         presets = client.get("/api/v1/presets").json()["items"]
-        self.assertEqual({DEFAULT_PRESET_ID, saved}, {p["id"] for p in presets})
+        self.assertEqual({DEFAULT_PRESET_ID, HAORAN_PRESET_ID, saved}, {p["id"] for p in presets})
         self.assertTrue(all("<|endofprompt|>" not in p["instruct"] for p in presets))
         caps = client.get("/api/v1/voices").json()
         self.assertEqual(ENGINE, caps["engine"])
-        self.assertEqual([], caps["voices"])
+        self.assertEqual(['zonos:haoran'],[v['speaker'] for v in caps['voices']])
         self.assertEqual(DEFAULT_PRESET_ID, caps["default_preset_id"])
         self.assertTrue(caps["voice_cloning"])
         request = self.request([self.chapters[0]["id"]])
@@ -212,7 +213,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(ENGINE, new["config"]["generation"]["engine"])
         self.assertEqual("reference-codes", new["config"]["generation"]["inference_mode"])
         self.assertFalse(caps["instruction"])
-        self.assertTrue(caps["reference_text_required"])
+        self.assertFalse(caps["reference_text_required"])
         self.assertEqual("clone:" + DEFAULT_CLONE_ID, new["config"]["generation"]["speaker"])
         self.assertEqual(1.0, new["config"]["export"]["speed"])
         for speaker in ("Dylan", "Uncle_Fu"):
@@ -476,6 +477,48 @@ class ServiceTests(unittest.TestCase):
         self.finish()
         self.assertEqual("succeeded", detail(self.db, retry)["state"])
         self.assertEqual(failed["state"], detail(self.db, job)["state"])
+
+    def test_retry_and_split_use_distinct_seeds_and_keep_source_anchors(self):
+        # Force the full passage to fail, then let each split child recover on
+        # its second attempt. Verify queue-to-engine seeds and failure telemetry.
+        chapter = self.symbol_chapter("😀第一段文字在这里，后面的叙述还在继续，最后说完这句话。")
+        generate = self.engine.generate
+        seen = []
+
+        def retrying(rows, config):
+            results = generate(rows, config)
+            self.engine.last_execution = {}
+            for i, row in enumerate(rows):
+                seen.append(dict(row))
+                self.engine.last_execution[row["id"]] = {"seed": generation_seed(row, config), "audio_seconds": .5}
+                if not row["depth"] or row["attempt_number"] == 1:
+                    results[i] = RuntimeError("premature EOS")
+            return results
+
+        self.engine.generate = retrying
+        job = submit(self.db, self.settings, self.request([chapter["id"]]), "split-seeds")
+        self.finish()
+        self.assertEqual("succeeded", detail(self.db, job)["state"])
+        parent = next(row for row in seen if row["depth"] == 0)
+        attempts = list(self.db.execute("SELECT * FROM attempts WHERE job_id=? AND segment_id=? ORDER BY number", (job, parent["id"])))
+        self.assertEqual([1, 2, 3], [a["number"] for a in attempts])
+        self.assertEqual(3, len({a["seed"] for a in attempts}))
+        children = list(self.db.execute("SELECT * FROM segments WHERE parent_segment_id=? ORDER BY start_utf16", (parent["id"],)))
+        self.assertEqual(2, len(children))
+        self.assertTrue(children[0]["original_text"].endswith("，"))
+        self.assertEqual(parent["original_text"], "".join(c["original_text"] for c in children))
+        for child in children:
+            start = child["start_utf16"] - parent["start_utf16"]
+            end = child["end_utf16"] - parent["start_utf16"]
+            self.assertEqual(child["original_text"], parent["original_text"].encode("utf-16-le")[start*2:end*2].decode("utf-16-le"))
+            child_attempts = list(self.db.execute("SELECT * FROM attempts WHERE job_id=? AND segment_id=? ORDER BY number", (job, child["id"])))
+            self.assertEqual([1, 2], [a["number"] for a in child_attempts])
+            self.assertNotEqual(child_attempts[0]["seed"], child_attempts[1]["seed"])
+            self.assertEqual(.5, json.loads(child_attempts[0]["runtime_json"])["audio_seconds"])
+        self.assertEqual(children[0]["end_utf16"], children[1]["start_utf16"])
+        self.assertEqual(utf16_len(parent["original_text"]), children[-1]["end_utf16"] - children[0]["start_utf16"])
+        with self.assertRaisesRegex(ValueError, "too short"):
+            recovery_split_position("　　嗯。")
 
     def test_pause_cancel_and_recovery_fencing(self):
         job = submit(self.db, self.settings, self.request(), "control")

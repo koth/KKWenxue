@@ -89,36 +89,20 @@ class LocalAndCloneTests(unittest.TestCase):
         )
         self.assertEqual(r.json()["id"], again.json()["id"])
 
-    def test_m4a_reference_is_decoded_and_unready_model_rejects_job_snapshot(self):
-        self.settings.audio8_model_path = self.root / "no-model"
-        wav = self.root / "ref.wav"
-        with wave.open(str(wav), "wb") as f:
-            f.setnchannels(1)
-            f.setsampwidth(2)
-            f.setframerate(24000)
-            f.writeframes(b"\x00\x10" * 48000)
-        m4a = self.root / "ref.m4a"
-        subprocess.run(["ffmpeg", "-v", "error", "-i", str(wav), str(m4a)], check=True)
-        upload = lambda data: self.client.post(
-            "/api/v1/voice-clones",
-            files={"reference": ("ref.m4a", io.BytesIO(m4a.read_bytes()), "audio/mp4")},
-            data=data,
-        )
-        r = upload({})
-        self.assertEqual(422, r.status_code, r.text)
-        r = upload({"ref_text": "繁体文字，回家的脚步。"})
-        self.assertEqual(201, r.status_code, r.text)
-        self.assertFalse(r.json()["model_ready"])
-        row = self.db.execute("select * from voice_clone_refs where id=?", (r.json()["reference_id"],)).fetchone()
-        with wave.open(str(self.settings.audio / row["path"])) as decoded:
-            self.assertEqual(24000, decoded.getframerate())
-            self.assertEqual(1, decoded.getnchannels())
-        with self.assertRaises(DomainError) as e:
-            snapshot(self.db, self.settings, r.json()["id"], None)
-        self.assertEqual(503, e.exception.status)
-        self.assertEqual(0, self.db.execute("select count(*) from jobs").fetchone()[0])
-        no_transcript = upload({"x_vector_only_mode": "true"})
-        self.assertEqual(422, no_transcript.status_code, no_transcript.text)
+    def test_only_preencoded_published_voices_can_be_selected(self):
+        before=self.db.execute('SELECT count(*) FROM voice_clone_refs').fetchone()[0]
+        response=self.client.post('/api/v1/voice-clones',
+            files={'reference':('voice.m4a',io.BytesIO(b'unprepared audio'),'audio/mp4')})
+        self.assertEqual(503,response.status_code)
+        self.assertEqual(before,self.db.execute('SELECT count(*) FROM voice_clone_refs').fetchone()[0])
+        caps=self.client.get('/api/v1/voices').json()
+        self.assertFalse(caps['reference_upload'])
+        self.settings.zonos_root=self.root/'not-installed'
+        from server.voices import DEFAULT_PRESET_ID
+        with self.assertRaises(DomainError) as error:
+            snapshot(self.db,self.settings,DEFAULT_PRESET_ID,None)
+        self.assertEqual(503,error.exception.status)
+        self.assertEqual(0,self.db.execute('SELECT count(*) FROM jobs').fetchone()[0])
 
 
 if __name__ == "__main__":

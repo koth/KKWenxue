@@ -19,17 +19,38 @@ from tts.common import (
     validated_samples,
     has_spoken_content,
     NON_SPOKEN_REASON,
+    CLOSERS,
 )
 from tts.audio import write_flac
 from .artifacts import export_chapter, build_bundle, expire_bundles
 from .catalog import DomainError
 from .config import ENGINE, Settings
-from .audio8_runtime import Audio8Engine
+from .zonos_runtime import ZonosEngine, generation_seed
 from .cosy_runtime import enable_decoder_only, load_cosyvoice
 from .db import connect, transaction, encoded, event, initialize
 from .jobs import claim, assert_owner, cached_audio, release, verified_file
 
 log = logging.getLogger(__name__)
+
+
+def recovery_split_position(text):
+    """Prefer a balanced spoken clause while preserving the exact source text."""
+    counts = [0]
+    for char in text:
+        counts.append(counts[-1] + int(char.isalnum()))
+    minimum = max(2, counts[-1] // 4)
+    safe = [i for i in range(1, len(text)) if minimum <= counts[i] <= counts[-1] - minimum]
+    if not safe:
+        raise ValueError("Segment too short to split safely")
+    boundaries = set()
+    for i, char in enumerate(text):
+        if char in "，,；;：:。！？!?…\n" or char.isspace():
+            end = i + 1
+            while end < len(text) and (text[end] in CLOSERS or text[end] in "。！？!?…"):
+                end += 1
+            boundaries.add(end)
+    candidates = [i for i in safe if i in boundaries] or safe
+    return min(candidates, key=lambda i: (abs(counts[i] * 2 - counts[-1]), abs(i * 2 - len(text))))
 
 
 class CudaEngine:
@@ -157,7 +178,7 @@ class Worker:
             "model": "unloaded" if role == "gpu" else "not-applicable",
             "gpu": "unknown",
         }
-        self.engine = engine or Audio8Engine(settings, self.status)
+        self.engine = engine or ZonosEngine(settings, self.status)
         self.job = None
         self.streak = 0
         self.verified_jobs = set()
@@ -245,7 +266,8 @@ class Worker:
             ).fetchone()[0]
             number = count + 1
             config = json.loads(job["config_json"])["generation"]
-            seed = (
+            part["attempt_number"] = number
+            seed = generation_seed(part, config) if config.get("engine") == ENGINE else (
                 config["seed"] + part["chapter_index"] * 100000 + part["segment_index"]
             )
             db.execute(
@@ -257,6 +279,16 @@ class Worker:
                 (number, job["id"], part["id"]),
             )
         return number
+
+    def record_execution(self, db, job, part, number, runtime):
+        actual = getattr(self.engine, "last_execution", {}).get(part["id"])
+        if actual:
+            with transaction(db):
+                assert_owner(db, job)
+                db.execute(
+                    "UPDATE attempts SET seed=?,runtime_json=? WHERE job_id=? AND segment_id=? AND number=?",
+                    (actual["seed"], encoded({**runtime, **actual}), job["id"], part["id"], number),
+                )
 
     def finish_attempt(self, db, job, part, number, elapsed, error=None):
         with transaction(db):
@@ -273,9 +305,7 @@ class Worker:
         import soundfile as sf
 
         text = part["original_text"]
-        if len(text.strip()) < 4:
-            raise ValueError("Segment too short to split safely")
-        middle = len(text) // 2
+        middle = recovery_split_position(text)
         children, ids, arrays = [], [], []
         for start, end in ((0, middle), (middle, len(text))):
             original = text[start:end]
@@ -321,12 +351,14 @@ class Worker:
                 (job["id"], child["id"]),
             ).fetchone()[0]
             while not audio and count < 3:
+                runtime = {"batch_size": 1, "split_parent": part["id"]}
                 number = self.begin_attempt(
-                    db, job, child, {"batch_size": 1, "split_parent": part["id"]}
+                    db, job, child, runtime
                 )
                 started = time.monotonic()
                 try:
                     output = self.engine.generate([child], config)[0]
+                    self.record_execution(db, job, child, number, runtime)
                     if isinstance(output, Exception):
                         raise output
                     samples = validated_samples(output, child["id"])
@@ -437,20 +469,7 @@ class Worker:
                 results = [exc] * len(pending)
             elapsed = (time.monotonic() - started) / len(pending)
             for part, number, result in zip(pending, numbers, results):
-                actual = getattr(self.engine, "last_execution", {}).get(part["id"])
-                if actual:
-                    with transaction(db):
-                        assert_owner(db, job)
-                        db.execute(
-                            "UPDATE attempts SET seed=?,runtime_json=? WHERE job_id=? AND segment_id=? AND number=?",
-                            (
-                                actual["seed"],
-                                encoded({**runtime, **actual}),
-                                job["id"],
-                                part["id"],
-                                number,
-                            ),
-                        )
+                self.record_execution(db, job, part, number, runtime)
                 try:
                     if isinstance(result, Exception):
                         raise result

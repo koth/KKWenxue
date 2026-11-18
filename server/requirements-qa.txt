@@ -1,0 +1,7 @@
+# Independent CPU recognition environment; keep out of the CUDA TTS environment.
+sherpa-onnx==2.0.1
+numpy==1.26.4
+soundfile==0.12.1
+opencc-python-reimplemented==0.1.7
+pypinyin==0.55.0
+cn2an==0.5.24

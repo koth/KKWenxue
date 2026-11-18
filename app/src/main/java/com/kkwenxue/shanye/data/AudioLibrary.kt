@@ -206,8 +206,13 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
             previousEnd = end
         }
         require(cues.isNotEmpty()) { "章节没有可播放的语音" }
-        val speaker = manifest.getJSONObject("profile").getString("speaker")
-        val voice = if (speaker.startsWith("clone:")) "克隆音色" else speaker.replace('_', ' ')
+        val profile = manifest.getJSONObject("profile")
+        val speaker = profile.getString("speaker")
+        val voice = profile.optString("voice_name").takeIf { it.isNotBlank() } ?: when (speaker) {
+            "zonos:haoran" -> "Haoran"
+            "clone:linchuan-zonos3-v1" -> "林川"
+            else -> if (speaker.startsWith("clone:")) "克隆音色" else speaker.replace('_', ' ')
+        }
         return AudioChapter(id, book.id, chapter.id, index, chapter.title, voice, duration, cues, File(root, "$id/chapter.m4a"), speaker)
     }
 

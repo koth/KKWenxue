@@ -1,8 +1,6 @@
 package com.kkwenxue.shanye.ui
 
-import android.view.WindowManager
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
@@ -31,9 +29,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.ViewCompat
 import com.kkwenxue.shanye.audio.AudioPlayback
 import com.kkwenxue.shanye.data.*
 import kotlinx.coroutines.CancellationException
@@ -146,7 +141,7 @@ fun AudioPlayerScreen(
         }
     }
     LaunchedEffect(message) { if (message.isNotEmpty()) { delay(5000); message = "" } }
-    PlayerSystemBars()
+    OverlaySystemBars(SystemBarsMode.PLAYER)
     BackHandler { if (chooser != null) chooser = null else onClose() }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Brush.verticalGradient(
@@ -376,30 +371,4 @@ private fun timerLabel(): String = when {
     AudioPlayback.timerMode == -1 -> "本章结束"
     AudioPlayback.timerRemainingMs > 0 -> audioTime(((AudioPlayback.timerRemainingMs + 999) / 1000 * 1000).toInt())
     else -> "定时"
-}
-
-@Composable
-private fun PlayerSystemBars() {
-    val activity=LocalActivity.current ?: return
-    DisposableEffect(activity) {
-        val window=activity.window
-        val controller=WindowCompat.getInsetsController(window, window.decorView)
-        val insets=ViewCompat.getRootWindowInsets(window.decorView)
-        val statusVisible=insets?.isVisible(WindowInsetsCompat.Type.statusBars()) ?: true
-        val navigationVisible=insets?.isVisible(WindowInsetsCompat.Type.navigationBars()) ?: true
-        val lightStatus=controller.isAppearanceLightStatusBars
-        val lightNavigation=controller.isAppearanceLightNavigationBars
-        val keepScreenOn=window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
-        controller.isAppearanceLightStatusBars=false
-        controller.isAppearanceLightNavigationBars=false
-        controller.show(WindowInsetsCompat.Type.systemBars())
-        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        onDispose {
-            controller.isAppearanceLightStatusBars=lightStatus
-            controller.isAppearanceLightNavigationBars=lightNavigation
-            if (!statusVisible) controller.hide(WindowInsetsCompat.Type.statusBars())
-            if (!navigationVisible) controller.hide(WindowInsetsCompat.Type.navigationBars())
-            if (keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-    }
 }

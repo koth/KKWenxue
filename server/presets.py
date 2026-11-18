@@ -8,30 +8,18 @@ from .catalog import DomainError
 from .config import ENGINE, MODEL, REVISION, NORMALIZATION, SEGMENTATION
 from .db import encoded
 from .voices import available_voices, DEFAULT_PRESET_ID, NARRATOR_INSTRUCTION, is_clone_speaker
+from .zonos_runtime import SPEECH_PLAN, VERIFICATION, INFERENCE_REVISION
+from .zonos_voices import voice_manifest
 
 
 def capabilities(settings):
-    config = settings.audio8_model_path / "config.json"
-    voices = available_voices(settings)
-    default_preset = DEFAULT_PRESET_ID
-    return {
-        "engine": ENGINE,
-        "model": MODEL,
-        "revision": REVISION,
-        "voices": [{**voice, "confirmed": False} for voice in voices],
-        "default_preset_id": default_preset,
-        "languages": ["Chinese"],
-        "instruction": False,
-        "voice_cloning": settings.audio8_ready,
-        "reference_text_required": True,
-        "voice_clone_model": str(settings.audio8_model_path),
-        "voice_design": False,
-        "source": "installed-model-config"
-        if config.is_file()
-        else "pinned-model-manifest",
-        "speed_range": [0.75, 1.5],
-        "pause_ms_range": [0, 2000],
-    }
+    return dict(engine=ENGINE,model=MODEL,revision=REVISION,
+        voices=available_voices(settings),default_preset_id=DEFAULT_PRESET_ID,
+        languages=['Chinese'],instruction=False,voice_cloning=True,
+        reference_upload=False,reference_text_required=False,
+        speech_verification=VERIFICATION if settings.speech_verify else None,
+        voice_clone_model=str(settings.zonos_model_path),voice_design=False,
+        source='published-preencoded-voices',speed_range=[.75,1.5],pause_ms_range=[0,2000])
 
 
 def validate_export(value):
@@ -63,8 +51,8 @@ def validate_export(value):
 
 
 def create_preset(db, settings, name, speaker, instruct, export):
-    if not is_clone_speaker(speaker):
-        raise DomainError("Audio8 使用参考音频音色", details={"field": "speaker"})
+    if not is_clone_speaker(speaker) and speaker != "zonos:haoran":
+        raise DomainError("请选择已发布的 ZONOS3 音色", details={"field": "speaker"})
     if (
         not name.strip()
         or len(name) > 100
@@ -72,6 +60,7 @@ def create_preset(db, settings, name, speaker, instruct, export):
         or len(instruct) > 2000
     ):
         raise DomainError("名称须为 1–100 字符，指令须为 1–2000 字符")
+    voice_manifest(settings, speaker)
     identifier = uuid.uuid4().hex
     db.execute(
         "INSERT INTO presets VALUES (?,?,?,?,?,?,0)",
@@ -88,56 +77,23 @@ def create_preset(db, settings, name, speaker, instruct, export):
 
 
 def snapshot(db, settings, preset_id, export):
-    row = db.execute("SELECT * FROM presets WHERE id=?", (preset_id,)).fetchone()
+    row=db.execute('SELECT * FROM presets WHERE id=?',(preset_id,)).fetchone()
     if not row:
-        raise DomainError(
-            "预设版本不存在", details={"field": "voice_preset_version_id"}
-        )
-    clone_id = row["speaker"][6:] if row["speaker"].startswith("clone:") else None
-    if clone_id:
-        ref = db.execute(
-            "SELECT * FROM voice_clone_refs WHERE id=? AND ready=1", (clone_id,)
-        ).fetchone()
-        if not ref:
-            raise DomainError("参考音频不存在或尚未校验")
-        if not settings.audio8_ready:
-            raise DomainError("服务器尚未安装完整的 Audio8 C++ 引擎和模型", 503)
-        if not (ref["ref_text"] or "").strip():
-            raise DomainError("Audio8 音色需要与参考音频逐字对应的文本，请补充参考文本", details={"field": "ref_text"})
-    else:
-        raise DomainError("旧固定音色已停用，请选择参考音频音色")
-    generation = dict(
-        engine=ENGINE,
-        model=MODEL,
-        revision=REVISION,
-        speaker=row["speaker"],
-        language="Chinese",
-        inference_mode="reference-codes",
-        inference_revision="expanded-kv-v3",
-        style_source="reference-audio",
-        text_frontend=False,
-        seed=42,
-        dtype="bfloat16",
-        temperature=0.7,
-        top_p=0.9,
-        top_k=50,
-        normalization=NORMALIZATION,
-        segmentation=SEGMENTATION,
-    )
-    if clone_id:
-        generation.update(
-            model=MODEL,
-            revision=REVISION,
-            voice_clone_ref_id=clone_id,
-            ref_audio_sha256=ref["sha256"],
-            ref_text=ref["ref_text"],
-            ref_audio_path=ref["path"],
-        )
-    return {
-        "voice_preset_version_id": row["id"],
-        "preset_name": row["name"],
-        "generation": generation,
-        "export": validate_export(
-            export if export is not None else json.loads(row["export_json"])
-        ),
-    }
+        raise DomainError('预设版本不存在',details={'field':'voice_preset_version_id'})
+    if not settings.zonos_ready:
+        raise DomainError('服务器尚未安装完整的 ZONOS3 原生引擎和模型',503)
+    voice=voice_manifest(settings,row['speaker'])
+    clone_id=row['speaker'][6:] if row['speaker'].startswith('clone:') else None
+    generation=dict(engine=ENGINE,model=MODEL,revision=REVISION,
+        speaker=row['speaker'],voice_name=voice.get('name',row['name']),language='Chinese',inference_mode='reference-codes',
+        inference_revision=INFERENCE_REVISION,speech_plan=SPEECH_PLAN,
+        verification=VERIFICATION if settings.speech_verify else None,
+        style_source='reference-audio',text_frontend=True,seed=42,dtype='gguf-ptq',
+        temperature=.75,top_p=.69,top_k=80,laci=True,short_text='auto',
+        native_voice_name=voice['native_name'],reference_codes_path=voice['codes_path'],
+        reference_codes_sha256=voice['codes_sha256'],
+        ref_audio_sha256=voice['audio_sha256'],ref_audio_path=voice['audio_path'],
+        ref_text=voice.get('transcript',''),normalization=NORMALIZATION,segmentation=SEGMENTATION)
+    if clone_id:generation['voice_clone_ref_id']=clone_id
+    return dict(voice_preset_version_id=row['id'],preset_name=row['name'],generation=generation,
+        export=validate_export(export if export is not None else json.loads(row['export_json'])))

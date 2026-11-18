@@ -122,7 +122,10 @@ def import_artifact(
         audio8_reference = (profile.get("engine") == "audio8-realistic-air-cpp"
                             and profile.get("voice_clone_ref_id") and profile.get("ref_audio_sha256")
                             and profile.get("ref_text") and profile.get("inference_mode") == "reference-codes")
-        if not profile.get("speaker") or not (profile.get("instruct") or audio8_reference):
+        zonos_reference = (profile.get("engine") == "zonos3-mini-ggml-cuda"
+                           and profile.get("reference_codes_sha256") and profile.get("ref_audio_sha256")
+                           and profile.get("inference_mode") == "reference-codes")
+        if not profile.get("speaker") or not (profile.get("instruct") or audio8_reference or zonos_reference):
             raise DomainError("缺少可验证的声音配置")
         identifier = uuid.uuid4().hex
         relative = Path("imports") / identifier

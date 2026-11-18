@@ -2,7 +2,6 @@ package com.kkwenxue.shanye
 
 import android.os.Bundle
 import android.content.Intent
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
@@ -18,8 +17,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import com.kkwenxue.shanye.data.*
 import com.kkwenxue.shanye.ui.*
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +25,16 @@ import kotlinx.coroutines.launch
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
+    private val systemBars by lazy { SystemBarsController(window) }
     private var audioOpenRequest by mutableIntStateOf(0)
+    override fun onResume() {
+        super.onResume()
+        systemBars.restore()
+    }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) systemBars.restore()
+    }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -71,26 +77,16 @@ class MainActivity : ComponentActivity() {
                 if (audioOpenRequest>0) { refreshAudio(); showAudio=true }
             }
             val reading = readingId != null
-            SideEffect {
-                val controller = WindowCompat.getInsetsController(window, window.decorView)
-                controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                controller.isAppearanceLightStatusBars = !showAudio && !(reading && store.theme == 1)
-                controller.isAppearanceLightNavigationBars = !showAudio && !(reading && store.theme == 1)
-                if (showAudio) {
-                    controller.show(WindowInsetsCompat.Type.systemBars())
-                    window.statusBarColor = android.graphics.Color.rgb(38,25,28)
-                    window.navigationBarColor = android.graphics.Color.rgb(38,25,28)
-                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                } else if (reading) {
-                    controller.hide(WindowInsetsCompat.Type.systemBars())
-                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                } else {
-                    controller.show(WindowInsetsCompat.Type.systemBars())
-                    window.statusBarColor = android.graphics.Color.rgb(247,244,237)
-                    window.navigationBarColor = android.graphics.Color.rgb(247,244,237)
-                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                }
+            val systemBarsMode = when {
+                showAudio -> SystemBarsMode.PLAYER
+                reading && store.theme == 1 -> SystemBarsMode.READER_DARK
+                reading -> SystemBarsMode.READER_LIGHT
+                else -> SystemBarsMode.HOME
             }
+            SideEffect {
+                systemBars.setBase(systemBarsMode)
+            }
+            CompositionLocalProvider(LocalSystemBars provides systemBars) {
             MaterialTheme(colorScheme = lightColorScheme(primary=Accent,background=Paper,surface=Paper,onSurface=Ink,onBackground=Ink)) {
                 BackHandler(showAudio) { showAudio=false }
                 BackHandler(reading && !showAudio) { readingId = null }
@@ -114,6 +110,7 @@ class MainActivity : ComponentActivity() {
                         showAudio=false
                     })
                 }
+            }
             }
         }
     }

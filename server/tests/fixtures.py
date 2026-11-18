@@ -6,6 +6,8 @@ import wave
 from server.db import connect, initialize
 from server.voices import DEFAULT_CLONE_ID
 from tts.common import file_digest
+import json
+import numpy as np
 
 
 def install_test_voice(settings):
@@ -29,6 +31,20 @@ def install_test_voice(settings):
         path = settings.audio8_model_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
+    settings.zonos_root=settings.state.parent/'zonos3'
+    for path in [settings.zonos_binary,settings.zonos_root/'zh-heads.json']+[
+            settings.zonos_model_path/name for name in ('backbone-ptq.gguf','zac-keep2.gguf')]:
+        path.parent.mkdir(parents=True,exist_ok=True);path.touch()
+    settings.zonos_binary.chmod(0o700)
+    settings.zonos_voice_path.mkdir(parents=True,exist_ok=True)
+    voices=[]
+    for speaker,name in [('zonos:haoran','Haoran'),('clone:'+DEFAULT_CLONE_ID,'LinChuan')]:
+        audio=settings.zonos_voice_path/(name+'.wav');audio.write_bytes(b'test reference')
+        codes=audio.with_suffix('.codes.npy');np.save(codes,np.zeros((24,10),dtype='int64'))
+        voices.append(dict(speaker=speaker,native_name=audio.name,
+            audio_path=str(audio.relative_to(settings.audio)),audio_sha256=file_digest(audio),
+            codes_path=str(codes.relative_to(settings.audio)),codes_sha256=file_digest(codes),transcript='测试参考。'))
+    (settings.zonos_voice_path/'voices.json').write_text(json.dumps(dict(voices=voices)))
     initialize(settings)
     relative = "reference-voices/test.wav"
     reference = settings.audio / relative

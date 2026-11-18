@@ -22,8 +22,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import com.kkwenxue.shanye.data.*
@@ -39,23 +37,12 @@ import java.util.Date
 private data class SynthesisVoice(val id: String, val name: String, val custom: Boolean = false)
 
 private val NarratorVoices = listOf(
-    SynthesisVoice("clone-a63c22269e594284805a0ffaadb784a1", "默认 · cwns.mp3", custom = true)
+    SynthesisVoice("clone-linchuan-zonos3-v1", "林川 · 克隆音色", custom = true),
+    SynthesisVoice("zonos3-haoran-v1", "Haoran · 中文男声")
 )
 
-// These are the named clone presets currently installed on the synthesis server.
-// The ID is kept internal to the app request; users choose the readable name.
-private val CustomVoices = listOf(
-    SynthesisVoice("clone-a63c22269e594284805a0ffaadb784a1", "参考音色 · cwns.mp3", custom = true),
-    SynthesisVoice("clone-9ef173d881f74a49888715b1ed92b24d", "参考音色 · stf.mp3 · 明亮沉稳男声", custom = true),
-    SynthesisVoice("clone-d9bf45c4dc3147cf8ddcf132651a501b", "参考音色 · stf.mp3 · 新版", custom = true),
-    SynthesisVoice("clone-1060f58d2cfa41c6a823b0248b98402f", "参考音色 · cxcw.mp3", custom = true),
-    SynthesisVoice("clone-70f7fba0dd2349aaa09a512036e44ce6", "参考音色 · sound.m4a", custom = true),
-    SynthesisVoice("clone-0e2fcdfec66b428f9f54bef32c382f2f", "参考音色 · demo.m4a", custom = true),
-    SynthesisVoice("clone-e489b174d18c4d0aa0bee42c0ff58639", "参考音色 · default_storyteller_c06.wav", custom = true),
-    SynthesisVoice("clone-c378b7d3f9944647902f4b6637bf6ea1", "参考音色 · xspb.mp3", custom = true),
-    SynthesisVoice("clone-10b832ee9ae246de91c52e51878936b5", "参考音色 · cwssr.mp3", custom = true)
-)
-private val SynthesisVoices = NarratorVoices + CustomVoices.filterNot { it.id == NarratorVoices.first().id }
+// Keep the relay request's stable preset ID internal to the selection label.
+private val SynthesisVoices = NarratorVoices
 private val ExportSpeeds = listOf(0.8f, 0.9f, 1.0f, 1.1f, 1.2f)
 private fun exportSpeedLabel(speed: Float) = "${String.format(java.util.Locale.ROOT, "%.1f", speed)} 倍速"
 
@@ -137,19 +124,7 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
             delay(5000)
         }
     }
-    DisposableEffect(activity) {
-        val window = activity?.window
-        val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
-        val oldStatus = controller?.isAppearanceLightStatusBars
-        val oldNav = controller?.isAppearanceLightNavigationBars
-        controller?.isAppearanceLightStatusBars = true
-        controller?.isAppearanceLightNavigationBars = true
-        controller?.show(WindowInsetsCompat.Type.systemBars())
-        onDispose {
-            oldStatus?.let { controller?.isAppearanceLightStatusBars = it }
-            oldNav?.let { controller?.isAppearanceLightNavigationBars = it }
-        }
-    }
+    OverlaySystemBars(SystemBarsMode.SYNTHESIS)
     BackHandler { if (settingsOpen) settingsOpen = false else onClose() }
 
     Box(Modifier.fillMaxSize().background(Paper).systemBarsPadding()) {

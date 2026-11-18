@@ -208,111 +208,13 @@ def create_app(settings: Settings):
         x_vector_only_mode: bool = Form(False),
         db: Any = Depends(database),
     ):
-        if not ref_text.strip():
-            raise DomainError("Audio8 需要与参考录音逐字对应的文本", details={"field": "ref_text"})
-        if x_vector_only_mode:
-            raise DomainError("Audio8 不支持无参考文本的音色模式")
-        if not reference.filename or len(reference.filename) > 255:
-            raise DomainError("参考音频文件名无效")
-        if not (reference.content_type or "").startswith(
-            "audio/"
-        ) and not reference.filename.lower().endswith(
-            (".m4a", ".mp3", ".wav", ".flac", ".aac")
-        ):
-            raise DomainError("请上传 M4A、WAV、MP3、FLAC 或 AAC 音频")
-        payload = await reference.read(50 * 1024 * 1024 + 1)
-        if len(payload) > 50 * 1024 * 1024:
-            raise DomainError("参考音频不能超过 50MiB")
-        identifier = uuid.uuid4().hex
-        relative = f"reference-voices/{identifier}{os.path.splitext(reference.filename)[1].lower() or '.m4a'}"
-        target = settings.audio / relative
-        atomic_bytes(target, payload)
-        try:
-            duration = round(media_duration(target) * 1000)
-        except Exception as exc:
-            target.unlink(missing_ok=True)
-            raise DomainError("无法读取参考音频容器", details=str(exc))
-        if not 1000 <= duration <= 30000:
-            target.unlink(missing_ok=True)
-            raise DomainError("参考音频建议为 1–30 秒")
-        # Audio8 reference codes are prepared lazily under the GPU worker lock.
-        # No runtime codec guessing or external URLs are needed in the worker.
-        normalized = target.with_suffix(".normalized.wav")
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-v",
-                    "error",
-                    "-nostdin",
-                    "-y",
-                    "-i",
-                    str(target),
-                    "-vn",
-                    "-ac",
-                    "1",
-                    "-ar",
-                    "24000",
-                    "-c:a",
-                    "pcm_s16le",
-                    str(normalized),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
-            duration = round(media_duration(normalized) * 1000)
-        except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            normalized.unlink(missing_ok=True)
-            target.unlink(missing_ok=True)
-            raise DomainError("参考音频解码失败", details=str(exc))
-        target.unlink(missing_ok=True)
-        target = normalized
-        relative = str(target.relative_to(settings.audio))
-        with transaction(db):
-            db.execute(
-                "INSERT INTO voice_clone_refs VALUES (?,?,?,?,?,?,?,?)",
-                (
-                    identifier,
-                    relative,
-                    ref_text.strip() or None,
-                    int(x_vector_only_mode),
-                    file_digest(target),
-                    duration,
-                    1,
-                    time.time(),
-                ),
-            )
-            preset_id = "clone-" + identifier
-            db.execute(
-                "INSERT INTO presets VALUES (?,?,?,?,?,?,0)",
-                (
-                    preset_id,
-                    "参考音色 · " + (reference.filename[:40]),
-                    "clone:" + identifier,
-                    NARRATOR_INSTRUCTION,
-                    encoded({"speed": 1.0, "pause_ms": 180, "format": "m4a"}),
-                    time.time(),
-                ),
-            )
-        return {
-            "id": preset_id,
-            "reference_id": identifier,
-            "preset_name": "参考音色 · " + reference.filename[:40],
-            "model_ready": settings.audio8_ready,
-            "message": "参考音频已保存；"
-            + (
-                "可以开始试听"
-                if settings.audio8_ready
-                else "服务器仍需安装 Audio8 C++ 引擎和模型"
-            ),
-        }
+        raise DomainError('当前提供预先克隆的音色。请在管理员端离线编码参考录音后发布音色',503)
 
     @app.get("/api/v1/presets")
     def presets(db: Any = Depends(database)):
         items = []
         for row in db.execute(
-            "SELECT * FROM presets WHERE speaker LIKE 'clone:%' ORDER BY confirmed DESC,created DESC"
+            "SELECT * FROM presets WHERE speaker IN ('clone:linchuan-zonos3-v1','zonos:haoran') ORDER BY confirmed DESC,created DESC"
         ):
             item = dict(row)
             item["instruct"] = display_instruction(item["instruct"])
@@ -320,7 +222,7 @@ def create_app(settings: Settings):
             item["builtin"] = item["id"] in BUILTIN_PRESET_IDS
             item["voice"] = {
                 "label": item["name"],
-                "description": "Audio8 参考音色",
+                "description": "ZONOS3 · 预置男声" if item["builtin"] else "ZONOS3 · 预先克隆",
                 "native_language": "中文",
                 "preset_id": item["id"],
                 "speaker": item["speaker"],

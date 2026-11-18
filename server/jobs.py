@@ -72,7 +72,7 @@ def submit(db, settings, request, key, kind="synthesis", parent=None, frozen=Non
         db, settings, request["voice_preset_version_id"], request.get("export")
     )
     if config["generation"].get("engine") != ENGINE:
-        raise DomainError("旧合成引擎已停用，请选择 Audio8 参考音色重新创建任务", 409)
+        raise DomainError("旧合成引擎已停用，请选择 ZONOS3 已发布音色重新创建任务", 409)
     if request.get("inline_chapters"):
         if {c.get("id") for c in request["inline_chapters"]} != set(
             request["chapter_ids"]
