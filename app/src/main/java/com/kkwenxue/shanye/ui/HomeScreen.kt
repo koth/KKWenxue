@@ -269,40 +269,51 @@ private fun CatalogBookDialog(item: CatalogBook, context: android.content.Contex
     onDismiss: () -> Unit, onImported: (Book) -> Unit, setImporting: (Boolean) -> Unit) {
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
+    var phase by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest=onDismiss, containerColor=Paper,
         title={Text(item.title, fontFamily=Serif, color=Ink)},
         text={Column { Text("${item.author} · ${item.category} · ${item.status}", color=Muted, fontSize=12.sp)
             Text("${item.wordsLabel} · ${item.chapterNo} 章 · 更新 ${item.lastUpdate.ifBlank { "未知" }}", Modifier.padding(top=10.dp), color=Muted, fontSize=12.sp)
             Text(item.latestChapter.ifBlank { "暂无最新章节" }, Modifier.padding(top=10.dp), color=Ink, fontSize=13.sp)
             if (error != null) Text(error ?: "", Modifier.padding(top=12.dp), color=Color(0xFFAA5544), fontSize=12.sp)
-            if (importing) Row(Modifier.padding(top=16.dp), verticalAlignment=Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp), color=Accent, strokeWidth=2.dp); Text("正在抓取并导入正文…", Modifier.padding(start=10.dp), color=Muted, fontSize=12.sp) }
+            if (importing) Row(Modifier.padding(top=16.dp), verticalAlignment=Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp), color=Accent, strokeWidth=2.dp); Text(phase, Modifier.padding(start=10.dp), color=Muted, fontSize=12.sp) }
         }},
         dismissButton={ TextButton(enabled=!importing, onClick=onDismiss) { Text("关闭", color=Muted) } },
         confirmButton={ Button(enabled=!importing, onClick={
             setImporting(true); error = null
             scope.launch {
                 try {
+                    phase = "服务器正在准备正文…"
                     var task = withContext(Dispatchers.IO) { catalog.startContent(item.id) }
                     var pollCount = 0
-                    while (!task.done && pollCount++ < 360) {
+                    while (!task.done) {
+                        check(task.state !in setOf("failed", "expired", "cancelled")) {
+                            task.message ?: "服务器未能准备正文，请重试"
+                        }
+                        check(pollCount++ < 360) { "服务器仍在处理正文，请稍后重试" }
                         kotlinx.coroutines.delay(1000)
                         task = withContext(Dispatchers.IO) { catalog.status(task.taskId) }
-                        if (task.state == "failed") error("服务器合成失败")
                     }
-                    require(task.done) { "正文仍在服务器排队，请稍后重试" }
-                    val target = File(context.cacheDir, "catalog-${item.id}.zip")
-                    var last: Throwable? = null
-                    var downloaded = false
-                    var downloadAttempts = 0
-                    while (!downloaded && downloadAttempts++ < 12) {
-                        try { withContext(Dispatchers.IO) { catalog.download(task, target) }; last = null; downloaded = true }
-                        catch (e: Throwable) { last = e; kotlinx.coroutines.delay(1500) }
+                    phase = "正在通过中转下载正文…"
+                    val book = withContext(Dispatchers.IO) {
+                        val target = File.createTempFile("catalog-", ".zip", context.cacheDir)
+                        try {
+                            var waits = 0
+                            while (!catalog.download(task, target)) {
+                                check(waits++ < 60) { "中转仍在上传，请稍后重试" }
+                                kotlinx.coroutines.delay(2000)
+                            }
+                            ContentPackageImporter.import(target, item).also {
+                                LocalBookRepository(context).save(it)
+                            }
+                        } finally { target.delete() }
                     }
-                    if (!downloaded) throw (last ?: IllegalStateException("下载失败"))
-                    val book = withContext(Dispatchers.IO) { ContentPackageImporter.import(target, item.title) }
-                    withContext(Dispatchers.IO) { LocalBookRepository(context).save(book) }
                     onImported(book)
-                } catch (e: Throwable) { error = e.message ?: "导入失败"; setImporting(false) }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (e: Exception) {
+                    error = e.message ?: "导入失败"
+                } finally { setImporting(false) }
             }
         }) { Text("导入正文") } })
 }

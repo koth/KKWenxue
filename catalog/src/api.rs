@@ -1,8 +1,7 @@
 //! 目录与正文任务 API。
 //!
 //! 元信息直接读本机 SQLite；正文只通过 relay 建立 content.fetch/content.serve
-//! 任务。worker 将正文保存在家庭服务器，完成通知带局域网直连地址，只有 App
-//! 无法直连时才调用 download 路由申请 relay 中转。
+//! 任务。worker 在服务器下载 TXT 并打包；App 只从目录代理下载 relay 上的正文包。
 
 use axum::{
     body::Body,
@@ -173,6 +172,55 @@ async fn create_relay_task(
     Ok(value)
 }
 
+async fn create_content_task(
+    st: &AppState,
+    kind: &str,
+    payload: Value,
+    key: String,
+) -> Result<Value, (StatusCode, String)> {
+    let task = create_relay_task(st, kind, payload.clone(), key.clone(), 0).await?;
+    let state = task["state"].as_str();
+    if state == Some("failed")
+        || (state == Some("completed")
+            && (!task_result_ready(&task) || task["result"]["relay_state"] == "failed"))
+    {
+        // Coalesce simultaneous retries; do not spend a new worker budget on every tap.
+        return create_relay_task(st, kind, payload, format!("{key}:retry:{}", now() / 60), 0)
+            .await;
+    }
+    Ok(task)
+}
+
+async fn serve_content(st: &AppState, fetch: &Value) -> Result<Value, (StatusCode, String)> {
+    let book_id = fetch["payload"]["bookId"]
+        .as_i64()
+        .ok_or((StatusCode::BAD_GATEWAY, "正文任务缺少书籍编号".into()))?;
+    let fetch_id = fetch["id"]
+        .as_str()
+        .ok_or((StatusCode::BAD_GATEWAY, "正文任务缺少编号".into()))?;
+    create_content_task(
+        st,
+        "content.serve",
+        json!({"bookId": book_id, "fetchTaskId": fetch_id}),
+        format!("content.serve:txt-v2:{fetch_id}"),
+    )
+    .await
+}
+
+fn content_state(task: &Value) -> Json<Value> {
+    let mut out = json!({"taskId":task["id"], "state":task["state"], "error":task["error"]});
+    if task["kind"] == "content.serve" && task_result_ready(task) {
+        out["downloadUrl"] = json!(format!(
+            "/v1/catalog/content/{}/download",
+            task["id"].as_str().unwrap_or("")
+        ));
+    } else if task["state"] == "completed" && !task_result_ready(task) {
+        out["state"] = json!("expired");
+        out["error"] = json!("正文任务已过期，请重新导入");
+    }
+    Json(out)
+}
+
 async fn content(
     State(st): State<AppState>,
     Path(id): Path<i64>,
@@ -187,45 +235,22 @@ async fn content(
         return Err((StatusCode::SERVICE_UNAVAILABLE, "正文服务尚未配置".into()));
     }
     let latest = book.latest_chapter_id;
-    let base = format!("content.fetch:{id}:{latest}");
-    let mut task = create_relay_task(&st, "content.fetch", json!({"bookId": id, "latestChapterId": latest, "title": book.title, "author": book.author}), base.clone(), 0).await?;
-    // relay 的任务记录会保留，但结果过期后幂等键不能复用；换版本键重新排队。
-    if task.get("state").and_then(Value::as_str) == Some("completed") && !task_result_ready(&task) {
-        task = create_relay_task(&st, "content.fetch", json!({"bookId": id, "latestChapterId": latest, "title": book.title, "author": book.author}),
-            format!("{base}:{}", now()), 0).await?;
-    }
+    // The preheat key uses a different priority. Relay rejects collisions even
+    // for the same book/version; workers still share the on-disk book cache.
+    let mut task = create_content_task(&st, "content.fetch",
+        json!({"bookId": id, "latestChapterId": latest, "title": book.title, "author": book.author}),
+        format!("content.fetch:txt-v2:{id}:{latest}")).await?;
     // A cached fetch is only the small manifest; the App needs the serve task's ZIP.
     if task_result_ready(&task) {
-        let version = task
-            .pointer("/result/sha256")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        task = create_relay_task(
-            &st,
-            "content.serve",
-            json!({"bookId": id, "version": version}),
-            format!("content.serve:{id}:{version}"),
-            0,
-        )
-        .await?;
+        task = serve_content(&st, &task).await?;
     }
-    let state = task
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or("queued");
-    let code = if task_result_ready(&task) {
+    let out = content_state(&task);
+    let code = if out.0["downloadUrl"].is_string() {
         StatusCode::OK
     } else {
         StatusCode::ACCEPTED
     };
-    let mut out = json!({"taskId": task["id"], "state": state});
-    if task_result_ready(&task) {
-        out["downloadUrl"] = json!(format!(
-            "/v1/catalog/content/{}/download",
-            task["id"].as_str().unwrap_or("")
-        ));
-    }
-    Ok((code, Json(out)).into_response())
+    Ok((code, out).into_response())
 }
 
 async fn status(State(st): State<AppState>, Path(task_id): Path<String>) -> ApiResult {
@@ -236,38 +261,14 @@ async fn status(State(st): State<AppState>, Path(task_id): Path<String>) -> ApiR
         None,
     )
     .await?;
-    // fetch 完成后再排一个 serve，serve 只打包家里已经落盘的正文。
-    if task.get("kind").and_then(Value::as_str) == Some("content.fetch") && task_result_ready(&task)
-    {
-        let book_id = task
-            .pointer("/payload/bookId")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        let version = task
-            .pointer("/result/sha256")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        task = create_relay_task(
-            &st,
-            "content.serve",
-            json!({"bookId":book_id,"version":version}),
-            format!("content.serve:{book_id}:{version}"),
-            0,
-        )
-        .await?;
-    }
-    let mut out = task.clone();
-    out["taskId"] = task.get("id").cloned().unwrap_or(Value::Null);
-    if task_result_ready(&task) {
-        if let Some(direct) = task.pointer("/result/direct").cloned() {
-            out["direct"] = direct;
+    match task["kind"].as_str() {
+        Some("content.fetch") if task_result_ready(&task) => {
+            task = serve_content(&st, &task).await?
         }
-        out["downloadUrl"] = json!(format!(
-            "/v1/catalog/content/{}/download",
-            task["id"].as_str().unwrap_or("")
-        ));
+        Some("content.fetch" | "content.serve") => {}
+        _ => return Err((StatusCode::NOT_FOUND, "没有这个正文任务".into())),
     }
-    Ok(Json(out))
+    Ok(content_state(&task))
 }
 
 async fn download(
@@ -281,6 +282,9 @@ async fn download(
         None,
     )
     .await?;
+    if task["kind"] != "content.serve" {
+        return Err((StatusCode::NOT_FOUND, "没有这个正文包".into()));
+    }
     if !task_result_ready(&task) {
         return Err((StatusCode::CONFLICT, "正文尚未生成".into()));
     }
@@ -288,19 +292,23 @@ async fn download(
         .pointer("/result/relay_state")
         .and_then(Value::as_str)
         .unwrap_or("none");
-    if relay_state != "ready"
-        && task
-            .pointer("/result/local_available")
-            .and_then(Value::as_bool)
-            != Some(true)
-    {
-        let _ = relay_json(
-            &st,
-            reqwest::Method::POST,
-            &format!("/v1/tasks/{task_id}/result/request"),
-            Some(json!({})),
-        )
-        .await?;
+    if relay_state == "failed" {
+        let reason = task["result"]["relay_error"]
+            .as_str()
+            .unwrap_or("请稍后重试");
+        return Err((StatusCode::BAD_GATEWAY, format!("正文中转失败：{reason}")));
+    }
+    if relay_state != "ready" {
+        // local_available only means a LAN URL exists, not that relay has a copy.
+        if relay_state == "none" {
+            relay_json(
+                &st,
+                reqwest::Method::POST,
+                &format!("/v1/tasks/{task_id}/result/request"),
+                Some(json!({})),
+            )
+            .await?;
+        }
         return Err((StatusCode::ACCEPTED, "已请求中转，稍后重试".into()));
     }
     let response = st
@@ -341,4 +349,93 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/catalog/content/{id}", get(status))
         .route("/v1/catalog/content/{id}/download", get(download))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    async fn start_mock(app: Router) -> AppState {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        AppState {
+            db: Arc::new(Mutex::new(rusqlite::Connection::open_in_memory().unwrap())),
+            relay_url: format!("http://{addr}"),
+            relay_token: "test-token".into(),
+            relay_client: reqwest::Client::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn lan_only_metadata_requests_relay_before_returning_zip() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/v1/tasks/{id}", get(|State(n): State<Arc<AtomicUsize>>| async move {
+                Json(json!({
+                    "id": "book-pack", "kind": "content.serve", "state": "completed",
+                    "result": {"filename": "book.zip", "expires_at": now()+60, "local_available": true,
+                               "direct": {"url": "http://192.0.2.10/ignored", "token": "not-for-app"},
+                               "relay_state": if n.load(Ordering::SeqCst) == 0 {"none"} else {"ready"}}
+                }))
+            }))
+            .route("/v1/tasks/{id}/result/request", post(|State(n): State<Arc<AtomicUsize>>| async move {
+                n.fetch_add(1, Ordering::SeqCst);
+                Json(json!({}))
+            }))
+            .route("/v1/tasks/{id}/result", get(|| async {
+                ([(axum::http::header::CONTENT_TYPE, "application/zip")], b"zip bytes".as_slice())
+            }))
+            .with_state(requests.clone());
+        let st = start_mock(app).await;
+        let view = status(State(st.clone()), Path("book-pack".to_owned()))
+            .await
+            .unwrap()
+            .0;
+        assert!(view.get("direct").is_none());
+        assert!(view.get("result").is_none());
+        assert_eq!(
+            view["downloadUrl"],
+            "/v1/catalog/content/book-pack/download"
+        );
+        assert_eq!(
+            download(State(st.clone()), Path("book-pack".to_owned()))
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::ACCEPTED,
+        );
+        let result = download(State(st), Path("book-pack".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(result.headers()["content-type"], "application/zip");
+        assert_eq!(
+            &to_bytes(result.into_body(), 32).await.unwrap()[..],
+            b"zip bytes"
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_or_expired_task_is_not_returned_as_the_new_import() {
+        let app = Router::new().route("/v1/tasks", post(|Json(v): Json<Value>| async move {
+            let key = v["dedupe_key"].as_str().unwrap();
+            if key.contains(":retry:") {
+                Json(json!({"state": "queued", "id": "replacement"}))
+            } else if key == "expired" {
+                Json(json!({"state": "completed", "id": "old", "result": {"filename": "book.zip", "expires_at": 1}}))
+            } else {
+                Json(json!({"state": "failed", "id": "old", "error": "reset"}))
+            }
+        }));
+        let st = start_mock(app).await;
+        for key in ["failed", "expired"] {
+            let task = create_content_task(&st, "content.fetch", json!({"bookId": 1}), key.into())
+                .await
+                .unwrap();
+            assert_eq!(task["id"], "replacement");
+        }
+    }
 }

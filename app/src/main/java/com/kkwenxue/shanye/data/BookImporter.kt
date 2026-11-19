@@ -20,6 +20,7 @@ object BookImporter {
     private const val MAX_BYTES = 64 * 1024 * 1024
     private const val MAX_CHARACTERS = 12_000_000
     private val heading = Regex("""^(?:第[0-9０-９一二三四五六七八九十百千万零〇两兩]{1,14}[章节節回卷部集篇](?:$|[：:\s].{0,60})|(?:序章|楔子|引子|前言|后记|後記|尾声|尾聲|番外)(?:$|[：:\s].{0,40}))$""")
+    private val catalogHeading = Regex("""^(?:第[0-9０-９一二三四五六七八九十百千万零〇两兩]{1,16}[章节節回卷部集篇][^\r\n]{0,100}|(?:序章|楔子|引子|前言|后记|後記|尾声|尾聲|番外)[^\r\n]{0,80})$""")
 
     fun readLimited(input: InputStream, limit: Int = MAX_BYTES): ByteArray {
         val output = ByteArrayOutputStream()
@@ -35,14 +36,23 @@ object BookImporter {
 
     fun parse(fileName: String, bytes: ByteArray): Book {
         require(bytes.size <= MAX_BYTES) { "文件过大，最多支持 64 MB。" }
-        val hash = MessageDigest.getInstance("SHA-256").digest(bytes).take(12).joinToString("") { "%02x".format(it) }
-        val id = "local-$hash"
+        val id = contentId(bytes)
         val fallbackTitle = fileName.substringBeforeLast('.').trim().ifBlank { "导入的书籍" }
         return when (fileName.substringAfterLast('.', "").lowercase()) {
             "txt" -> parseTxt(id, fallbackTitle, decode(bytes))
             "epub" -> parseEpub(id, fallbackTitle, bytes)
             else -> throw IllegalArgumentException("请选择 TXT 或 EPUB 文件。")
         }
+    }
+
+    internal fun parseCatalogText(source: CatalogBook, bytes: ByteArray): Book {
+        require(bytes.size <= MAX_BYTES) { "文件过大，最多支持 64 MB。" }
+        return parseTxt(contentId(bytes), source.title, decode(bytes), source)
+    }
+
+    private fun contentId(bytes: ByteArray): String {
+        val hash = MessageDigest.getInstance("SHA-256").digest(bytes).take(12).joinToString("") { "%02x".format(it) }
+        return "local-$hash"
     }
 
     private fun decode(bytes: ByteArray): String {
@@ -59,13 +69,13 @@ object BookImporter {
     private fun paragraphs(text: String) = text.replace("\uFFFC", "").lineSequence()
         .map { it.trim().trim('\uFEFF') }.filter { it.isNotBlank() }.joinToString("\n\n")
 
-    private fun parseTxt(id: String, title: String, text: String): Book {
+    private fun parseTxt(id: String, title: String, text: String, catalog: CatalogBook? = null): Book {
         require(text.length <= MAX_CHARACTERS) { "正文过长，请分卷导入。" }
         require(!text.contains('\u0000')) { "文件不是有效的文本。" }
         val lines = text.removePrefix("\uFEFF").lines()
-        val metadataTitle = lines.firstOrNull { it.trim().isNotBlank() }?.trim()
+        val metadataTitle = catalog?.title ?: lines.firstOrNull { it.trim().isNotBlank() }?.trim()
             ?.takeIf { !heading.matches(it) && !it.startsWith("作者") }
-        val author = lines.firstOrNull { it.trim().startsWith("作者") }
+        val author = catalog?.author ?: lines.firstOrNull { it.trim().startsWith("作者") }
             ?.substringAfter('：', "").orEmpty().trim().ifBlank { "未知作者" }
         val chapters = mutableListOf<Chapter>()
         var chapterTitle = "正文"
@@ -76,23 +86,26 @@ object BookImporter {
                 val candidate = Chapter("$id-${chapters.size}", chapterTitle, content)
                 val previous = chapters.lastOrNull()
                 val sameTitle = previous?.title?.replace(Regex("[^\\p{L}\\p{N}]"), "") == candidate.title.replace(Regex("[^\\p{L}\\p{N}]"), "")
-                if (previous == null || !sameTitle || previous.body != candidate.body) chapters += candidate
+                if (catalog != null || previous == null || !sameTitle || previous.body != candidate.body) chapters += candidate
             }
             body.clear()
         }
         var foundHeading = false
+        val chapterHeading = if (catalog == null) heading else catalogHeading
         var index = 0
         while (index < lines.size) {
             val line = lines[index].trim()
-            if (heading.matches(line)) {
+            if (chapterHeading.matches(line)) {
                 if (foundHeading) flush()
                 chapterTitle = line
                 foundHeading = true
                 index++
                 // Some web exports place an older chapter number immediately after the
                 // current one. Keep the first heading and discard that duplicate label.
-                while (index < lines.size && lines[index].trim().isEmpty()) index++
-                if (index < lines.size && heading.matches(lines[index].trim())) index++
+                if (catalog == null) {
+                    while (index < lines.size && lines[index].trim().isEmpty()) index++
+                    if (index < lines.size && heading.matches(lines[index].trim())) index++
+                }
             } else {
                 if (foundHeading) body.appendLine(line)
                 index++
@@ -100,7 +113,8 @@ object BookImporter {
         }
         flush()
         require(chapters.isNotEmpty()) { "文件中没有可阅读的正文。" }
-        return Book(id, metadataTitle ?: title, author, "本地", "${chapters.size} 章 · TXT", "从本机导入，支持离线阅读。", 1, chapters)
+        return Book(id, metadataTitle ?: title, author, catalog?.category ?: "本地", "${chapters.size} 章 · TXT",
+            if (catalog == null) "从本机导入，支持离线阅读。" else "从在线书库导入，支持离线阅读。", 1, chapters)
     }
 
     private data class ManifestItem(val path: String, val mediaType: String)

@@ -14,7 +14,10 @@ from server.db import connect
 from server.presets import snapshot
 from server.tests.fixtures import install_test_voice
 from server.voices import DEFAULT_PRESET_ID,HAORAN_PRESET_ID
-from server.zonos_runtime import ZonosEngine,content_report,generation_seed,VERIFICATION,LEGACY_VERIFICATION
+from server.zonos_runtime import (
+    ZonosEngine,content_report,generation_seed,VERIFICATION,LEGACY_VERIFICATION,
+    SPEECH_PLAN,LEGACY_SPEECH_PLAN,
+)
 from server.speech_quality import compare_transcript
 
 FAKE='''#!{python}
@@ -76,6 +79,41 @@ class ZonosTests(unittest.TestCase):
         self.assertTrue(self.engine.last_execution['sentence']['content_verified'])
         self.assertNotIn('--spk-encoder',process.args)
         self.assertNotIn('--zac-encoder',process.args)
+
+    def test_native_request_uses_cleaned_text_but_verifier_uses_original(self):
+        text='她问：“《山海经》，，，你看过吗？！”'
+        row=self.row(text)
+        report=compare_transcript(text,'她问山海经你看过吗')
+        with patch.object(self.engine.verifier,'verify',return_value=report) as verify:
+            results=self.engine.generate([row],self.config)
+        self.assertEqual((19200,),results[0].shape)
+        self.assertEqual('她问：山海经，你看过吗？',self.requests()[0]['text'])
+        verify.assert_called_once()
+        self.assertEqual(text,verify.call_args.args[0])
+        self.assertEqual(text,row['spoken_text'])
+        execution=self.engine.last_execution[row['id']]
+        self.assertEqual(SPEECH_PLAN,execution['speech_plan'])
+        self.assertEqual(self.requests()[0]['text'],execution['native_text'])
+
+    def test_frozen_legacy_speech_plan_keeps_original_punctuation_rules(self):
+        row=self.row('《山海经》……')
+        config={**self.config,'speech_plan':LEGACY_SPEECH_PLAN}
+        with patch.object(self.engine.verifier,'verify',return_value=dict(accepted=True,differences=[])):
+            self.assertEqual((19200,),self.engine.generate([row],config)[0].shape)
+        self.assertEqual(['《山海经》，'],[req['text'] for req in self.requests()])
+        self.assertEqual(LEGACY_SPEECH_PLAN,self.engine.last_execution[row['id']]['speech_plan'])
+
+    def test_cleaned_punctuation_does_not_hide_real_omissions(self):
+        text='（《山海经》），、、、林川推开木门。'
+        report=compare_transcript(text,'山海经')
+        with patch.object(self.engine.verifier,'verify',return_value=report):
+            result=self.engine.generate([self.row(text)],self.config)[0]
+        self.assertEqual('山海经，林川推开木门。',self.requests()[0]['text'])
+        self.assertIsInstance(result,ValueError)
+        self.assertIn('林川推开木门',str(result))
+        execution=self.engine.last_execution['sentence']
+        self.assertEqual('rejected-content',execution['parts'][0]['state'])
+        self.assertIn('连续漏读较长内容',execution['verification_checks'][0]['rejection_reasons'])
 
     def test_haoran_and_clone_are_distinct_immutable_snapshots(self):
         with closing(connect(self.settings)) as db:
@@ -177,6 +215,8 @@ class ZonosTests(unittest.TestCase):
     def test_old_engine_rejected_and_attempt_seed_changes(self):
         with self.assertRaisesRegex(RuntimeError,'旧合成配置'):
             self.engine.generate([],{**self.config,'engine':'audio8-realistic-air-cpp'})
+        with self.assertRaisesRegex(RuntimeError,'未知的朗读策略'):
+            self.engine.generate([],{**self.config,'speech_plan':'unknown'})
         self.assertNotEqual(generation_seed(self.row(),self.config),generation_seed(self.row(attempt=2),self.config))
         self.assertNotEqual(generation_seed(self.row(),self.config),generation_seed({**self.row(),'retry_round':1},self.config))
         self.assertEqual(ENGINE,self.config['engine'])

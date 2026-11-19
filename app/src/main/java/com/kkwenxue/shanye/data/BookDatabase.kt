@@ -24,10 +24,12 @@ class BookDatabase(private val context: Context) : SQLiteOpenHelper(context, NAM
         val db = writableDatabase
         db.beginTransaction()
         try {
-            db.insertWithOnConflict("books", null, bookValues(book), SQLiteDatabase.CONFLICT_REPLACE)
+            check(db.insertWithOnConflict("books", null, bookValues(book), SQLiteDatabase.CONFLICT_REPLACE) != -1L) {
+                "书籍保存失败"
+            }
             db.delete("chapters", "book_id = ?", arrayOf(book.id))
             book.chapters.forEachIndexed { index, chapter ->
-                db.insert("chapters", null, ContentValues().apply {
+                db.insertOrThrow("chapters", null, ContentValues().apply {
                     put("id", chapter.id); put("book_id", book.id); put("chapter_index", index)
                     put("title", chapter.title); put("body", chapter.body)
                 })

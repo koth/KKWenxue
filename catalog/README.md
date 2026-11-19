@@ -57,11 +57,11 @@ cargo clippy --all-targets -- -D warnings
 
 目录服务在启动时可配置 `SHANYE_RELAY_URL`、`SHANYE_RELAY_TOKEN`。正文接口为：
 
-- `POST /v1/catalog/books/{id}/content`：创建或复用 `content.fetch`。
-- `GET /v1/catalog/content/{taskId}`：查询抓取/打包状态；抓取完成后自动创建 `content.serve`。
-- `GET /v1/catalog/content/{taskId}/download`：局域网不可达时申请 relay 中转并下载。
+- `POST /v1/catalog/books/{id}/content`：创建或复用 `content.fetch`；交互导入不与预热任务共用幂等键。
+- `GET /v1/catalog/content/{taskId}`：查询抓取/打包状态；抓取完成后创建 `content.serve`，客户端跟踪返回的新任务 ID。
+- `GET /v1/catalog/content/{taskId}/download`：申请 relay 中转。未上传完成时返回 HTTP 202；完成后返回 ZIP。目录 API 不提供正文的局域网下载地址。
 
-家里 worker 位于 `/h/work/shanye-content`，先下载并切片到 `books/`，再把 ZIP 放到 `packs/`；完成通知带 `192.168.3.32:17873` 的短期直连能力。App 会优先直连，只有失败才走 relay 上传。
+正文 worker 在服务端请求书源 `/txt/?id=…&p=…`，逐页去除导出页眉和页脚并分章，确认结束页后才更新 `books/` 缓存。ZIP 在 `packs/` 生成，再上传至 relay。App 只通过目录代理接收中转包，核验书籍编号、正文散列和章节数后入库；既不访问书源，也不访问局域网 worker。旧缓存可能只含第一页；新版交互导入会重新抓取。部署时先更新正文 worker，再更新目录 API 和 App。
 
 榜单预热（在 relay 上执行，按 2 req/s 创建任务）：
 

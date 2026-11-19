@@ -15,11 +15,18 @@ from tts.common import digest, file_digest, has_spoken_content
 from .config import ENGINE
 from .speech_quality import native_speech_text
 from .speech_verify import SpeechVerifier
+from .text_normalization import normalize_tts_text
 
 INFERENCE_REVISION='a50e1411-sm87-ptq-keep2-laci-v1'
-SPEECH_PLAN='zonos-native-laci-bounded160-v1'
+LEGACY_SPEECH_PLAN='zonos-native-laci-bounded160-v1'
+SPEECH_PLAN='zonos-native-laci-bounded160-punctuation-v2'
 VERIFICATION='sensevoice-tolerant-coverage-v3'
 LEGACY_VERIFICATION='sensevoice-coverage-additions-v2'
+
+_TEXT_NORMALIZERS={
+    LEGACY_SPEECH_PLAN:native_speech_text,
+    SPEECH_PLAN:normalize_tts_text,
+}
 
 
 def generation_seed(row,config):
@@ -135,7 +142,9 @@ class ZonosEngine:
     def generate(self,rows,config):
         if config.get('engine')!=ENGINE or config.get('inference_revision')!=INFERENCE_REVISION:
             raise RuntimeError('旧合成配置已停用，请使用 ZONOS3 已发布音色创建任务')
-        if config.get('speech_plan')!=SPEECH_PLAN:raise RuntimeError('未知的朗读策略')
+        speech_plan=config.get('speech_plan')
+        normalize=_TEXT_NORMALIZERS.get(speech_plan)
+        if normalize is None:raise RuntimeError('未知的朗读策略')
         codes=(self.settings.audio/config['reference_codes_path']).resolve()
         if not codes.is_relative_to(self.settings.zonos_voice_path.resolve()) or file_digest(codes)!=config['reference_codes_sha256']:
             raise RuntimeError('参考语音缓存已变更，当前任务不能使用其他音色')
@@ -148,12 +157,13 @@ class ZonosEngine:
             seed=generation_seed(row,config)
             execution=dict(seed=seed,engine=ENGINE,batch_size=1,native=True,
                 inference_revision=INFERENCE_REVISION,reference_cache_hit=True,
-                speech_plan=SPEECH_PLAN,parts=[],state='running',verification_checks=[])
+                speech_plan=speech_plan,parts=[],state='running',verification_checks=[])
             self.last_execution[row['id']]=execution
             try:
                 if not has_spoken_content(row['spoken_text']):raise ValueError('当前分段没有可朗读文本')
                 actual_seed=seed
-                text=native_speech_text(row['spoken_text'])
+                text=normalize(row['spoken_text'])
+                execution['native_text']=text
                 payload=dict(text=text,language='cmn',stream=False,format='wav',
                     seed=actual_seed,speaker_embedding_id=voice['id'],speaker_mode='reference',
                     max_tokens=800,laci=True,short_text='auto',temperature=.75,topk=80,top_p=.69,

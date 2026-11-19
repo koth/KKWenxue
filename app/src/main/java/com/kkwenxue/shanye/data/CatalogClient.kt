@@ -1,12 +1,13 @@
 package com.kkwenxue.shanye.data
 
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
-import java.util.zip.ZipInputStream
+import java.security.MessageDigest
+import java.util.zip.ZipFile
 
 /** Public catalog client. The prototype intentionally uses HTTP: the relay has no public CA certificate yet. */
 data class CatalogBook(
@@ -32,11 +33,9 @@ data class CatalogContentTask(
     val taskId: String,
     val state: String,
     val message: String? = null,
-    val directUrl: String? = null,
-    val directToken: String? = null,
     val downloadUrl: String? = null
 ) {
-    val done get() = state == "completed" && (directUrl != null || downloadUrl != null)
+    val done get() = state == "completed" && downloadUrl != null
 }
 
 class CatalogClient(private val baseUrl: String = BASE_URL) {
@@ -64,21 +63,41 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
 
     fun status(taskId: String): CatalogContentTask = parseTask(request("/v1/catalog/content/$taskId"))
 
-    /** Try the LAN capability first. If it cannot be reached, ask the catalog to start relay upload. */
-    fun download(task: CatalogContentTask, target: File): File {
-        val bytes = runCatching {
-            if (task.directUrl.isNullOrBlank()) error("没有局域网下载地址")
-            requestBytes(task.directUrl, task.directToken)
-        }.getOrElse {
-            val path = task.downloadUrl ?: "/v1/catalog/content/${task.taskId}/download"
-            requestBytes(baseUrl.trimEnd('/') + path, null)
+    /** Returns false while the relay is preparing the ZIP (HTTP 202). */
+    fun download(task: CatalogContentTask, target: File): Boolean {
+        require(task.done) { "正文尚未打包" }
+        val url = URL("${baseUrl.trimEnd('/')}/v1/catalog/content/${task.taskId}/download")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            connectTimeout = 10_000; readTimeout = 30_000
+            instanceFollowRedirects = false
+            setRequestProperty("Accept", "application/zip")
         }
-        require(bytes.size <= MAX_PACKAGE) { "正文包过大，无法导入" }
-        target.parentFile?.mkdirs(); target.writeBytes(bytes); return target
+        try {
+            val status = connection.responseCode
+            if (status == HttpURLConnection.HTTP_ACCEPTED) return false
+            if (status != HttpURLConnection.HTTP_OK) throw IOException(errorMessage(connection, status, "正文下载"))
+            val length = connection.contentLengthLong
+            require(length <= MAX_PACKAGE) { "正文包过大，无法导入" }
+            var total = 0L
+            connection.inputStream.use { input ->
+                target.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        require(total <= MAX_PACKAGE) { "正文包过大，无法导入" }
+                        output.write(buffer, 0, read)
+                    }
+                }
+            }
+            if (total == 0L || (length >= 0 && total != length)) throw IOException("正文包下载不完整")
+            return true
+        } finally { connection.disconnect() }
     }
 
     private fun request(path: String, method: String = "GET"): JSONObject {
-        val url = if (path.startsWith("http")) path else baseUrl.trimEnd('/') + path
+        val url = baseUrl.trimEnd('/') + path
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method; connectTimeout = 15_000; readTimeout = 180_000
             setRequestProperty("Accept", "application/json")
@@ -87,29 +106,18 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
         return try {
             val c = connection
             val status = c.responseCode
-            val stream = if (status in 200..299) c.inputStream else c.errorStream
-            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (status !in 200..299) error("目录服务 HTTP $status：${body.take(200)}")
-            JSONObject(body)
+            if (status !in 200..299) error(errorMessage(c, status, "目录服务"))
+            c.inputStream.bufferedReader(Charsets.UTF_8).use { JSONObject(it.readText()) }
         } finally { connection.disconnect() }
     }
 
-    private fun requestBytes(url: String, token: String?): ByteArray {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8_000; readTimeout = 180_000
-            if (!token.isNullOrBlank()) setRequestProperty("X-Result-Token", token)
-        }
-        return try {
-            val c = connection
-            val status = c.responseCode
-            if (status !in 200..299) error("下载 HTTP $status")
-            val output = ByteArrayOutputStream()
-            c.inputStream.use { input ->
-                val buffer = ByteArray(64 * 1024)
-                while (true) { val read = input.read(buffer); if (read < 0) break; output.write(buffer, 0, read); require(output.size() <= MAX_PACKAGE) { "正文包过大" } }
-            }
-            output.toByteArray()
-        } finally { connection.disconnect() }
+    private fun errorMessage(connection: HttpURLConnection, status: Int, stage: String): String {
+        val detail = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { reader ->
+            val buffer = CharArray(240)
+            val read = reader.read(buffer)
+            if (read > 0) String(buffer, 0, read).trim() else ""
+        }.orEmpty()
+        return "$stage HTTP $status" + if (detail.isBlank() || detail.startsWith("<")) "" else "：$detail"
     }
 
     companion object {
@@ -122,33 +130,31 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
             lastUpdate = item.optString("last_update_at"), latestChapter = item.optString("latest_chapter"),
             latestChapterId = item.optLong("latest_chapter_id")
         )
-        fun parseTask(item: JSONObject): CatalogContentTask {
-            val direct = item.optJSONObject("direct")
-            return CatalogContentTask(
-                taskId = item.optString("taskId", item.optString("id")),
-                state = item.optString("state", "queued"), message = item.optString("error").ifBlank { null },
-                directUrl = direct?.optString("url")?.ifBlank { null }, directToken = direct?.optString("token")?.ifBlank { null },
-                downloadUrl = item.optString("downloadUrl").ifBlank { null }
-            )
-        }
+        fun parseTask(item: JSONObject) = CatalogContentTask(
+            taskId = item.optString("taskId", item.optString("id")).also {
+                require(it.matches(Regex("[A-Za-z0-9-]{1,80}"))) { "目录服务未返回有效任务编号" }
+            },
+            state = item.optString("state", "queued"), message = item.opt("error") as? String,
+            downloadUrl = item.opt("downloadUrl") as? String,
+        )
     }
 }
 
-/** Extracts the worker's ZIP and uses the existing safe TXT importer. */
+/** Validates the relay ZIP before passing server-split TXT to the reader. */
 object ContentPackageImporter {
-    fun import(packageFile: File, fallbackTitle: String): Book {
-        var text: ByteArray? = null
-        ZipInputStream(packageFile.inputStream().buffered()).use { zip ->
-            while (true) {
-                val entry = zip.nextEntry ?: break
-                if (!entry.isDirectory && entry.name == "book.txt") {
-                    val output = ByteArrayOutputStream(); val buffer = ByteArray(32 * 1024)
-                    while (true) { val n = zip.read(buffer); if (n < 0) break; output.write(buffer, 0, n); require(output.size() <= CatalogClient.MAX_PACKAGE) { "正文包过大" } }
-                    text = output.toByteArray()
-                }
-                zip.closeEntry()
-            }
+    fun import(packageFile: File, source: CatalogBook): Book = ZipFile(packageFile).use { zip ->
+        fun read(name: String, limit: Int): ByteArray {
+            val entry = zip.getEntry(name) ?: error("正文包缺少 $name")
+            require(!entry.isDirectory) { "正文包内文件无效" }
+            return zip.getInputStream(entry).use { BookImporter.readLimited(it, limit) }
         }
-        return BookImporter.parse("$fallbackTitle.txt", text ?: error("正文包缺少 book.txt"))
+        val manifest = JSONObject(read("manifest.json", 32 * 1024).toString(Charsets.UTF_8))
+        require(manifest.getLong("bookId") == source.id) { "正文包与所选书籍不匹配" }
+        val text = read("book.txt", CatalogClient.MAX_PACKAGE)
+        val digest = MessageDigest.getInstance("SHA-256").digest(text).joinToString("") { "%02x".format(it) }
+        require(digest.equals(manifest.getString("sha256"), ignoreCase = true)) { "正文校验失败，请重新下载" }
+        val book = BookImporter.parseCatalogText(source, text)
+        require(book.chapters.size == manifest.getInt("chapters")) { "正文包的章节数量不匹配" }
+        book
     }
 }

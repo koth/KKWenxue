@@ -24,7 +24,7 @@ from server.db import initialize, connect, backup
 from server.jobs import submit, detail, action, claim, release, recover, assert_owner
 from server.presets import create_preset
 from server.worker import Worker, recovery_split_position
-from server.zonos_runtime import generation_seed
+from server.zonos_runtime import LEGACY_SPEECH_PLAN, SPEECH_PLAN, generation_seed
 from tts.common import GPULock, has_spoken_content, utf16_len
 
 
@@ -309,6 +309,23 @@ class ServiceTests(unittest.TestCase):
                 self.request(export={"normalize_loudness": "yes"}),
                 "bad-loudness",
             )
+
+    def test_punctuation_plan_version_keeps_caches_separate(self):
+        request = self.request([self.chapters[0]["id"]])
+        with patch("server.presets.SPEECH_PLAN", LEGACY_SPEECH_PLAN):
+            legacy = submit(self.db, self.settings, request, "legacy-punctuation")
+            self.assertTrue(self.gpu.tick())
+            repeated = submit(self.db, self.settings, request, "reuse-legacy")
+        old = detail(self.db, legacy)
+        self.assertGreater(old["counts"]["completed"], 0, old)
+        self.assertGreater(detail(self.db, repeated)["counts"]["reused"], 0)
+
+        current = submit(self.db, self.settings, request, "new-punctuation")
+        new = detail(self.db, current)
+        self.assertEqual(SPEECH_PLAN, new["config"]["generation"]["speech_plan"])
+        self.assertEqual(LEGACY_SPEECH_PLAN, old["config"]["generation"]["speech_plan"])
+        self.assertNotEqual(old["variant_id"], new["variant_id"])
+        self.assertEqual(0, new["counts"]["reused"])
 
     def test_invalid_segment_does_not_discard_good_outputs(self):
         parts = self.db.execute(

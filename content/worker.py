@@ -1,30 +1,24 @@
-"""Fetch novel text at home and expose LAN-first ZIP results.
-
-The worker keeps the large source text on the home machine.  Relay completion
-messages contain only a short manifest or ZIP capability; the App tries that
-LAN URL first and requests a relay transfer only when the LAN path is not
-reachable.
-"""
+"""Fetch source TXT on the server, split chapters and upload ZIPs to relay."""
 from __future__ import annotations
 
+from contextlib import closing
 import hashlib
 import http.client
-import io
 import json
 import logging
 import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import socket
 import sqlite3
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 import zipfile
 
 log = logging.getLogger("shanye.content")
@@ -43,7 +37,12 @@ DIRECT_URL = os.environ.get("SHANYE_CONTENT_DIRECT_URL", "http://192.168.3.33:17
 DIRECT_BIND = os.environ.get("SHANYE_CONTENT_DIRECT_BIND", "0.0.0.0")
 DIRECT_PORT = int(os.environ.get("SHANYE_CONTENT_DIRECT_PORT", "17873"))
 
-CHAPTER_RE = re.compile(r"(?m)^\s*((?:第[0-9０-９一二三四五六七八九十百千万零〇两兩]{1,16}[章节節回卷部集篇](?:[^\r\n]{0,100})?)|(?:序章|楔子|引子|前言|后记|後記|尾声|尾聲|番外)(?:[^\r\n]{0,80})?)\s*$")
+CHAPTER_RE = re.compile(r"(?m)^[ \t　]*((?:第[0-9０-９一二三四五六七八九十百千万零〇两兩]{1,16}[章节節回卷部集篇][^\r\n]{0,100})|(?:序章|楔子|引子|前言|后记|後記|尾声|尾聲|番外)[^\r\n]{0,80})[ \t　]*$")
+FOOTER_RE = re.compile(r"(?m)^[ \t　]*更多精彩小说")
+HEADER_PREFIXES = ("作者：", "来源：", "网址：", "作者:", "来源:", "网址:")
+MAX_TEXT_BYTES = 64 * 1024 * 1024
+MAX_TEXT_PAGES = 100
+TEXT_FORMAT = 2
 
 
 def db():
@@ -58,6 +57,14 @@ def db():
     con.execute("""CREATE TABLE IF NOT EXISTS results (
         task_id TEXT PRIMARY KEY, token TEXT NOT NULL, path TEXT NOT NULL,
         created_at INTEGER NOT NULL)""")
+    # A matching chapter watermark is insufficient for old, potentially
+    # truncated TXT caches. Keep them on disk, but fetch anew when requested.
+    if "text_format" not in {row["name"] for row in con.execute("PRAGMA table_info(content)")}:
+        try:
+            con.execute("ALTER TABLE content ADD COLUMN text_format INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
+            if "text_format" not in {row["name"] for row in con.execute("PRAGMA table_info(content)")}:
+                raise
     con.commit()
     return con
 
@@ -69,21 +76,48 @@ def decode(raw: bytes) -> str:
         return raw.decode("gb18030", "replace")
 
 
-def fetch_page(book_id: int, page: int) -> bytes:
+def fetch_page(book_id: int, page: int, limit: int) -> bytes:
     request = Request(f"{SOURCE}/txt/?id={book_id}&p={page}", headers={"User-Agent": "shanye-content/1.0", "Accept": "text/plain"})
-    with urlopen(request, timeout=180) as response:
+    with urlopen(request, timeout=45) as response:
         if response.status != 200:
             raise RuntimeError(f"正文 HTTP {response.status}")
-        data = response.read()
-    if data.startswith(b"<!DOCTYPE") or data.startswith(b"<html"):
+        if response.headers.get_content_type() == "text/html":
+            raise RuntimeError("正文接口返回了网页而不是文本")
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise RuntimeError("正文 TXT 超过大小限制")
+    if re.match(rb"(?i)\s*(?:<!doctype|<html)", data.removeprefix(b"\xef\xbb\xbf")):
         raise RuntimeError("正文接口返回了网页而不是文本")
     return data
 
 
+def fetch_page_with_retry(book_id: int, page: int, limit: int, heartbeat) -> bytes:
+    for wait in (0, 1, 3):
+        if wait:
+            time.sleep(wait)
+        heartbeat()
+        try:
+            return fetch_page(book_id, page, limit)
+        except (OSError, http.client.HTTPException) as exc:
+            if isinstance(exc, HTTPError) and exc.code not in (408, 429, 500, 502, 503, 504):
+                raise RuntimeError(f"书源 TXT 第 {page} 页：HTTP {exc.code}") from exc
+            last = exc
+    raise RuntimeError(f"书源 TXT 第 {page} 页抓取失败：{last}") from last
+
+
+def strip_export_page(text: str) -> tuple[str, bool]:
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    footer = FOOTER_RE.search(text)
+    lines = (text[:footer.start()] if footer else text).splitlines()
+    if len(lines) >= 2 and re.fullmatch(r"《[^》]+》", lines[0].strip()) and lines[1].strip().startswith(HEADER_PREFIXES):
+        start = 1
+        while start < len(lines) and lines[start].strip().startswith(HEADER_PREFIXES):
+            start += 1
+        lines = lines[start:]
+    return "\n".join(lines).strip(), footer is not None
+
+
 def split_chapters(text: str) -> list[tuple[str, str]]:
-    # Remove the site footer and retain chapter headings exactly for App import.
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.split(r"\n\s*更多精彩小说", text, maxsplit=1)[0]
     matches = list(CHAPTER_RE.finditer(text))
     if not matches:
         raise RuntimeError("正文中没有识别到章节标题")
@@ -99,40 +133,51 @@ def split_chapters(text: str) -> list[tuple[str, str]]:
     return items
 
 
-def fetch_book(book_id: int, title: str, author: str, latest_chapter_id: int) -> dict:
-    pieces: list[str] = []
-    for page in range(1, 1000):
-        raw = fetch_page(book_id, page)
-        text = decode(raw)
-        # Empty/header-only pages are the site's end marker (about 165 bytes).
-        if page > 1 and (len(raw) < 512 or len(text.strip()) < 100):
-            break
-        if not pieces and text.startswith("《"):
-            # The first page carries a four-line export header; keep metadata in manifest.
-            lines = text.splitlines()
-            while lines and (not lines[0].strip() or lines[0].strip().startswith(("《", "作者", "来源", "网址"))):
-                lines.pop(0)
-            text = "\n".join(lines)
-        pieces.append(text)
-        if len(raw) < 512:
-            break
-    if not pieces:
-        raise RuntimeError("没有下载到正文")
-    text = "\n\n".join(pieces)
-    chapters = split_chapters(text)
+def download_chapters(book_id: int, heartbeat) -> list[tuple[str, str]]:
+    chapters = []
+    seen: set[bytes] = set()
+    remaining = MAX_TEXT_BYTES
+    for page in range(1, MAX_TEXT_PAGES + 1):
+        raw = fetch_page_with_retry(book_id, page, remaining, heartbeat)
+        remaining -= len(raw)
+        text, footer = strip_export_page(decode(raw))
+        if not text and footer and chapters:
+            return chapters
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        if not text or digest in seen:
+            raise RuntimeError(f"书源 TXT 第 {page} 页为空或重复，未保存不完整的正文")
+        seen.add(digest)
+        try:
+            chapters.extend(split_chapters(text))
+        except RuntimeError as exc:
+            raise RuntimeError(f"书源 TXT 第 {page} 页：{exc}") from exc
+    raise RuntimeError("书源 TXT 页数超过限制，未保存不完整的正文")
+
+
+def fetch_book(book_id: int, title: str, author: str, latest_chapter_id: int, heartbeat) -> dict:
+    chapters = download_chapters(book_id, heartbeat)
     canonical = "\n\n".join(f"{heading}\n{body}" for heading, body in chapters) + "\n"
     data = canonical.encode("utf-8")
+    if len(canonical.encode("utf-16-le")) // 2 > 12_000_000 or len(data) > MAX_TEXT_BYTES:
+        raise RuntimeError("正文超出整本导入的大小限制")
     digest = hashlib.sha256(data).hexdigest()
-    path = BOOKS / f"{book_id}.txt"
-    tmp = path.with_suffix(".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(path)
+    path = BOOKS / f"{book_id}-{digest}.txt"
+    if not path.is_file():
+        with tempfile.NamedTemporaryFile(dir=BOOKS, suffix=".tmp", delete=False) as tmp:
+            temporary = Path(tmp.name)
+            try:
+                tmp.write(data)
+                tmp.close()
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
     con = db()
-    con.execute("""INSERT INTO content(book_id,title,author,chapters,chars,sha256,fetched_at,latest_chapter_id,path)
-        VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET title=excluded.title,author=excluded.author,
+    con.execute("""INSERT INTO content(book_id,title,author,chapters,chars,sha256,fetched_at,latest_chapter_id,path,text_format)
+        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET title=excluded.title,author=excluded.author,
         chapters=excluded.chapters,chars=excluded.chars,sha256=excluded.sha256,fetched_at=excluded.fetched_at,
-        latest_chapter_id=excluded.latest_chapter_id,path=excluded.path""",
-        (book_id, title or f"书籍 {book_id}", author or "未知作者", len(chapters), len(canonical), digest, int(time.time()), latest_chapter_id, str(path)))
+        latest_chapter_id=excluded.latest_chapter_id,path=excluded.path,text_format=excluded.text_format
+        WHERE excluded.latest_chapter_id >= content.latest_chapter_id""",
+        (book_id, title or f"书籍 {book_id}", author or "未知作者", len(chapters), len(canonical), digest, int(time.time()), latest_chapter_id, str(path), TEXT_FORMAT))
     con.commit(); con.close()
     return {"bookId": book_id, "title": title, "author": author, "chapters": len(chapters), "chars": len(canonical), "sha256": digest, "path": str(path)}
 
@@ -141,19 +186,44 @@ def content_row(book_id: int):
     con = db(); row = con.execute("SELECT * FROM content WHERE book_id=?", (book_id,)).fetchone(); con.close(); return row
 
 
-def make_pack(book_id: int, version: str) -> tuple[Path, dict]:
+def registered_path(task_id: str) -> Path | None:
+    with closing(db()) as con:
+        row = con.execute("SELECT path FROM results WHERE task_id=?", (task_id,)).fetchone()
+    return Path(row["path"]) if row else None
+
+
+def make_pack(book_id: int, version: str, fetch_task_id: str | None = None) -> tuple[Path, dict]:
     row = content_row(book_id)
-    if not row or not Path(row["path"]).is_file():
+    if fetch_task_id:
+        original = registered_path(fetch_task_id)
+        if not original or not original.is_file():
+            raise RuntimeError(f"书籍 {book_id} 的正文快照已不可用")
+        snapshot = json.loads(original.read_text(encoding="utf-8"))
+        digest = snapshot.get("sha256", "")
+        if snapshot.get("bookId") != book_id or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise RuntimeError("抓取任务正文快照无效")
+        text_path = BOOKS / f"{book_id}-{digest}.txt"
+        if not text_path.is_file() and row and row["sha256"] == digest:
+            text_path = Path(row["path"])  # Old fetch manifests without content-addressed filenames.
+        version = digest
+    else:
+        if not row:
+            raise RuntimeError(f"书籍 {book_id} 正文尚未抓取")
+        snapshot, text_path = row, Path(row["path"])
+    if not text_path.is_file():
         raise RuntimeError(f"书籍 {book_id} 正文尚未抓取")
-    text_path = Path(row["path"])
-    manifest = {"bookId": book_id, "title": row["title"], "author": row["author"], "chapters": row["chapters"], "chars": row["chars"], "sha256": row["sha256"], "version": version}
-    path = PACKS / f"{book_id}-{row['sha256'][:12]}.zip"
+    manifest = {"bookId": book_id, **{key: snapshot[key] for key in ("title", "author", "chapters", "chars", "sha256")}, "version": version}
+    path = PACKS / f"{book_id}-{manifest['sha256']}.zip"
     if not path.is_file():
-        tmp = path.with_suffix(".tmp")
-        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-            z.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, separators=(",", ":")))
-            z.write(text_path, "book.txt")
-        tmp.replace(path)
+        with tempfile.NamedTemporaryFile(dir=PACKS, suffix=".tmp", delete=False) as tmp:
+            temporary = Path(tmp.name)
+        try:
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+                z.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, separators=(",", ":")))
+                z.write(text_path, "book.txt")
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
     return path, manifest
 
 
@@ -233,15 +303,23 @@ def handle(relay: Relay, direct: DirectServer, task: dict):
     payload = task.get("payload") or {}; kind = task.get("kind")
     if kind == "content.fetch":
         book_id = int(payload["bookId"]); row = content_row(book_id)
-        if row and int(row["latest_chapter_id"]) == int(payload.get("latestChapterId") or 0) and Path(row["path"]).is_file():
+        if row and row["text_format"] == TEXT_FORMAT and int(row["latest_chapter_id"]) == int(payload.get("latestChapterId") or 0) and Path(row["path"]).is_file():
             result = {"bookId": book_id, "title": row["title"], "author": row["author"], "chapters": row["chapters"], "chars": row["chars"], "sha256": row["sha256"]}
         else:
-            relay.heartbeat(task, "fetch")
-            result = fetch_book(book_id, payload.get("title", ""), payload.get("author", ""), int(payload.get("latestChapterId") or 0))
+            next_heartbeat = 0.0
+
+            def heartbeat():
+                nonlocal next_heartbeat
+                if time.monotonic() >= next_heartbeat:
+                    relay.heartbeat(task, "fetch-txt")
+                    next_heartbeat = time.monotonic() + min(45, LEASE_SECONDS / 3)
+
+            result = fetch_book(book_id, payload.get("title", ""), payload.get("author", ""), int(payload.get("latestChapterId") or 0), heartbeat)
         manifest = ROOT / f"manifest-{book_id}-{task['id']}.json"; manifest.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
         token = direct.register(task["id"], manifest); relay.complete(task, manifest.name, "application/json", manifest, token)
     elif kind == "content.serve":
-        book_id = int(payload["bookId"]); path, manifest = make_pack(book_id, str(payload.get("version", "")))
+        book_id = int(payload["bookId"])
+        path, _ = make_pack(book_id, str(payload.get("version", "")), payload.get("fetchTaskId"))
         token = direct.register(task["id"], path); relay.complete(task, path.name, "application/zip", path, token)
     else:
         raise RuntimeError(f"不支持的任务类型 {kind}")
@@ -258,9 +336,19 @@ def main():
                 # fetch the task payload separately before locating the local pack.
                 _, full = relay.request("GET", f"/v1/tasks/{transfer['id']}")
                 transfer.update({"kind": full.get("kind"), "payload": full.get("payload")})
-                # transfer result is a serve task; derive the same pack from its payload.
-                payload = transfer.get("payload") or {}; path, _ = make_pack(int(payload["bookId"]), str(payload.get("version", "")))
-                relay.upload_transfer(transfer, path); continue
+                try:
+                    if transfer.get("kind") != "content.serve":
+                        raise RuntimeError("仅正文 ZIP 支持正文中转")
+                    path = registered_path(transfer["id"])
+                    if not path or not path.is_file():
+                        raise RuntimeError("原正文包已不存在，请重新发起导入")
+                    relay.upload_transfer(transfer, path)
+                except Exception as exc:
+                    log.exception("正文中转失败 %s", transfer["id"])
+                    relay.request("POST", f"/v1/tasks/{transfer['id']}/transfer/fail",
+                                  {"worker_id": WORKER_ID, "lease_token": transfer["lease_token"],
+                                   "error": str(exc)[:1000], "retryable": isinstance(exc, OSError)})
+                continue
             task = relay.claim()
             if not task: continue
             try: handle(relay, direct, task)
