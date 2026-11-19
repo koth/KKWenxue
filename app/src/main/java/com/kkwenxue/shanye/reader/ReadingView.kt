@@ -89,6 +89,7 @@ class ReadingView(context:Context):View(context) {
     var onPosition: (PageInfo)->Unit = {}
     var onToggleMenu: ()->Unit = {}
     var onPageTurn: ()->Unit = {}
+    var onPageTurned: (PageInfo)->Unit = {}
     var onTurnStarted: ()->Unit = {}
     var onBoundary: (String)->Unit = {}
     var onSentenceSelected: (SentenceRange?)->Unit = {}
@@ -231,7 +232,7 @@ class ReadingView(context:Context):View(context) {
         progress=0f
         if(complete && target!=null) {
             chapterIndex=target.chapter; pages=target.pages; page=target.index; anchor=pages[page].start
-            publish()
+            publish(turned=true)
             if(direction>0) onPageTurn()
         }
         invalidate()
@@ -301,9 +302,10 @@ class ReadingView(context:Context):View(context) {
         publish()
     }
 
-    private fun publish() {
+    private fun publish(turned: Boolean = false) {
         val p=pages.getOrNull(page) ?: return
         val info=PageInfo(page,pages.size,p.start,p.end,chapterIndex)
+        if (turned) onPageTurned(info)
         val callback=onPosition
         post { callback(info) }
     }

@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
                 return@setContent
             }
             val store = remember { ReaderStore(applicationContext) }
+            DisposableEffect(store) { onDispose(store.observeListeningProgress()) }
             LaunchedEffect(audioLibrary) {
                 AudioLibrary.changes.collect {
                     audioItems = withContext(Dispatchers.IO) { audioLibrary.load(Library.books.toList()) }

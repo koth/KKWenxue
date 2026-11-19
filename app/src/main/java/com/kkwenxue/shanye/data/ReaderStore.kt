@@ -1,8 +1,10 @@
 package com.kkwenxue.shanye.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -31,14 +33,27 @@ data class SentenceComment(
 
 class ReaderStore(context: Context) {
     private val prefs = context.getSharedPreferences("shanye_reader", Context.MODE_PRIVATE)
+    private val audioPrefs = AudioLibrary.playbackPreferences(context)
+    private var listeningRevision by mutableIntStateOf(0)
     var theme by mutableIntStateOf(prefs.getInt("theme", 0)); private set
     var fontSize by mutableIntStateOf(prefs.getInt("fontSize", 20)); private set
     var spacious by mutableStateOf(prefs.getBoolean("spacious", true)); private set
     var serif by mutableStateOf(prefs.getBoolean("serif", true)); private set
     var pageTurnStyle by mutableStateOf(PageTurnStyle.entries.getOrElse(prefs.getInt("pageTurnStyle",0)) {PageTurnStyle.PAPER}); private set
     var pagesRead by mutableIntStateOf(prefs.getInt("pagesRead", 0)); private set
-    var lastBook by mutableStateOf(prefs.getString("lastBook", "mountain") ?: "mountain"); private set
+    private var lastReadBook by mutableStateOf(prefs.getString("lastBook", "mountain") ?: "mountain")
+    private var lastOpenedAt by mutableLongStateOf(prefs.getLong("lastOpenedAt", 0))
+    val lastBook: String
+        get() {
+            listeningRevision
+            val listened = AudioLibrary.lastListenedBook(audioPrefs)
+            return listened?.takeIf {
+                (latestListeningCheckpoint(it)?.updatedAt ?: 0) > lastOpenedAt &&
+                    Library.books.any { book -> book.id == it }
+            } ?: lastReadBook
+        }
     val positions = mutableStateMapOf<String, ReadingPosition>()
+    private val positionTimes = mutableStateMapOf<String, Long>()
     val bookmarks = mutableStateListOf<Bookmark>()
     val comments = mutableStateListOf<SentenceComment>()
 
@@ -48,6 +63,7 @@ class ReaderStore(context: Context) {
                 prefs.getInt("${book.id}.chapter", 0).coerceIn(book.chapters.indices),
                 prefs.getInt("${book.id}.offset", 0).coerceAtLeast(0)
             )
+            positionTimes[book.id] = prefs.getLong("${book.id}.readAt", 0)
         }
         runCatching {
             val array = JSONArray(prefs.getString("bookmarks", "[]"))
@@ -83,11 +99,44 @@ class ReaderStore(context: Context) {
     fun changeScript(bookId: String, value: ChineseScript) {
         prefs.edit().putInt("$bookId.script", value.ordinal).apply()
     }
-    fun open(book: Book) { lastBook = book.id; prefs.edit().putString("lastBook", book.id).apply() }
+    fun open(book: Book) {
+        lastReadBook = book.id
+        lastOpenedAt = System.currentTimeMillis()
+        prefs.edit().putString("lastBook", book.id).putLong("lastOpenedAt", lastOpenedAt).apply()
+    }
     fun savePosition(book: Book, chapter: Int, offset: Int) {
         val position = ReadingPosition(chapter.coerceIn(book.chapters.indices), offset.coerceAtLeast(0))
+        val now = System.currentTimeMillis()
         positions[book.id] = position
-        prefs.edit().putInt("${book.id}.chapter", position.chapter).putInt("${book.id}.offset", position.offset).apply()
+        positionTimes[book.id] = now
+        prefs.edit().putInt("${book.id}.chapter", position.chapter).putInt("${book.id}.offset", position.offset)
+            .putLong("${book.id}.readAt", now).apply()
+    }
+
+    // Keep explicit text navigation independent of audio; the newer checkpoint wins on re-entry.
+    internal fun listeningPosition(book: Book): ListeningCheckpoint? =
+        latestListeningCheckpoint(book.id)?.takeIf { it.updatedAt > (positionTimes[book.id] ?: 0L) }
+
+    fun resumePosition(book: Book): ReadingPosition {
+        listeningPosition(book)?.let { checkpoint ->
+            val index = book.chapters.indexOfFirst { it.id == checkpoint.chapterId }
+            if (index >= 0) return ReadingPosition(index, checkpoint.textOffset.coerceIn(0, book.chapters[index].text.length))
+        }
+        return positions[book.id] ?: ReadingPosition()
+    }
+
+    private fun latestListeningCheckpoint(bookId: String): ListeningCheckpoint? {
+        // Observe audio saves without making the service own the UI's ReaderStore.
+        listeningRevision
+        return AudioLibrary.listeningCheckpoint(audioPrefs, bookId)
+    }
+
+    internal fun observeListeningProgress(): () -> Unit {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (AudioLibrary.isListeningPreference(key)) listeningRevision++
+        }
+        audioPrefs.registerOnSharedPreferenceChangeListener(listener)
+        return { audioPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
     fun countPage() { pagesRead++; prefs.edit().putInt("pagesRead", pagesRead).apply() }
     fun toggleBookmark(value: Bookmark) {
@@ -110,7 +159,7 @@ class ReaderStore(context: Context) {
         prefs.edit().putString("comments", array.toString()).apply()
     }
     fun progress(book: Book): Float {
-        val pos = positions[book.id] ?: ReadingPosition()
+        val pos = resumePosition(book)
         val total = book.chapters.sumOf { it.text.length }
         val done = book.chapters.take(pos.chapter).sumOf { it.text.length } + pos.offset
         return if (total == 0) 0f else (done.toFloat() / total).coerceIn(0f, 1f)

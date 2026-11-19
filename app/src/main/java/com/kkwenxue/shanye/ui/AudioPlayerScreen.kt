@@ -52,6 +52,7 @@ fun AudioPlayerScreen(
     book: Book?, library: AudioLibrary, items: List<AudioChapter>,
     onImported: () -> Unit, onClose: () -> Unit,
     initialChapterIndex: Int? = null, initialTextOffset: Int = 0,
+    resumeArtifactId: String? = null,
     onRead: (AudioChapter, Int) -> Unit
 ) {
     val context = LocalContext.current
@@ -77,14 +78,16 @@ fun AudioPlayerScreen(
     }
     // An explicit reader entry must never fall back to a different chapter's session or audio.
     val displayItem = visible.firstOrNull { it.id == chosenId }
-        ?: if (chapterEntry) initial else active ?: visible.firstOrNull()?.let { library.preferred(visible, it.chapterId) }
+        ?: if (chapterEntry) initial else active ?: library.lastPlayed(visible)
+            ?: visible.firstOrNull()?.let { library.preferred(visible, it.chapterId) }
     val displayBook = book ?: displayItem?.let { item -> Library.books.firstOrNull { it.id == item.bookId } }
     val isActive = displayItem != null && displayItem.id == active?.id
     val isPlaying = isActive && AudioPlayback.playing
     val preparing = isActive && AudioPlayback.preparing
-    var pendingPosition by remember(displayItem?.id) {
+    var pendingPosition by remember(displayItem?.id, isActive) {
         mutableIntStateOf(displayItem?.let {
-            if (!isActive && it.chapterIndex == initialChapterIndex) it.positionFor(initialTextOffset) else library.position(it)
+            if (chapterEntry && !followsPlayback && it.id != resumeArtifactId) it.positionFor(initialTextOffset)
+            else library.position(it)
         } ?: 0)
     }
     var dragging by remember(displayItem?.id) { mutableStateOf<Float?>(null) }

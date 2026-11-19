@@ -2,6 +2,7 @@ package com.kkwenxue.shanye.data
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.SharedPreferences
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.media.MediaMetadataRetriever
@@ -16,6 +17,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class AudioCue(val startMs: Int, val endMs: Int, val start: Int, val end: Int, val text: String)
+
+internal data class ListeningCheckpoint(
+    val artifactId: String, val chapterId: String, val textOffset: Int, val updatedAt: Long
+)
 
 data class AudioChapter(
     val id: String, val bookId: String, val chapterId: String, val chapterIndex: Int,
@@ -41,7 +46,7 @@ data class AudioChapter(
 /** Import the workbench's ZIP contract; GPU service credentials never reach the phone. */
 class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "shanye_audio.db", null, 1) {
     private val root = File(context.filesDir, "audiobooks").apply { mkdirs() }
-    private val prefs = context.getSharedPreferences("shanye_audio", Context.MODE_PRIVATE)
+    private val prefs = playbackPreferences(context)
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE artifacts (id TEXT PRIMARY KEY, book_id TEXT NOT NULL, chapter_id TEXT NOT NULL, manifest TEXT NOT NULL, imported_at INTEGER NOT NULL)")
@@ -70,6 +75,24 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
     fun position(item: AudioChapter): Int = prefs.getInt("position:${item.id}", 0).coerceIn(0, item.durationMs)
     fun savePosition(item: AudioChapter, position: Int) {
         prefs.edit().putInt("position:${item.id}", position.coerceIn(0, item.durationMs)).apply()
+    }
+
+    /** Only the service promotes an actual playback position to the resume checkpoint. */
+    internal fun savePlaybackPosition(item: AudioChapter, position: Int) {
+        val offset = position.coerceIn(0, item.durationMs)
+        val edit = prefs.edit().putInt("position:${item.id}", offset)
+        item.offsetAt(offset)?.let { textOffset ->
+            edit.putString(LAST_LISTENED_BOOK, item.bookId).putString("$LISTENING_PREFIX${item.bookId}",
+                JSONObject().put("artifact", item.id).put("chapter", item.chapterId)
+                    .put("offset", textOffset).put("updatedAt", System.currentTimeMillis()).toString())
+        }
+        edit.apply()
+    }
+
+    fun lastPlayed(items: List<AudioChapter>): AudioChapter? {
+        val bookId = lastListenedBook(prefs) ?: return null
+        val checkpoint = listeningCheckpoint(prefs, bookId) ?: return null
+        return items.firstOrNull { it.id == checkpoint.artifactId && it.bookId == bookId && it.chapterId == checkpoint.chapterId }
     }
 
     /** Only the next chapter in the text catalogue may continue automatically. */
@@ -220,6 +243,21 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
     }
 
     companion object {
+        private const val LAST_LISTENED_BOOK = "lastListenedBook"
+        private const val LISTENING_PREFIX = "listening:"
+        internal fun playbackPreferences(context: Context): SharedPreferences =
+            context.getSharedPreferences("shanye_audio", Context.MODE_PRIVATE)
+        internal fun isListeningPreference(key: String?): Boolean =
+            key == null || key == LAST_LISTENED_BOOK || key.startsWith(LISTENING_PREFIX)
+        internal fun lastListenedBook(prefs: SharedPreferences): String? = prefs.getString(LAST_LISTENED_BOOK, null)
+        internal fun listeningCheckpoint(prefs: SharedPreferences, bookId: String): ListeningCheckpoint? =
+            prefs.getString("$LISTENING_PREFIX$bookId", null)?.let { raw ->
+                runCatching {
+                    val value = JSONObject(raw)
+                    ListeningCheckpoint(value.getString("artifact"), value.getString("chapter"),
+                        value.getInt("offset"), value.getLong("updatedAt"))
+                }.getOrNull()
+            }
         private val importLock = Any()
         private val importChanges = MutableStateFlow(0L)
         val changes = importChanges.asStateFlow()

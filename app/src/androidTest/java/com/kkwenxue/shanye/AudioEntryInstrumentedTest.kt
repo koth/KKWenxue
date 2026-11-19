@@ -101,9 +101,11 @@ class AudioEntryInstrumentedTest {
                     context.getSharedPreferences("shanye_audio",0).edit().apply {
                         book.chapters.forEach { remove("selected:${it.id}") }
                         items.forEach { remove("position:${it.id}") }
+                        remove("listening:${book.id}")
+                        if (AudioLibrary.lastListenedBook(AudioLibrary.playbackPreferences(context)) == book.id) remove("lastListenedBook")
                     }.commit()
                     context.getSharedPreferences("shanye_reader",0).edit()
-                        .remove("${book.id}.chapter").remove("${book.id}.offset").commit()
+                        .remove("${book.id}.chapter").remove("${book.id}.offset").remove("${book.id}.readAt").commit()
                 }
             }
         }

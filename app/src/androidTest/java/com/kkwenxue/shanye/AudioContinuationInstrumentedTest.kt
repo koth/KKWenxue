@@ -13,6 +13,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.kkwenxue.shanye.audio.AudioPlayback
 import com.kkwenxue.shanye.data.*
 import com.kkwenxue.shanye.ui.AudioPlayerScreen
+import com.kkwenxue.shanye.ui.audioTime
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -50,6 +51,16 @@ class AudioContinuationInstrumentedTest {
         while (nodes.isNotEmpty()) {
             val node = nodes.removeFirst()
             if (node.text?.toString() == text) return true
+            repeat(node.childCount) { node.getChild(it)?.let(nodes::add) }
+        }
+        return false
+    }
+    private fun click(description: String): Boolean {
+        val nodes = java.util.ArrayDeque<AccessibilityNodeInfo>()
+        instrumentation.uiAutomation.rootInActiveWindow?.let(nodes::add)
+        while (nodes.isNotEmpty()) {
+            val node = nodes.removeFirst()
+            if (node.contentDescription?.toString() == description && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
             repeat(node.childCount) { node.getChild(it)?.let(nodes::add) }
         }
         return false
@@ -126,7 +137,11 @@ class AudioContinuationInstrumentedTest {
                     context.getSharedPreferences("shanye_audio", 0).edit().apply {
                         items.forEach { remove("position:${it.id}") }
                         book.chapters.forEach { remove("selected:${it.id}") }
+                        remove("listening:${book.id}")
+                        if (AudioLibrary.lastListenedBook(AudioLibrary.playbackPreferences(context)) == book.id) remove("lastListenedBook")
                     }.commit()
+                    context.getSharedPreferences("shanye_reader", 0).edit()
+                        .remove("${book.id}.chapter").remove("${book.id}.offset").remove("${book.id}.readAt").commit()
                     main { Library.books.removeAll { it.id == book.id } }
                 }
             }
@@ -170,8 +185,9 @@ class AudioContinuationInstrumentedTest {
             await("Consecutive completion must advance once more") { AudioPlayback.current?.chapterIndex == 2 && AudioPlayback.playing }
         }
 
-    @Test fun completionContinuesWhileScreenIsLocked() = withAudio { _, _, _, items ->
+    @Test fun completionContinuesWhileScreenIsLocked() = withAudio { _, library, book, items ->
         val first = items.first { it.chapterIndex == 0 }
+        val next = items.first { it.chapterIndex == 1 }
         start(first, 0)
         shell("input keyevent KEYCODE_SLEEP")
         val power = context.getSystemService(PowerManager::class.java)
@@ -181,6 +197,52 @@ class AudioContinuationInstrumentedTest {
         assertFalse(power.isInteractive)
         val before = AudioPlayback.position
         await("Next chapter keeps advancing while locked") { AudioPlayback.position > before + 500 }
+        await("Playback must checkpoint progress without a reader open") { library.position(next) >= 2500 }
+        assertEquals(1, ReaderStore(context).resumePosition(book).chapter)
+    }
+
+    @Test fun stoppedPlaybackRestoresLatestChapterAndTextOffsetWithoutAutoplay() =
+        withAudio(listOf(0, 1)) { activity, library, book, items ->
+            val first = items.single { it.chapterIndex == 0 }
+            val second = items.single { it.chapterIndex == 1 }
+            start(first, 2000)
+            start(second, 7200)
+            main { AudioPlayback.command(context, "pause") }
+            await("Pause should checkpoint the later chapter") { !AudioPlayback.playing && library.position(second) >= 7000 }
+            main { AudioPlayback.command(context, "stop") }
+            await("Media service should be gone before reopening") { AudioPlayback.current == null }
+            val saved = library.position(second)
+            assertTrue("Other chapters retain their own time", library.position(first) in 1900 until saved)
+
+            // The underlying home screen should already show updated progress, without recreation.
+            await("Continue reading should show the chapter last heard") { hasText("第2章 · ${second.title}") }
+            val restored = ReaderStore(context)
+            assertEquals(book.id, restored.lastBook)
+            assertEquals(ReadingPosition(1, second.offsetAt(saved)!!), restored.resumePosition(book))
+            activity.recreate()
+            activity.onActivity { host -> host.setContent { MaterialTheme {
+                AudioPlayerScreen(null, library, items, {}, {}, onRead = { _, _ -> })
+            } } }
+            await("The cold player must display the later chapter at its saved time") {
+                hasText(second.title) && hasText(audioTime(saved))
+            }
+            assertNull("Opening the player must not start playback", AudioPlayback.current)
+            await("Resume should be offered") { click("播放听书") }
+            await("Resume must use the saved chapter and time") {
+                AudioPlayback.current?.id == second.id && AudioPlayback.playing && AudioPlayback.position >= saved
+            }
+        }
+
+    @Test fun stoppingPausedAudioDoesNotSupersedeNewerManualReading() = withAudio { _, library, book, items ->
+        val later = items.single { it.chapterIndex == 1 }
+        start(later, 6700)
+        main { AudioPlayback.command(context, "pause") }
+        await("Audio must pause and save before manual navigation") { !AudioPlayback.playing && library.position(later) >= 6500 }
+        main { ReaderStore(context).savePosition(book, 2, 4) }
+        main { AudioPlayback.command(context, "stop") }
+        await("Paused audio must stop") { AudioPlayback.current == null }
+        assertEquals(ReadingPosition(2, 4), ReaderStore(context).resumePosition(book))
+        assertEquals(later.id, library.lastPlayed(items)?.id)
     }
 
     @Test fun chapterEndTimerStopsInsteadOfContinuing() = withAudio { _, _, _, items ->

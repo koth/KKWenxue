@@ -4,14 +4,26 @@ import android.content.Intent
 import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.activity.compose.setContent
+import androidx.compose.material3.MaterialTheme
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
+import com.kkwenxue.shanye.data.AudioLibrary
+import com.kkwenxue.shanye.data.Book
+import com.kkwenxue.shanye.data.Chapter
+import com.kkwenxue.shanye.data.ReaderStore
+import com.kkwenxue.shanye.reader.ReadingView
+import com.kkwenxue.shanye.ui.ReaderScreen
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -107,6 +119,68 @@ class ReaderSystemBarsTest {
         }
         MotionEvent.obtain(time, time + 60, MotionEvent.ACTION_UP, x, y, 0).also {
             instrumentation.sendPointerSync(it); it.recycle()
+        }
+    }
+
+    @Test fun clearingSentenceSelectionByButtonOrPageTurnKeepsReaderUsable() {
+        val context = instrumentation.targetContext
+        val book = Book("selection-test", "选句测试", "", "", "", "", 0,
+            listOf(Chapter("selection-test-1", "第一章", "这是用来验证取消选择的句子。\n\n".repeat(180))))
+        fun findReader(view: View): ReadingView? {
+            if (view is ReadingView) return view
+            if (view is ViewGroup) repeat(view.childCount) { findReader(view.getChildAt(it))?.let { return it } }
+            return null
+        }
+        AudioLibrary(context).use { library ->
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                lateinit var activity: MainActivity
+                scenario.onActivity { host ->
+                    activity = host
+                    val store = ReaderStore(context)
+                    host.setContent { MaterialTheme { ReaderScreen(book, store, library, emptyList(), {}, {}) } }
+                }
+                lateinit var reader: ReadingView
+                await("Reader is laid out") {
+                    mainBoolean {
+                        val view = findReader(activity.window.decorView)
+                        if (view != null && view.width > 0 && view.height > 0) {
+                            reader = view
+                            true
+                        } else false
+                    }
+                }
+                fun press(xFraction: Float, duration: Long) {
+                    val down = SystemClock.uptimeMillis()
+                    fun send(action: Int) = scenario.onActivity {
+                        val y = 206f * reader.resources.displayMetrics.density
+                        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, reader.width * xFraction, y, 0)
+                        try { reader.dispatchTouchEvent(event) } finally { event.recycle() }
+                    }
+                    send(MotionEvent.ACTION_DOWN)
+                    if (duration > 0) SystemClock.sleep(duration)
+                    send(MotionEvent.ACTION_UP)
+                }
+                fun selectSentence() {
+                    press(.5f, ViewConfiguration.getLongPressTimeout().toLong() + 150)
+                    await("Long press shows sentence actions") { hasText("已选中一句") }
+                }
+
+                selectSentence()
+                await("Cancel selection is clickable") { click("取消选择") }
+                await("Cancel clears the sentence actions") { !hasText("已选中一句") }
+                selectSentence()
+                press(.92f, 0)
+                await("Turning the page clears the sentence actions") { !hasText("已选中一句") }
+                await("Reader menu still works after deselection") {
+                    if (hasText("目录")) true
+                    else {
+                        // A tap while the page is still animating is intentionally ignored.
+                        press(.5f, 0)
+                        instrumentation.waitForIdleSync()
+                        hasText("目录")
+                    }
+                }
+            }
         }
     }
 

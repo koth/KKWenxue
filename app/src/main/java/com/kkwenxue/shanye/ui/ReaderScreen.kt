@@ -35,7 +35,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItems:List<AudioChapter>,onAudioImported:()->Unit,onExit:()->Unit) {
     val context=LocalContext.current
-    val initial=remember { store.positions[book.id] ?: ReadingPosition() }
+    val initial=remember { store.resumePosition(book) }
     var chapter by remember { mutableIntStateOf(initial.chapter) }
     var jumpOffset by remember { mutableIntStateOf(initial.offset) }
     var jumpToken by remember { mutableIntStateOf(0) }
@@ -57,7 +57,8 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
     val existingBookmark=store.bookmarks.firstOrNull { it.bookId==book.id && it.chapter==chapter && it.offset>=info.start && it.offset<info.end }
     val bookmark=existingBookmark ?: Bookmark(book.id,chapter,info.start,book.chapters[chapter].text.substring(info.start.coerceAtMost(book.chapters[chapter].text.length)).trim().replace("\n"," ").take(80))
     val bookmarked=existingBookmark!=null
-    val selectedComment = selectedSentence?.let { store.commentFor(book.id, chapter, it) }
+    val selection = selectedSentence
+    val selectedComment = selection?.let { store.commentFor(book.id, chapter, it) }
     LaunchedEffect(Unit) { delay(4200); hint=false }
     LaunchedEffect(toast) { if(toast.isNotEmpty()) { delay(1800); toast="" } }
     LaunchedEffect(jumpToken) { reader.goToOffset(jumpOffset) }
@@ -71,15 +72,27 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
         }
     }
     BackHandler((sheet!=null && sheet!="audio") || controls) { if(sheet!=null) sheet=null else controls=false }
-    fun jump(index:Int,offset:Int=0) { followAudio=false; chapter=index; jumpOffset=offset; jumpToken++; sheet=null; controls=false }
+    fun jump(index:Int,offset:Int=0) {
+        followAudio=false; chapter=index; jumpOffset=offset; jumpToken++; sheet=null; controls=false
+        store.savePosition(book,index,offset)
+    }
     LaunchedEffect(sheet, chapter) {
         if (sheet == "contents" && book.chapters.isNotEmpty()) {
             contentsState.scrollToItem(chapter.coerceIn(book.chapters.indices))
         }
     }
     if (sheet == "audio") {
+        // Capture the entry page once: background following may change chapters while the player is open.
+        val entryChapter = remember { chapter }
+        val entryPage = remember { info }
+        val resumeArtifact = remember {
+            store.listeningPosition(book)?.takeIf {
+                it.chapterId == book.chapters[entryChapter].id && it.textOffset >= entryPage.start &&
+                    (it.textOffset < entryPage.end || it.textOffset == entryPage.end && entryPage.index == entryPage.count - 1)
+            }?.artifactId
+        }
         AudioPlayerScreen(book,audioLibrary,audioItems,onAudioImported,{sheet=null},
-            initialChapterIndex=chapter,initialTextOffset=info.start,onRead={item,offset ->
+            initialChapterIndex=entryChapter,initialTextOffset=entryPage.start,resumeArtifactId=resumeArtifact,onRead={item,offset ->
             jump(item.chapterIndex,offset)
             followAudio=true
         })
@@ -91,10 +104,10 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
             view.onPosition={ page ->
                 chapter=page.chapter
                 info=page
-                store.savePosition(book,page.chapter,page.start)
             }
             view.onToggleMenu={ controls=!controls; hint=false }
             view.onPageTurn={ store.countPage() }
+            view.onPageTurned={ page -> store.savePosition(book,page.chapter,page.start) }
             view.onTurnStarted={controls=false; hint=false; followAudio=false}
             view.onBoundary={toast=it}
             view.onSentenceSelected={ sentence ->
@@ -104,11 +117,14 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
             view.configure(book,chapter,jumpOffset,store.fontSize,store.spacious,store.serif,colors.ink.toArgb(),colors.muted.toArgb(),colors.paper.toArgb(),store.pageTurnStyle,script)
             view.setAudioCue(activeAudio?.chapterIndex ?: -1,audioCue?.start ?: 0,audioCue?.end ?: 0)
         })
-        AnimatedVisibility(selectedSentence != null && !controls,Modifier.align(Alignment.BottomCenter),enter=fadeIn(),exit=fadeOut()) {
+        // Remove the actions immediately when the selection clears; an exit animation
+        // would keep them composed and potentially clickable without a selected sentence.
+        if (selection != null && !controls) {
             SentenceActionBar(
-                sentence=selectedSentence!!,
+                sentence=selection,
                 comment=selectedComment,
                 colors=colors,
+                modifier=Modifier.align(Alignment.BottomCenter),
                 onComment={sheet="comment"},
                 onClear={selectedSentence=null; reader.clearSelection()}
             )
@@ -180,7 +196,7 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
             when(sheet) {
                 "settings" -> ReaderSettings(store,colors)
                 "comment" -> {
-                    selectedSentence?.let { sentence ->
+                    selection?.let { sentence ->
                         CommentEditor(
                             sentence=sentence,
                             existing=selectedComment,
@@ -233,11 +249,12 @@ private fun SentenceActionBar(
     sentence: SentenceRange,
     comment: SentenceComment?,
     colors: ReaderColors,
+    modifier: Modifier,
     onComment: () -> Unit,
     onClear: () -> Unit
 ) {
     Column(
-        Modifier.fillMaxWidth().padding(start=16.dp,end=16.dp,bottom=20.dp)
+        modifier.fillMaxWidth().padding(start=16.dp,end=16.dp,bottom=20.dp)
             .clip(RoundedCornerShape(16.dp)).background(colors.panel)
             .padding(start=18.dp,end=12.dp,top=14.dp,bottom=12.dp)
     ) {

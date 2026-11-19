@@ -72,6 +72,8 @@ class AudioPlaybackService : Service() {
     private var focusDucked = false
     private var playWhenReady = true
     private var savedAt = 0L
+    private var lastSavedPosition: Int? = null
+    private var seeking = false
     private var sleepAtElapsed = 0L
     private var sleepAtChapterEnd = false
     private val noisy = object : BroadcastReceiver() {
@@ -79,8 +81,8 @@ class AudioPlaybackService : Service() {
     }
     private val ticker = object : Runnable {
         override fun run() {
-            if (player != null && !AudioPlayback.preparing) {
-                AudioPlayback.position = (player?.currentPosition ?: 0).coerceAtMost(AudioPlayback.current?.durationMs ?: Int.MAX_VALUE)
+            if (AudioPlayback.playing) {
+                refreshPosition()
                 if (SystemClock.elapsedRealtime() - savedAt > 5000) save()
             }
             if (sleepAtElapsed > 0L) {
@@ -165,8 +167,11 @@ class AudioPlaybackService : Service() {
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
 
     private fun play(item: AudioChapter, offset: Int) {
+        refreshPosition()
         save()
         player?.release()
+        lastSavedPosition = null
+        seeking = false
         AudioPlayback.current = item
         AudioPlayback.position = offset.coerceIn(0, item.durationMs)
         AudioPlayback.playing = false
@@ -187,9 +192,10 @@ class AudioPlaybackService : Service() {
                 AudioPlayback.preparing = false
                 setPlayerVolume(if (focusDucked) .18f else 1f)
                 applySpeed(AudioPlayback.speed)
-                seek(AudioPlayback.position)
+                if (AudioPlayback.position > 0) seek(AudioPlayback.position, persist = false)
                 if (playWhenReady) resume() else publish()
             }
+            media.setOnSeekCompleteListener { if (player === it) seeking = false }
             media.setOnCompletionListener {
                 if (player === media) completeChapter(item)
             }
@@ -245,6 +251,7 @@ class AudioPlaybackService : Service() {
         if (AudioPlayback.position >= (AudioPlayback.current?.durationMs ?: 0)) seek(0)
         player?.start()
         AudioPlayback.playing = true
+        save()
         AudioPlayback.error = null
         resumeAfterFocus = false
         startForeground(NOTIFICATION, notification())
@@ -256,7 +263,7 @@ class AudioPlaybackService : Service() {
         resumeAfterFocus = false
         if (!AudioPlayback.preparing && player != null) {
             player?.pause()
-            AudioPlayback.position = player?.currentPosition ?: AudioPlayback.position
+            refreshPosition()
         }
         AudioPlayback.playing = false
         if (abandon) audio.abandonAudioFocusRequest(focus)
@@ -265,13 +272,15 @@ class AudioPlaybackService : Service() {
         stopForeground(STOP_FOREGROUND_DETACH)
     }
 
-    private fun seek(position: Int) {
+    private fun seek(position: Int, persist: Boolean = true) {
         val item = AudioPlayback.current ?: return
+        val media = player ?: return
         if (AudioPlayback.preparing) return
         val target = position.coerceIn(0, item.durationMs)
-        player?.seekTo(target.toLong(), MediaPlayer.SEEK_CLOSEST)
+        seeking = true
+        media.seekTo(target.toLong(), MediaPlayer.SEEK_CLOSEST)
         AudioPlayback.position = target
-        save()
+        if (persist) save()
         publish()
     }
 
@@ -317,9 +326,20 @@ class AudioPlaybackService : Service() {
         publish()
     }
 
+    private fun refreshPosition() {
+        if (!AudioPlayback.playing || seeking) return
+        val item = AudioPlayback.current ?: return
+        player?.let { AudioPlayback.position = it.currentPosition.coerceIn(0, item.durationMs) }
+    }
+
     private fun save() {
-        AudioPlayback.current?.let { library.savePosition(it, AudioPlayback.position) }
+        val item = AudioPlayback.current ?: return
+        if (player == null || AudioPlayback.preparing) return
         savedAt = SystemClock.elapsedRealtime()
+        val position = AudioPlayback.position
+        if (lastSavedPosition == position) return
+        library.savePlaybackPosition(item, position)
+        lastSavedPosition = position
     }
 
     private fun fail() {
@@ -358,6 +378,7 @@ class AudioPlaybackService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDestroy() {
+        refreshPosition()
         save()
         handler.removeCallbacks(ticker)
         unregisterReceiver(noisy)

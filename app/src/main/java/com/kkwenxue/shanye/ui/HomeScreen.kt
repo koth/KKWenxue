@@ -126,7 +126,7 @@ private fun Discover(store: ReaderStore, onOpen: (Book)->Unit,onAll:()->Unit,onS
                 Spacer(Modifier.height(8.dp))
                 Text(featured.title,fontFamily=Serif,fontSize=21.sp,color=Ink,fontWeight=FontWeight.SemiBold)
                 Text(featured.author+" 著",Modifier.padding(top=6.dp),fontSize=11.sp,color=Color(0xFF7A8275))
-                val pos=store.positions[featured.id] ?: ReadingPosition()
+                val pos=store.resumePosition(featured)
                 Text("第${pos.chapter+1}章 · "+featured.chapters[pos.chapter].title,Modifier.padding(top=12.dp),fontSize=10.sp,color=Color(0xFF7A8275),maxLines=1)
                 Spacer(Modifier.height(7.dp))
                 LinearProgressIndicator(progress={store.progress(featured)},modifier=Modifier.fillMaxWidth().height(2.dp),color=Accent,trackColor=Color(0xFFD5D9CD),drawStopIndicator={})
