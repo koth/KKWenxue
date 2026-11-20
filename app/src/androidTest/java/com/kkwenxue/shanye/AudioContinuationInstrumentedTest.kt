@@ -1,6 +1,7 @@
 package com.kkwenxue.shanye
 
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.os.SystemClock
@@ -13,6 +14,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.kkwenxue.shanye.audio.AudioPlayback
 import com.kkwenxue.shanye.data.*
 import com.kkwenxue.shanye.ui.AudioPlayerScreen
+import com.kkwenxue.shanye.ui.ReaderScreen
 import com.kkwenxue.shanye.ui.audioTime
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,25 +47,31 @@ class AudioContinuationInstrumentedTest {
     private fun shell(command: String) {
         ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command)).use { it.readBytes() }
     }
-    private fun hasText(text: String): Boolean {
+    private fun findNode(label: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         val nodes = java.util.ArrayDeque<AccessibilityNodeInfo>()
         instrumentation.uiAutomation.rootInActiveWindow?.let(nodes::add)
         while (nodes.isNotEmpty()) {
             val node = nodes.removeFirst()
-            if (node.text?.toString() == text) return true
+            if (label(node)) return node
             repeat(node.childCount) { node.getChild(it)?.let(nodes::add) }
         }
-        return false
+        return null
     }
-    private fun click(description: String): Boolean {
-        val nodes = java.util.ArrayDeque<AccessibilityNodeInfo>()
-        instrumentation.uiAutomation.rootInActiveWindow?.let(nodes::add)
-        while (nodes.isNotEmpty()) {
-            val node = nodes.removeFirst()
-            if (node.contentDescription?.toString() == description && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
-            repeat(node.childCount) { node.getChild(it)?.let(nodes::add) }
+    private fun hasText(text: String) = findNode { it.text?.toString() == text } != null
+    private fun click(label: String): Boolean {
+        var node = findNode { it.text?.toString() == label || it.contentDescription?.toString() == label }
+        while (node != null && !node.isClickable) node = node.parent
+        return node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+    }
+    private fun showReaderMenu() {
+        val bounds = Rect()
+        await("Original text must be visible") {
+            val reader = findNode { it.contentDescription?.startsWith("小说正文。") == true }
+            reader?.getBoundsInScreen(bounds)
+            reader != null && !bounds.isEmpty
         }
-        return false
+        shell("input tap ${bounds.centerX()} ${bounds.centerY()}")
+        await("Reader menu must open") { hasText("目录") }
     }
     private fun wave(): ByteArray {
         val samples = 8000 * duration / 1000
@@ -183,7 +191,56 @@ class AudioContinuationInstrumentedTest {
             // Continue a second time without a new play request.
             main { AudioPlayback.command(context, "seek", duration - 700) }
             await("Consecutive completion must advance once more") { AudioPlayback.current?.chapterIndex == 2 && AudioPlayback.playing }
+            var resumeChapter = -1
+            main { resumeChapter = ReaderStore(context).resumePosition(book).chapter }
+            assertEquals("New chapter must be checkpointed without waiting for the ticker", 2, resumeChapter)
         }
+
+    private fun returnsToListeningPosition(stopBeforeReturn: Boolean) =
+        withAudio { activity, library, book, items ->
+            val first = items.single { it.chapterIndex == 0 }
+            val last = items.single { it.chapterIndex == 2 }
+            start(first, 0)
+            val store = ReaderStore(context)
+            activity.onActivity { host ->
+                host.setContent { MaterialTheme { ReaderScreen(book, store, library, items, {}) {} } }
+            }
+
+            showReaderMenu()
+            await("Text contents should open") { click("目录") }
+            await("Choosing the text chapter disables automatic following") { click(first.title) }
+            await("The text position was saved") { store.positions[book.id] == ReadingPosition(0, 0) }
+            showReaderMenu()
+            await("Open the reader's player") { click("听书") }
+            await("Player must be visible") { findNode { it.contentDescription?.toString() == "收起播放器" } != null }
+
+            repeat(2) { index ->
+                main { AudioPlayback.command(context, "seek", duration - 700) }
+                await("Audio must automatically advance to chapter ${index + 2}") {
+                    AudioPlayback.current?.chapterIndex == index + 1 && AudioPlayback.playing
+                }
+            }
+            main { AudioPlayback.command(context, "seek", 5000) }
+            await("Player should be several seconds into the latest chapter") { AudioPlayback.position >= 5600 }
+
+            if (stopBeforeReturn) {
+                main { AudioPlayback.command(context, "stop") }
+                await("Playback must be stopped while the player is still open") { AudioPlayback.current == null }
+                activity.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            } else {
+                await("Collapse the player while it is still running") { click("收起播放器") }
+            }
+            showReaderMenu()
+            assertTrue("Returning should display the last chapter heard, not the original text page", hasText(last.title))
+            assertEquals("The automatic handoff must not overwrite manual progress", ReadingPosition(0, 0), store.positions[book.id])
+            val saved = library.position(last)
+            assertTrue("Returning must checkpoint the latest audio, even between ticker saves", saved >= 5600)
+            assertEquals(ReadingPosition(2, last.offsetAt(saved)!!), ReaderStore(context).resumePosition(book))
+        }
+
+    @Test fun collapsingPlayerJumpsToLatestChapterAfterManualTextNavigation() = returnsToListeningPosition(false)
+
+    @Test fun backFromStoppedPlayerUsesLatestPersistedChapter() = returnsToListeningPosition(true)
 
     @Test fun completionContinuesWhileScreenIsLocked() = withAudio { _, library, book, items ->
         val first = items.first { it.chapterIndex == 0 }

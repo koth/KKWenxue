@@ -27,10 +27,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kkwenxue.shanye.data.*
 import java.time.LocalDate
+import java.time.Instant
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -42,7 +46,12 @@ fun IconAction(name: String, label: String, tint: Color = Ink, onClick: () -> Un
 }
 
 @Composable
-fun HomeScreen(store: ReaderStore, onOpen: (Book) -> Unit, onBookmark: (Bookmark) -> Unit, onAudio: () -> Unit) {
+fun HomeScreen(store: ReaderStore, onOpen: (Book) -> Unit, onBookmark: (Bookmark) -> Unit, onAudio: () -> Unit,
+    onSync: () -> Unit = {}, onlineStatuses: Map<String, OnlineSyncStatus> = emptyMap(),
+    syncSettings: OnlineSyncSettings = OnlineSyncSettings(true, false),
+    onSyncSettings: (OnlineSyncSettings) -> Unit = {}, onCancelSync: (String) -> Unit = {},
+    onRetrySync: (Book, OnlineUpdatePlan?) -> Unit = { _, _ -> },
+    onPostponeSync: (Book, OnlineUpdatePlan) -> Unit = { _, _ -> }, onRollback: (Book) -> Unit = {}) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var searching by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -70,7 +79,8 @@ fun HomeScreen(store: ReaderStore, onOpen: (Book) -> Unit, onBookmark: (Bookmark
         Box(Modifier.weight(1f)) {
             when(tab) {
                 0 -> Discover(store,onOpen,onAll={tab=1},onSearch={searching=true; tab=1})
-                1 -> Shelf(context,store,onOpen,searching,query,{searching=!searching},{query=it},
+                1 -> Shelf(context,store,onOpen,searching,query,{searching=!searching},{query=it}, onSync, onlineStatuses,
+                    syncSettings, onSyncSettings, onCancelSync, onRetrySync, onPostponeSync, onRollback,
                     onImport={importFile.launch(arrayOf("text/plain", "application/epub+zip", "application/octet-stream"))})
                 else -> Profile(store,onBookmark)
             }
@@ -127,7 +137,8 @@ private fun Discover(store: ReaderStore, onOpen: (Book)->Unit,onAll:()->Unit,onS
                 Text(featured.title,fontFamily=Serif,fontSize=21.sp,color=Ink,fontWeight=FontWeight.SemiBold)
                 Text(featured.author+" 著",Modifier.padding(top=6.dp),fontSize=11.sp,color=Color(0xFF7A8275))
                 val pos=store.resumePosition(featured)
-                Text("第${pos.chapter+1}章 · "+featured.chapters[pos.chapter].title,Modifier.padding(top=12.dp),fontSize=10.sp,color=Color(0xFF7A8275),maxLines=1)
+                Text(if (store.needsRelocation(featured)) "原文已变更，请重新定位" else "第${pos.chapter+1}章 · "+featured.chapters[pos.chapter].title,
+                    Modifier.padding(top=12.dp),fontSize=10.sp,color=Color(0xFF7A8275),maxLines=1)
                 Spacer(Modifier.height(7.dp))
                 LinearProgressIndicator(progress={store.progress(featured)},modifier=Modifier.fillMaxWidth().height(2.dp),color=Accent,trackColor=Color(0xFFD5D9CD),drawStopIndicator={})
                 Row(Modifier.fillMaxWidth().padding(top=12.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -172,7 +183,10 @@ private fun Discover(store: ReaderStore, onOpen: (Book)->Unit,onAll:()->Unit,onS
 }
 
 @Composable
-private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(Book)->Unit,searching:Boolean,query:String,onSearch:()->Unit,onQuery:(String)->Unit,onImport:()->Unit) {
+private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(Book)->Unit,searching:Boolean,query:String,onSearch:()->Unit,onQuery:(String)->Unit,onSync:()->Unit,onlineStatuses: Map<String, OnlineSyncStatus>,
+    syncSettings: OnlineSyncSettings, onSyncSettings: (OnlineSyncSettings) -> Unit, onCancelSync: (String) -> Unit,
+    onRetrySync: (Book, OnlineUpdatePlan?) -> Unit, onPostponeSync: (Book, OnlineUpdatePlan) -> Unit,
+    onRollback: (Book) -> Unit, onImport:()->Unit) {
     val catalog = remember { CatalogClient() }
     var network by rememberSaveable { mutableStateOf(false) }
     var remoteResults by remember { mutableStateOf<List<CatalogBook>>(emptyList()) }
@@ -180,6 +194,10 @@ private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(B
     var remoteError by remember { mutableStateOf<String?>(null) }
     var selectedRemote by remember { mutableStateOf<CatalogBook?>(null) }
     var importingRemote by remember { mutableStateOf(false) }
+    var showSyncSettings by rememberSaveable { mutableStateOf(false) }
+    var pendingPlan by remember { mutableStateOf<Pair<Book, OnlineUpdatePlan>?>(null) }
+    var pendingRollback by remember { mutableStateOf<Book?>(null) }
+    var legacyToLink by remember { mutableStateOf<Book?>(null) }
     val remoteScope = rememberCoroutineScope()
     LaunchedEffect(network, query) {
         if (!network || query.trim().length < 1) { remoteResults = emptyList(); remoteError = null; remoteLoading = false; return@LaunchedEffect }
@@ -194,13 +212,17 @@ private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(B
         Row(Modifier.fillMaxWidth().padding(start=24.dp,end=14.dp,top=22.dp),verticalAlignment=Alignment.CenterVertically) {
             Text("我的书架",fontFamily=Serif,fontSize=28.sp,color=Ink,fontWeight=FontWeight.Medium)
             Spacer(Modifier.weight(1f))
+            IconAction("refresh", "检查在线更新", onClick=onSync)
             TextButton(onClick=onImport) {
                 Glyph("plus",Accent,size=16.dp)
                 Text("导入",Modifier.padding(start=5.dp),fontSize=12.sp,color=Accent)
             }
             IconAction(if(searching) "close" else "search","搜索书架",onClick=onSearch)
         }
-        Text("${Library.books.size} 本书 · 支持导入 TXT / EPUB",Modifier.padding(start=24.dp,top=8.dp,bottom=24.dp),fontSize=12.sp,color=Muted)
+        Row(Modifier.fillMaxWidth().padding(horizontal=24.dp), verticalAlignment=Alignment.CenterVertically) {
+            Text("${Library.books.size} 本书 · 支持导入 TXT / EPUB",Modifier.weight(1f),fontSize=12.sp,color=Muted)
+            TextButton(onClick={ showSyncSettings = true }) { Text("更新设置") }
+        }
         if(searching) {
             OutlinedTextField(query,onQuery,Modifier.fillMaxWidth().padding(start=24.dp,end=24.dp,bottom=18.dp),placeholder={Text("搜索书名、作者或类型",fontSize=13.sp)},singleLine=true,shape=RoundedCornerShape(12.dp),keyboardOptions=KeyboardOptions(imeAction=ImeAction.Search),colors=OutlinedTextFieldDefaults.colors(focusedBorderColor=Accent,unfocusedBorderColor=Rule))
             Row(Modifier.padding(horizontal=24.dp).fillMaxWidth(), horizontalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -235,6 +257,7 @@ private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(B
         LazyColumn(contentPadding=PaddingValues(start=24.dp,end=24.dp,bottom=24.dp),verticalArrangement=Arrangement.spacedBy(22.dp)) {
             if(books.isEmpty()) item { Text("没有找到这本书，换个词试试。",Modifier.padding(vertical=32.dp),color=Muted,fontSize=14.sp) }
             items(books,key={it.id}) { book ->
+                Column {
                 Row(Modifier.fillMaxWidth().clickable {onOpen(book)},verticalAlignment=Alignment.CenterVertically) {
                     BookCover(book,Modifier.width(80.dp).height(118.dp))
                     Column(Modifier.weight(1f).padding(start=20.dp)) {
@@ -246,22 +269,206 @@ private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(B
                         Text(book.subtitle,Modifier.padding(top=12.dp),fontSize=11.sp,color=Muted,maxLines=1)
                         Row(Modifier.padding(top=15.dp),verticalAlignment=Alignment.CenterVertically) {
                             Box(Modifier.size(4.dp).background(Color(0xFF8B9C7D),CircleShape))
-                            Text("已离线",Modifier.padding(start=5.dp),fontSize=9.sp,color=Color(0xFF819175))
+                            Text(if (book.remoteBookId != null) "已关联在线书库" else "已离线",
+                                Modifier.padding(start=5.dp),fontSize=9.sp,color=Color(0xFF819175))
                             Spacer(Modifier.weight(1f))
                             Text(if(store.progress(book)==0f) "未开始" else "已读 ${(store.progress(book)*100).toInt()}%",fontSize=10.sp,color=Accent)
                         }
                     }
+                }
+                if (book.remoteBookId != null) {
+                    OnlineShelfStatus(onlineStatuses[book.id] ?: OnlineSyncStatus("idle"),
+                        onCancel={ onCancelSync(book.id) }, onRetry={ onRetrySync(book, null) },
+                        onPlan={ pendingPlan = book to it }, onRollback={ pendingRollback = book })
+                } else if (book.isLegacyOnlineImport) {
+                    LegacyOnlineAction(Library.books.any { it.legacyBookId == book.id }) { legacyToLink = book }
+                }
                 }
             }
         }
         }
     }
     selectedRemote?.let { item ->
+        val existing = Library.books.firstOrNull { it.remoteBookId == item.id && it.remoteSource == "catalog" }
+        if (existing != null) {
+            AlertDialog(onDismissRequest={ selectedRemote = null }, title={ Text(existing.title) },
+                text={ Text("这本书已经在书架上。") },
+                confirmButton={ TextButton(onClick={ selectedRemote = null; onOpen(existing) }) { Text("打开本地版本") } })
+        } else {
         CatalogBookDialog(item, context, catalog, importingRemote,
             onDismiss={ if (!importingRemote) selectedRemote = null },
             onImported={ book -> Library.addImported(book); importingRemote = false; selectedRemote = null; onOpen(book) },
             setImporting={ importingRemote = it })
+        }
     }
+    if (showSyncSettings) AlertDialog(onDismissRequest={ showSyncSettings = false },
+        title={ Text("在线书籍更新") },
+        text={ Column {
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                Text("自动下载新增章节", Modifier.weight(1f))
+                Switch(syncSettings.automatic, { onSyncSettings(syncSettings.copy(automatic=it)) })
+            }
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                Text("仅在不限流量网络下载", Modifier.weight(1f))
+                Switch(syncSettings.unmeteredOnly, { onSyncSettings(syncSettings.copy(unmeteredOnly=it)) })
+            }
+            Text("暂停下载不影响检查更新和离线阅读。", fontSize=12.sp, color=Muted)
+        } },
+        confirmButton={ TextButton(onClick={ showSyncSettings = false }) { Text("完成") } })
+    pendingPlan?.let { (book, plan) ->
+        OnlinePlanDialog(plan, onConfirm={ pendingPlan = null; onRetrySync(book, plan) },
+            onLater={ pendingPlan = null; onPostponeSync(book, plan) }, onDismiss={ pendingPlan = null })
+    }
+    pendingRollback?.let { book ->
+        AlertDialog(onDismissRequest={ pendingRollback = null }, title={ Text("恢复上一正文版本？") },
+            text={ Text("不会解除在线关联。同一远程版本不会自动再次安装，可以手动重试更新。") },
+            dismissButton={ TextButton(onClick={ pendingRollback = null }) { Text("取消") } },
+            confirmButton={ TextButton(onClick={ pendingRollback = null; onRollback(book) }) { Text("恢复上一版本") } })
+    }
+    legacyToLink?.let { legacy ->
+        val linkCatalog = remember { CatalogClient() }
+        LegacyLinkDialog(legacy, linkCatalog, context, onDismiss={ legacyToLink = null }, onLinked={ online ->
+            Library.addImported(online)
+            store.copyLegacyAnchors(legacy, online)
+            legacyToLink = null
+            onOpen(online)
+        })
+    }
+}
+
+@Composable
+internal fun LegacyOnlineAction(linked: Boolean, onLink: () -> Unit) {
+    if (linked) {
+        Text("旧版离线备份", Modifier.padding(start=100.dp, top=6.dp), fontSize=11.sp, color=Muted)
+    } else {
+        TextButton(onClick=onLink, modifier=Modifier.padding(start=94.dp)) { Text("关联在线书籍") }
+    }
+}
+
+@Composable
+private fun LegacyLinkDialog(legacy: Book, catalog: CatalogClient, context: android.content.Context,
+    onDismiss: () -> Unit, onLinked: (Book) -> Unit) {
+    var search by remember { mutableStateOf(legacy.title) }
+    var options by remember { mutableStateOf<List<CatalogBook>>(emptyList()) }
+    var selection by remember { mutableStateOf<CatalogBook?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(search) {
+        options = emptyList()
+        problem = null
+        delay(300)
+        try { options = runInterruptible(Dispatchers.IO) { catalog.search(search) } }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { problem = e.message ?: "无法搜索在线书库" }
+    }
+    AlertDialog(onDismissRequest={ if (!busy) onDismiss() },
+        title={ Text("关联在线书籍") },
+        text={ Column(Modifier.heightIn(max=340.dp).verticalScroll(rememberScrollState())) {
+            Text("原书：《${legacy.title}》 · ${legacy.author}。关联后原书和原音频仍会保留。")
+            val candidate = selection
+            if (candidate == null) {
+                OutlinedTextField(search, { search = it }, label={ Text("搜索在线书名") }, singleLine=true)
+                options.forEach { item ->
+                    Text("${item.title} · ${item.author}", Modifier.fillMaxWidth().clickable { selection = item }
+                        .padding(vertical=10.dp))
+                }
+            } else {
+                Text("所选：《${candidate.title}》 · ${candidate.author}", Modifier.padding(top=10.dp), fontWeight=FontWeight.Medium)
+                Text("请确认书名和作者。无法迁移的进度需重新定位，原书始终可读。", fontSize=12.sp, color=Muted)
+                if (!busy) TextButton(onClick={ selection = null }) { Text("重新选择") }
+            }
+            if (busy) Text("正在通过服务器中转取得正文…", Modifier.padding(top=10.dp), color=Accent)
+            problem?.let { Text(it, Modifier.padding(top=8.dp), color=Color(0xFFAA5544)) }
+        } },
+        dismissButton={ TextButton(enabled=!busy, onClick=onDismiss) { Text("取消") } },
+        confirmButton={ Button(enabled=selection != null && !busy, onClick={
+            val chosen = selection ?: return@Button
+            busy = true; problem = null
+            scope.launch {
+                try {
+                    val online = downloadCatalogBook(context, catalog, chosen)
+                    val linked = withContext(Dispatchers.IO) {
+                        BookDatabase(context.applicationContext).use { it.linkLegacy(legacy.id, online) }
+                    }
+                    onLinked(linked)
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { problem = e.message ?: "关联失败，原书未改动" }
+                finally { busy = false }
+            }
+        }) { Text("确认关联") } })
+}
+
+@Composable
+internal fun OnlineShelfStatus(status: OnlineSyncStatus, onCancel: () -> Unit, onRetry: () -> Unit,
+    onPlan: (OnlineUpdatePlan) -> Unit, onRollback: () -> Unit) {
+    val label = when (status.state) {
+        "checking" -> "检查中"
+        "planning" -> "服务器正在准备更新"
+        "fetching" -> "服务器正在获取正文"
+        "relaying" -> "正在中转"
+        "downloading" -> "正在下载"
+        "validating" -> "正在校验"
+        "applying" -> "正在保存章节"
+        "completed" -> "已更新"
+        "available" -> "有更新"
+        "needs_confirmation" -> "更新待确认"
+        "postponed" -> "稍后更新"
+        "failed" -> "检查或更新失败"
+        "cancelled" -> "已取消等待"
+        "paused" -> "待下载"
+        "rolled_back" -> "已回滚"
+        "up_to_date" -> "已是最新"
+        else -> "待检查"
+    }
+    Column(Modifier.fillMaxWidth().padding(start=100.dp, top=6.dp)) {
+        Text(label, fontSize=12.sp, color=if (status.state == "failed") Color(0xFFAA5544) else Accent)
+        if (status.checkedAt > 0) {
+            val date = Instant.ofEpochMilli(status.checkedAt).atZone(ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+            Text("上次成功检查 $date", fontSize=10.sp, color=Muted)
+        }
+        status.latestTitle?.takeIf { it.isNotBlank() }?.let {
+            Text("最新：$it", fontSize=11.sp, color=Muted, maxLines=2)
+        }
+        if (status.newChapters > 0 && status.state != "completed") {
+            Text("比本地多 ${status.newChapters} 章", fontSize=11.sp, color=Muted)
+        }
+        status.message?.let { Text(it, fontSize=11.sp, color=Muted) }
+        val plan = status.plan
+        if (status.state == "downloading" && plan != null) {
+            LinearProgressIndicator(progress={ (status.downloaded.toFloat() / plan.bytes).coerceIn(0f, 1f) },
+                modifier=Modifier.fillMaxWidth().padding(top=5.dp))
+        }
+        when (status.state) {
+            "checking", "planning", "fetching", "relaying", "downloading" ->
+                TextButton(onClick=onCancel) { Text("取消等待") }
+            "failed", "cancelled", "paused", "available", "rolled_back" ->
+                TextButton(onClick=onRetry) { Text("重试更新") }
+            "needs_confirmation", "postponed" -> if (plan != null) {
+                TextButton(onClick={ onPlan(plan) }) { Text("查看更新计划") }
+            }
+        }
+        if (status.canRollback && status.state in setOf("completed", "up_to_date", "needs_confirmation", "postponed", "failed")) {
+            TextButton(onClick=onRollback) { Text("回滚正文") }
+        }
+    }
+}
+
+@Composable
+internal fun OnlinePlanDialog(plan: OnlineUpdatePlan, onConfirm: () -> Unit, onLater: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(onDismissRequest=onDismiss, title={ Text("确认正文更新") },
+        text={ Column(Modifier.heightIn(max=340.dp).verticalScroll(rememberScrollState())) {
+            Text("更新会改动已有章节或顺序。旧版本可以回滚。")
+            Text("预计下载 ${"%.1f".format(plan.bytes / 1024.0)} KB")
+            if (plan.reordered) Text("章节位置或顺序有变化")
+            listOf("新增" to plan.added, "变更" to plan.modified, "删除" to plan.deleted).forEach { (label, titles) ->
+                Text("$label ${titles.size} 章", Modifier.padding(top=8.dp), fontWeight=FontWeight.Medium)
+                titles.forEach { Text(it, fontSize=12.sp) }
+            }
+        } },
+        dismissButton={ TextButton(onClick=onLater) { Text("稍后") } },
+        confirmButton={ TextButton(onClick=onConfirm) { Text("确认更新") } })
 }
 
 @Composable
@@ -283,30 +490,9 @@ private fun CatalogBookDialog(item: CatalogBook, context: android.content.Contex
             setImporting(true); error = null
             scope.launch {
                 try {
-                    phase = "服务器正在准备正文…"
-                    var task = withContext(Dispatchers.IO) { catalog.startContent(item.id) }
-                    var pollCount = 0
-                    while (!task.done) {
-                        check(task.state !in setOf("failed", "expired", "cancelled")) {
-                            task.message ?: "服务器未能准备正文，请重试"
-                        }
-                        check(pollCount++ < 360) { "服务器仍在处理正文，请稍后重试" }
-                        kotlinx.coroutines.delay(1000)
-                        task = withContext(Dispatchers.IO) { catalog.status(task.taskId) }
-                    }
-                    phase = "正在通过中转下载正文…"
+                    val imported = downloadCatalogBook(context, catalog, item) { phase = it }
                     val book = withContext(Dispatchers.IO) {
-                        val target = File.createTempFile("catalog-", ".zip", context.cacheDir)
-                        try {
-                            var waits = 0
-                            while (!catalog.download(task, target)) {
-                                check(waits++ < 60) { "中转仍在上传，请稍后重试" }
-                                kotlinx.coroutines.delay(2000)
-                            }
-                            ContentPackageImporter.import(target, item).also {
-                                LocalBookRepository(context).save(it)
-                            }
-                        } finally { target.delete() }
+                        BookDatabase(context.applicationContext).use { it.saveOnlineImport(imported) }
                     }
                     onImported(book)
                 } catch (cancelled: CancellationException) {
@@ -316,6 +502,32 @@ private fun CatalogBookDialog(item: CatalogBook, context: android.content.Contex
                 } finally { setImporting(false) }
             }
         }) { Text("导入正文") } })
+}
+
+private suspend fun downloadCatalogBook(context: android.content.Context, catalog: CatalogClient, item: CatalogBook,
+    phase: (String) -> Unit = {}): Book {
+    phase("服务器正在准备正文…")
+    var task = runInterruptible(Dispatchers.IO) { catalog.startContent(item.id) }
+    var pollCount = 0
+    while (!task.done) {
+        task.failureMessage?.let { error(it) }
+        check(pollCount++ < 360) { "服务器仍在处理正文，请稍后重试" }
+        delay(1000)
+        val id = task.taskId
+        task = runInterruptible(Dispatchers.IO) { catalog.status(id) }
+    }
+    phase("正在通过中转下载正文…")
+    return withContext(Dispatchers.IO) {
+        val file = File.createTempFile("catalog-", ".zip", context.cacheDir)
+        try {
+            var waits = 0
+            while (!runInterruptible { catalog.download(task, file) }) {
+                check(waits++ < 60) { "中转仍在上传，请稍后重试" }
+                delay(2000)
+            }
+            ContentPackageImporter.import(file, item)
+        } finally { file.delete() }
+    }
 }
 
 @Composable
@@ -346,9 +558,11 @@ private fun Profile(store:ReaderStore,onBookmark:(Bookmark)->Unit) {
             }
         } else store.bookmarks.forEach { mark ->
             val book=Library.book(mark.bookId)
-            Column(Modifier.fillMaxWidth().padding(bottom=14.dp).background(Color(0xFFEEEBE3),RoundedCornerShape(10.dp)).clickable { onBookmark(mark) }.padding(18.dp)) {
+            val position = store.positionFor(book, mark)
+            Column(Modifier.fillMaxWidth().padding(bottom=14.dp).background(Color(0xFFEEEBE3),RoundedCornerShape(10.dp)).clickable(enabled=position!=null) { onBookmark(mark) }.padding(18.dp)) {
                 Text(mark.quote,fontFamily=Serif,fontSize=15.sp,lineHeight=25.sp,color=Ink,maxLines=3)
-                Text("《${book.title}》 · 第${mark.chapter+1}章",Modifier.padding(top=12.dp),fontSize=10.sp,color=Accent)
+                Text("《${book.title}》 · " + (position?.let { "第${it.chapter+1}章" } ?: "原文已变更，请重新定位"),
+                    Modifier.padding(top=12.dp),fontSize=10.sp,color=Accent)
             }
         }
         if (store.comments.isNotEmpty()) {
@@ -358,7 +572,10 @@ private fun Profile(store:ReaderStore,onBookmark:(Bookmark)->Unit) {
                     Text(comment.body,fontSize=13.sp,color=Ink,lineHeight=22.sp)
                     Text("“${comment.quote}”",Modifier.padding(top=10.dp),fontFamily=Serif,fontSize=13.sp,color=Muted,maxLines=2)
                     val commentedBook=Library.book(comment.bookId)
-                    Text("《${commentedBook.title}》 · 第${comment.chapter+1}章",Modifier.padding(top=9.dp),fontSize=10.sp,color=Accent)
+                    val relocated = comment.anchor?.locate(commentedBook, comment.end - comment.start)
+                    Text("《${commentedBook.title}》 · " + if (store.commentNeedsRelocation(commentedBook, comment))
+                        "原文已变更，请重新定位" else "第${(relocated?.chapter ?: comment.chapter)+1}章",
+                        Modifier.padding(top=9.dp),fontSize=10.sp,color=Accent)
                 }
             }
         }

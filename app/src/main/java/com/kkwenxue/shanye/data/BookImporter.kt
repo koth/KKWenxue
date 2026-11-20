@@ -47,7 +47,7 @@ object BookImporter {
 
     internal fun parseCatalogText(source: CatalogBook, bytes: ByteArray): Book {
         require(bytes.size <= MAX_BYTES) { "文件过大，最多支持 64 MB。" }
-        return parseTxt(contentId(bytes), source.title, decode(bytes), source)
+        return parseTxt("online:catalog:${source.id}", source.title, decode(bytes), source)
     }
 
     private fun contentId(bytes: ByteArray): String {
@@ -69,6 +69,8 @@ object BookImporter {
     private fun paragraphs(text: String) = text.replace("\uFFFC", "").lineSequence()
         .map { it.trim().trim('\uFEFF') }.filter { it.isNotBlank() }.joinToString("\n\n")
 
+    internal fun normalizeChapterBody(text: String): String = paragraphs(text)
+
     private fun parseTxt(id: String, title: String, text: String, catalog: CatalogBook? = null): Book {
         require(text.length <= MAX_CHARACTERS) { "正文过长，请分卷导入。" }
         require(!text.contains('\u0000')) { "文件不是有效的文本。" }
@@ -78,12 +80,19 @@ object BookImporter {
         val author = catalog?.author ?: lines.firstOrNull { it.trim().startsWith("作者") }
             ?.substringAfter('：', "").orEmpty().trim().ifBlank { "未知作者" }
         val chapters = mutableListOf<Chapter>()
+        val chapterOccurrences = mutableMapOf<String, Int>()
         var chapterTitle = "正文"
         val body = StringBuilder()
         fun flush() {
             val content = paragraphs(body.toString())
             if (content.isNotBlank()) {
-                val candidate = Chapter("$id-${chapters.size}", chapterTitle, content)
+                val chapterId = if (catalog != null) {
+                    val identity = syncSha256("$chapterTitle\n${syncSha256(content)}")
+                    val occurrence = (chapterOccurrences[identity] ?: 0) + 1
+                    chapterOccurrences[identity] = occurrence
+                    "online:catalog:${catalog.id}:chapter:sha256:$identity:$occurrence"
+                } else "$id-${chapters.size}"
+                val candidate = Chapter(chapterId, chapterTitle, content)
                 val previous = chapters.lastOrNull()
                 val sameTitle = previous?.title?.replace(Regex("[^\\p{L}\\p{N}]"), "") == candidate.title.replace(Regex("[^\\p{L}\\p{N}]"), "")
                 if (catalog != null || previous == null || !sameTitle || previous.body != candidate.body) chapters += candidate
@@ -114,7 +123,9 @@ object BookImporter {
         flush()
         require(chapters.isNotEmpty()) { "文件中没有可阅读的正文。" }
         return Book(id, metadataTitle ?: title, author, catalog?.category ?: "本地", "${chapters.size} 章 · TXT",
-            if (catalog == null) "从本机导入，支持离线阅读。" else "从在线书库导入，支持离线阅读。", 1, chapters)
+            if (catalog == null) "从本机导入，支持离线阅读。" else "从在线书库导入，支持离线阅读。", 1, chapters,
+            remoteSource = catalog?.let { "catalog" }, remoteBookId = catalog?.id,
+            remoteLatestChapterId = catalog?.latestChapterId ?: 0L)
     }
 
     private data class ManifestItem(val path: String, val mediaType: String)

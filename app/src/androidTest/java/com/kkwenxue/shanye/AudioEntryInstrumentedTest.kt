@@ -168,7 +168,7 @@ class AudioEntryInstrumentedTest {
         lateinit var store: ReaderStore
         activity.onActivity { host ->
             store=ReaderStore(context)
-            host.setContent { MaterialTheme { ReaderScreen(book,store,library,items,{}, {}) } }
+            host.setContent { MaterialTheme { ReaderScreen(book,store,library,items,{}) {} } }
         }
         await("Reader bar should offer an exit action") { nodes("退出听书").isNotEmpty() }
         assertTrue(nodes(if (paused) "继续听书" else "暂停听书").isNotEmpty())

@@ -48,9 +48,9 @@ private val PlayerPanel = Color(0xFF382529)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AudioPlayerScreen(
+internal fun AudioPlayerScreen(
     book: Book?, library: AudioLibrary, items: List<AudioChapter>,
-    onImported: () -> Unit, onClose: () -> Unit,
+    onImported: () -> Unit, onClose: (ListeningCheckpoint?) -> Unit,
     initialChapterIndex: Int? = null, initialTextOffset: Int = 0,
     resumeArtifactId: String? = null,
     onRead: (AudioChapter, Int) -> Unit
@@ -131,6 +131,20 @@ fun AudioPlayerScreen(
         if (isActive) AudioPlayback.command(context, "seek", offset)
         else { pendingPosition = offset; library.savePosition(item, offset) }
     }
+    fun closePlayer() {
+        // An explicit entry into an unplayed chapter is only browsing. Don't
+        // send the reader back to a different chapter's old listening position.
+        if (!followsPlayback) { onClose(null); return }
+        val live = AudioPlayback.current?.takeIf { book == null || it.bookId == book.id }
+        if (live != null) AudioPlayback.checkpointNow()
+        onClose(library.latestPlaybackCheckpoint(book?.id))
+    }
+    fun readDisplayed(item: AudioChapter) {
+        val live = AudioPlayback.current?.id == item.id
+        if (live) AudioPlayback.checkpointNow()
+        val time = dragging?.toInt() ?: if (live) AudioPlayback.position else position
+        onRead(item, item.offsetAt(time) ?: 0)
+    }
     if (showSynthesis) {
         SynthesisScreen(displayBook ?: book, displayItem?.chapterIndex ?: initialChapterIndex,
             library, onImported, { showSynthesis=false })
@@ -145,7 +159,7 @@ fun AudioPlayerScreen(
     }
     LaunchedEffect(message) { if (message.isNotEmpty()) { delay(5000); message = "" } }
     OverlaySystemBars(SystemBarsMode.PLAYER)
-    BackHandler { if (chooser != null) chooser = null else onClose() }
+    BackHandler { if (chooser != null) chooser = null else closePlayer() }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Brush.verticalGradient(
         listOf(Color(0xFF2A1B1E), Color(0xFF49302F), Color(0xFF291A1E))
@@ -154,7 +168,7 @@ fun AudioPlayerScreen(
         val artworkHeight = (artworkArea - 82.dp).coerceIn(144.dp, 260.dp)
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal=24.dp)) {
             Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment=Alignment.CenterVertically) {
-                PlayerIcon("collapse", "收起播放器", onClick=onClose)
+                PlayerIcon("collapse", "收起播放器", onClick=::closePlayer)
                 Spacer(Modifier.weight(1f))
                 TextButton(enabled=!importing, onClick={showSynthesis=true}) {
                     Text("合成与导入", fontSize=12.sp, color=PlayerAccent)
@@ -175,7 +189,7 @@ fun AudioPlayerScreen(
                         .shadow(22.dp, RoundedCornerShape(10.dp)).clip(RoundedCornerShape(10.dp)))
                     Spacer(Modifier.weight(1f))
                     Text(cue?.text?.trim() ?: "准备播放…", Modifier.fillMaxWidth().heightIn(min=54.dp)
-                        .padding(horizontal=6.dp).clickable { onRead(displayItem, displayItem.anchorAt(position)) },
+                        .padding(horizontal=6.dp).clickable { readDisplayed(displayItem) },
                         maxLines=2, overflow=TextOverflow.Ellipsis, fontFamily=Serif, fontSize=18.sp,
                         lineHeight=28.sp, color=PlayerWhite.copy(.88f), textAlign=TextAlign.Center)
                     Spacer(Modifier.height(12.dp))
@@ -229,7 +243,7 @@ fun AudioPlayerScreen(
                         Glyph("next", PlayerMuted, Modifier.padding(start=8.dp), size=14.dp)
                     }
                     Box(Modifier.height(52.dp).clip(RoundedCornerShape(13.dp)).background(PlayerWhite.copy(.08f))
-                        .clickable { onRead(displayItem, displayItem.anchorAt(position)) }.padding(horizontal=18.dp),
+                        .clickable { readDisplayed(displayItem) }.padding(horizontal=18.dp),
                         contentAlignment=Alignment.Center) {
                         Text("定位原文", fontSize=13.sp, color=PlayerWhite)
                     }

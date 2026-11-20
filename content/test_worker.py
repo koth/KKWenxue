@@ -53,3 +53,77 @@ class ContentWorkerTests(unittest.TestCase):
                     self.assertIn("旧正文。", text.decode())
                     self.assertEqual(old["sha256"], hashlib.sha256(text).hexdigest())
                     self.assertEqual(manifest, json.loads(package.read("manifest.json")))
+
+    def test_update_pack_contains_only_new_append_chapters(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.multiple(worker, ROOT=root, BOOKS=root, PACKS=root, DB_PATH=root / "content.db"):
+                with patch.object(worker, "download_chapters", return_value=[
+                    ("第1章 开头", "旧正文。\n第二段。"),
+                ]):
+                    old = worker.fetch_book(1, "测试书", "作者", 10, lambda: None)
+                local = old["chapterManifest"]
+                self.assertEqual(local[0]["bodySha256"], hashlib.sha256("旧正文。\n\n第二段。".encode()).hexdigest())
+                with patch.object(worker, "download_chapters", return_value=[
+                    ("第1章 开头", "旧正文。\n第二段。"),
+                    ("第2章 新章", "新增正文。"),
+                ]):
+                    path, manifest = worker.make_update_pack(1, {
+                        "bookId": 1, "title": "测试书", "author": "作者",
+                        "latestChapterId": 11, "fromRevision": old["revision"],
+                        "targetRevision": "remote-v2", "chapters": local,
+                    }, lambda: None)
+                self.assertTrue(manifest["appendOnly"])
+                self.assertEqual(manifest["changedChapterCount"], 1)
+                self.assertEqual(manifest["remoteRevision"], "remote-v2")
+                with zipfile.ZipFile(path) as package:
+                    names = set(package.namelist())
+                    self.assertIn("manifest.json", names)
+                    self.assertIn("chapters/00001.txt", names)
+                    self.assertNotIn("chapters/00000.txt", names)
+
+    def test_update_pack_marks_rewrites_and_reuses_the_same_package(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.multiple(worker, ROOT=root, BOOKS=root, PACKS=root, DB_PATH=root / "content.db"):
+                with patch.object(worker, "download_chapters", return_value=[
+                    ("第1章 开头", "旧正文。"), ("第2章 删除", "将被删除。"),
+                ]):
+                    old = worker.fetch_book(1, "测试书", "作者", 10, lambda: None)
+                local = old["chapterManifest"]
+                with patch.object(worker, "download_chapters", return_value=[
+                    ("第1章 开头", "改写正文。"),
+                ]):
+                    payload = {
+                        "bookId": 1, "title": "测试书", "author": "作者",
+                        "latestChapterId": 11, "fromRevision": old["revision"],
+                        "targetRevision": "remote-v2", "chapters": local,
+                    }
+                    first_path, first_manifest = worker.make_update_pack(1, payload, lambda: None)
+                    second_path, second_manifest = worker.make_update_pack(1, payload, lambda: None)
+                self.assertFalse(first_manifest["appendOnly"])
+                self.assertEqual(first_manifest["deletedChapterIds"], [item["chapterId"] for item in local])
+                self.assertEqual(first_manifest["modifiedTitles"], ["第1章 开头"])
+                self.assertEqual(first_manifest["deletedTitles"], ["第2章 删除"])
+                self.assertEqual(first_manifest, second_manifest)
+                self.assertEqual(first_path, second_path)
+
+    def test_insert_preserves_existing_chapter_identity_and_rejects_wrong_base(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.multiple(worker, ROOT=root, BOOKS=root, PACKS=root, DB_PATH=root / "content.db"):
+                original = [("第1章 开头", "甲。"), ("第3章 后续", "丙。")]
+                with patch.object(worker, "download_chapters", return_value=original):
+                    old = worker.fetch_book(1, "测试书", "作者", 10, lambda: None)
+                payload = {"fromRevision": old["revision"], "targetRevision": "remote-v2",
+                           "latestChapterId": 11, "chapters": old["chapterManifest"]}
+                with patch.object(worker, "download_chapters", return_value=[
+                    original[0], ("第2章 插入", "乙。"), original[1]
+                ]):
+                    _, manifest = worker.make_update_pack(1, payload, lambda: None)
+                self.assertFalse(manifest["appendOnly"])
+                self.assertEqual(manifest["addedTitles"], ["第2章 插入"])
+                self.assertEqual(manifest["chapters"][2]["chapterId"], old["chapterManifest"][1]["chapterId"])
+                payload["chapters"][0]["bodySha256"] = "0" * 64
+                with self.assertRaisesRegex(RuntimeError, "invalid_base"):
+                    worker.make_update_pack(1, payload, lambda: None)

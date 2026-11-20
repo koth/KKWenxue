@@ -6,12 +6,24 @@ data class Chapter(val id: String, val title: String, val body: String) {
     val text: String by lazy { body.trimIndent().trim().split(Regex("\n\\s*\n"))
         .joinToString("\n\n") { "　　" + it.trim().replace("\n", "") }
     }
+    internal val audioSourceRevision: String by lazy {
+        syncSha256("$id:${syncSha256(text)}:reader-canonical+OpenCC-t2s-v1:reader-sentence-bounded160-v1")
+    }
 }
 
 data class Book(
     val id: String, val title: String, val author: String, val genre: String,
     val subtitle: String, val description: String, val cover: Int, val chapters: List<Chapter>
+    , val remoteSource: String? = null
+    , val remoteBookId: Long? = null
+    , val activeRevision: String? = null
+    , val remoteLatestChapterId: Long = 0L
+    , val remoteLatestVersion: String? = null
+    , val legacyBookId: String? = null
 )
+
+internal val Book.isLegacyOnlineImport: Boolean
+    get() = remoteBookId == null && id.startsWith("local-") && description.startsWith("从在线书库导入")
 
 /** All stories are original sample text, bundled locally for this prototype. */
 object Library {
@@ -240,7 +252,7 @@ object Library {
     fun loadForBackground(context: android.content.Context): List<Book> =
         (bundledBooks + BookDatabase(context).use { it.load() }).associateBy { it.id }.values.toList()
     fun restoreImported(imported: List<Book>) {
-        books.removeAll { it.id.startsWith("local-") }
+        books.removeAll { it.id !in bundledBooks.map(Book::id) }
         books.addAll(imported)
     }
     fun addImported(book: Book) {

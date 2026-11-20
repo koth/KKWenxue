@@ -137,7 +137,7 @@ class ReaderSystemBarsTest {
                 scenario.onActivity { host ->
                     activity = host
                     val store = ReaderStore(context)
-                    host.setContent { MaterialTheme { ReaderScreen(book, store, library, emptyList(), {}, {}) } }
+                    host.setContent { MaterialTheme { ReaderScreen(book, store, library, emptyList(), {}) {} } }
                 }
                 lateinit var reader: ReadingView
                 await("Reader is laid out") {

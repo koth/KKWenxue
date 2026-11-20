@@ -16,6 +16,7 @@ pub(crate) struct Completion {
     sha256: String,
     bytes: i64,
     direct: DirectResult,
+    progress: Option<Value>,
 }
 
 pub(crate) fn migrate(db: &Connection) -> rusqlite::Result<()> {
@@ -48,6 +49,7 @@ pub(crate) async fn complete_task(
     auth(&headers, &state)?;
     let filename = sanitize_filename(Some(&body.filename))?;
     let uri = body.direct.url.parse::<axum::http::Uri>().ok();
+    let progress = body.progress.unwrap_or_else(|| json!({})).to_string();
     if body.bytes < 1
         || body.bytes as u64 > state.max_result_bytes
         || body.sha256.len() != 64
@@ -66,6 +68,7 @@ pub(crate) async fn complete_task(
         || body.content_type.is_empty()
         || body.content_type.len() > 120
         || HeaderValue::from_str(&body.content_type).is_err()
+        || progress.len() > 1024 * 1024
     {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
@@ -78,7 +81,7 @@ pub(crate) async fn complete_task(
         "UPDATE tasks SET state='completed',worker_id=NULL,lease_until=NULL,lease_token=NULL,
         result_filename=?,result_sha256=?,result_bytes=?,result_content_type=?,result_expires_at=?,
         result_direct_json=?,result_worker_id=?,transfer_state='none',error=NULL,
-        progress_json='{}',updated_at=? WHERE id=?",
+        progress_json=?,updated_at=? WHERE id=?",
         params![
             filename,
             body.sha256.to_lowercase(),
@@ -87,6 +90,7 @@ pub(crate) async fn complete_task(
             body.direct.expires_at,
             serde_json::to_string(&body.direct).unwrap(),
             body.worker_id,
+            progress,
             now(),
             id
         ],

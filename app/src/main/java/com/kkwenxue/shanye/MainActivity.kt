@@ -27,8 +27,11 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private val systemBars by lazy { SystemBarsController(window) }
     private var audioOpenRequest by mutableIntStateOf(0)
+    private var resumeTick by mutableIntStateOf(0)
+    private var syncTick by mutableIntStateOf(0)
     override fun onResume() {
         super.onResume()
+        resumeTick++
         systemBars.restore()
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -65,6 +68,34 @@ class MainActivity : ComponentActivity() {
                 return@setContent
             }
             val store = remember { ReaderStore(applicationContext) }
+            val onlineSync = remember { OnlineLibrarySync(applicationContext) }
+            val syncSettings by onlineSync.settings.collectAsState()
+            val onlineStatuses by OnlineLibrarySync.statuses.collectAsState()
+            fun installUpdated(book: Book) {
+                Library.addImported(book)
+                refreshAudio()
+            }
+            var lastAutoCheck by remember { mutableLongStateOf(0L) }
+            var lastManualRequest by remember { mutableIntStateOf(0) }
+            LaunchedEffect(resumeTick, syncTick, syncSettings) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                val manual = syncTick != lastManualRequest
+                if (!manual && lastAutoCheck != 0L && now - lastAutoCheck < 2000) return@LaunchedEffect
+                lastManualRequest = syncTick
+                lastAutoCheck = now
+                scope.launch { onlineSync.sync(Library.books.toList(), onUpdated = ::installUpdated) }
+            }
+            DisposableEffect(onlineSync) {
+                onDispose(onlineSync.observeNetwork {
+                    scope.launch {
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (lastAutoCheck == 0L || now - lastAutoCheck >= 2000) {
+                            lastAutoCheck = now
+                            onlineSync.sync(Library.books.toList(), onUpdated = ::installUpdated)
+                        }
+                    }
+                })
+            }
             DisposableEffect(store) { onDispose(store.observeListeningProgress()) }
             LaunchedEffect(audioLibrary) {
                 AudioLibrary.changes.collect {
@@ -72,8 +103,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
             var readingId by rememberSaveable { mutableStateOf<String?>(null) }
-            var readerSession by rememberSaveable { mutableIntStateOf(0) }
+            var readerSession by remember { mutableIntStateOf(0) }
+            var readerStart by remember { mutableStateOf<ReadingPosition?>(null) }
             var showAudio by rememberSaveable { mutableStateOf(false) }
+            fun showTextAt(book: Book, position: ReadingPosition) {
+                readerStart = position
+                readingId = book.id
+                readerSession++
+            }
             LaunchedEffect(audioOpenRequest) {
                 if (audioOpenRequest>0) { refreshAudio(); showAudio=true }
             }
@@ -89,25 +126,55 @@ class MainActivity : ComponentActivity() {
             }
             CompositionLocalProvider(LocalSystemBars provides systemBars) {
             MaterialTheme(colorScheme = lightColorScheme(primary=Accent,background=Paper,surface=Paper,onSurface=Ink,onBackground=Ink)) {
-                BackHandler(showAudio) { showAudio=false }
-                BackHandler(reading && !showAudio) { readingId = null }
+                fun exitReader() { readerStart = null; readingId = null }
+                BackHandler(reading && !showAudio) { exitReader() }
                 if (readingId != null) {
-                    key(readingId,readerSession) { ReaderScreen(Library.book(readingId!!), store, audioLibrary, audioItems, ::refreshAudio) { readingId = null } }
+                    key(readingId,readerSession) {
+                        val readerBook = remember { Library.book(readingId!!) }
+                        ReaderScreen(readerBook, store, audioLibrary, audioItems, ::refreshAudio,
+                            startPosition=readerStart, onExit=::exitReader)
+                    }
                 } else {
                     HomeScreen(store, onOpen = { book -> store.open(book); readingId = book.id }, onBookmark = { mark ->
                         val book = Library.book(mark.bookId)
-                        store.savePosition(book, mark.chapter, mark.offset)
-                        store.open(book)
-                        readingId = book.id
-                    }, onAudio={showAudio=true})
+                        store.positionFor(book, mark)?.let {
+                            store.savePosition(book, it.chapter, it.offset)
+                            store.open(book)
+                            showTextAt(book, it)
+                        }
+                    }, onAudio={showAudio=true}, onSync={ syncTick++ }, onlineStatuses=onlineStatuses,
+                        syncSettings=syncSettings, onSyncSettings={ value ->
+                            onlineSync.setSettings(value)
+                            syncTick++
+                        }, onCancelSync=onlineSync::cancel,
+                        onRetrySync={ book, plan ->
+                            scope.launch { onlineSync.sync(listOf(book), retry = true, confirmed = plan, onUpdated = ::installUpdated) }
+                        }, onPostponeSync={ book, plan ->
+                            scope.launch { onlineSync.postpone(book, plan) }
+                        }, onRollback={ book ->
+                            scope.launch {
+                                try { onlineSync.rollback(book)?.let(::installUpdated) }
+                                catch (error: IllegalStateException) {
+                                    android.widget.Toast.makeText(applicationContext, error.message, android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        })
                 }
                 if (showAudio) {
-                    AudioPlayerScreen(null, audioLibrary, audioItems, ::refreshAudio, {showAudio=false}, onRead={ item, offset ->
-                        val book=Library.book(item.bookId)
-                        store.savePosition(book,item.chapterIndex,offset)
-                        store.open(book)
-                        readingId=book.id
-                        readerSession++
+                    AudioPlayerScreen(null, audioLibrary, audioItems, ::refreshAudio, { checkpoint ->
+                        // Closing the player keeps the screen/book underneath it.
+                        if (checkpoint != null && readingId == checkpoint.anchor.bookId) {
+                            val book = Library.book(checkpoint.anchor.bookId)
+                            store.positionAfterListening(book, checkpoint)?.let { showTextAt(book, it) }
+                        }
+                        showAudio=false
+                    }, onRead={ item, offset ->
+                        val book = Library.book(item.bookId)
+                        item.readingAnchor(offset).positionIn(book)?.let {
+                            store.savePosition(book, it.chapter, it.offset)
+                            store.open(book)
+                            showTextAt(book, it)
+                        }
                         showAudio=false
                     })
                 }

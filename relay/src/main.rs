@@ -123,6 +123,7 @@ struct ResultInfo {
     direct: Option<DirectResult>,
     relay_state: String,
     relay_error: Option<String>,
+    relay_attempts: i64,
 }
 #[derive(Debug, Serialize)]
 struct ClaimResponse {
@@ -225,6 +226,7 @@ fn decode_task(r: &rusqlite::Row<'_>, include_payload: bool) -> rusqlite::Result
                 r.get("transfer_state")?
             },
             relay_error: r.get("transfer_error")?,
+            relay_attempts: r.get("transfer_attempts")?,
         })
     } else {
         None
@@ -287,7 +289,7 @@ async fn list_tasks(
     // Deliberately omit payload_json: chapter text and other large inputs belong in task detail only.
     let mut stmt = db.prepare("SELECT rowid,id,kind,metadata_json,created_at,updated_at,state,attempts,max_attempts,
         worker_id,lease_until,progress_json,result_filename,result_content_type,result_sha256,result_bytes,
-        result_expires_at,result_path,result_direct_json,transfer_state,transfer_error,error FROM tasks WHERE (? IS NULL OR kind=?) AND (? IS NULL OR state=?)
+        result_expires_at,result_path,result_direct_json,transfer_state,transfer_attempts,transfer_error,error FROM tasks WHERE (? IS NULL OR kind=?) AND (? IS NULL OR state=?)
         AND (? IS NULL OR rowid<?) ORDER BY rowid DESC LIMIT ?").map_err(db_error)?;
     let rows = stmt
         .query_map(
@@ -884,7 +886,7 @@ fn router(state: AppState) -> Router {
             "/v1/tasks/{id}/result",
             post(upload_result).get(download_result),
         )
-        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
         .with_state(state)
 }
 #[tokio::main]

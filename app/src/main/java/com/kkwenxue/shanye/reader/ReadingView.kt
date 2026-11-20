@@ -307,7 +307,9 @@ class ReadingView(context:Context):View(context) {
         val info=PageInfo(page,pages.size,p.start,p.end,chapterIndex)
         if (turned) onPageTurned(info)
         val callback=onPosition
-        post { callback(info) }
+        // A detached view can post an old page after the player has already
+        // handed it a new chapter. Don't publish positions that are no longer visible.
+        post { if (chapterIndex==info.chapter && page==info.index && pages.getOrNull(page)===p) callback(info) }
     }
 
     override fun onSizeChanged(w:Int,h:Int,oldw:Int,oldh:Int) {

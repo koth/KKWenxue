@@ -18,14 +18,29 @@ import kotlinx.coroutines.flow.asStateFlow
 
 data class AudioCue(val startMs: Int, val endMs: Int, val start: Int, val end: Int, val text: String)
 
+internal data class AudioReadingAnchor(
+    val bookId: String, val chapterId: String, val textOffset: Int, val revision: String? = null,
+    val migration: RevisionAnchor? = null
+) {
+    fun positionIn(book: Book): ReadingPosition? {
+        if (book.id != bookId) return null
+        val index = book.chapters.indexOfFirst { it.id == chapterId }
+        if (index < 0) return migration?.locate(book)
+        if (book.remoteBookId != null && !chapterId.contains(":chapter:sha256:") &&
+            revision != book.chapters[index].audioSourceRevision) return migration?.locate(book)
+        return ReadingPosition(index, textOffset.coerceIn(0, book.chapters[index].text.length))
+    }
+}
+
 internal data class ListeningCheckpoint(
-    val artifactId: String, val chapterId: String, val textOffset: Int, val updatedAt: Long
+    val artifactId: String, val anchor: AudioReadingAnchor, val updatedAt: Long
 )
 
 data class AudioChapter(
     val id: String, val bookId: String, val chapterId: String, val chapterIndex: Int,
     val title: String, val voice: String, val durationMs: Int, val cues: List<AudioCue>, val file: File,
-    val voiceKey: String = voice
+    val voiceKey: String = voice,
+    val sourceRevision: String? = null
 ) {
     fun cueAt(position: Int): AudioCue? = cues.lastOrNull { it.startMs <= position }
         ?.takeIf { position < it.endMs }
@@ -41,6 +56,13 @@ data class AudioChapter(
     }
     fun anchorAt(position: Int): Int = (cues.lastOrNull { it.startMs <= position } ?: cues.firstOrNull())?.start ?: 0
     fun positionFor(offset: Int): Int = (cues.firstOrNull { it.end > offset } ?: cues.lastOrNull())?.startMs ?: 0
+    internal fun readingAnchor(offset: Int): AudioReadingAnchor {
+        val cue = cues.firstOrNull { offset in it.start..it.end && it.text.length == it.end - it.start }
+        val migration = cue?.let {
+            RevisionAnchor.fromText(chapterId, title, sourceRevision, it.text, offset - it.start, baseOffset = it.start)
+        }
+        return AudioReadingAnchor(bookId, chapterId, offset, sourceRevision, migration)
+    }
 }
 
 /** Import the workbench's ZIP contract; GPU service credentials never reach the phone. */
@@ -82,17 +104,24 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
         val offset = position.coerceIn(0, item.durationMs)
         val edit = prefs.edit().putInt("position:${item.id}", offset)
         item.offsetAt(offset)?.let { textOffset ->
+            val anchor = item.readingAnchor(textOffset)
             edit.putString(LAST_LISTENED_BOOK, item.bookId).putString("$LISTENING_PREFIX${item.bookId}",
                 JSONObject().put("artifact", item.id).put("chapter", item.chapterId)
-                    .put("offset", textOffset).put("updatedAt", System.currentTimeMillis()).toString())
+                    .put("offset", textOffset).put("revision", item.sourceRevision)
+                    .put("anchor", anchor.migration?.json())
+                    .put("updatedAt", System.currentTimeMillis()).toString())
         }
         edit.apply()
     }
 
+    internal fun latestPlaybackCheckpoint(bookId: String? = null): ListeningCheckpoint? =
+        (bookId ?: lastListenedBook(prefs))?.let { listeningCheckpoint(prefs, it) }
+
     fun lastPlayed(items: List<AudioChapter>): AudioChapter? {
-        val bookId = lastListenedBook(prefs) ?: return null
-        val checkpoint = listeningCheckpoint(prefs, bookId) ?: return null
-        return items.firstOrNull { it.id == checkpoint.artifactId && it.bookId == bookId && it.chapterId == checkpoint.chapterId }
+        val checkpoint = latestPlaybackCheckpoint() ?: return null
+        return items.firstOrNull {
+            it.id == checkpoint.artifactId && it.bookId == checkpoint.anchor.bookId && it.chapterId == checkpoint.anchor.chapterId
+        }
     }
 
     /** Only the next chapter in the text catalogue may continue automatically. */
@@ -211,7 +240,7 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
         val chapter = book.chapters[index]
         val sourceHash = sha256(chapter.text.toByteArray())
         require(manifest.getString("source_sha256") == sourceHash) { "${chapter.title} 原文版本不同，无法匹配音频" }
-        require(manifest.getString("source_revision") == sha256("${chapter.id}:$sourceHash:reader-canonical+OpenCC-t2s-v1:reader-sentence-bounded160-v1".toByteArray())) { "章节修订校验失败" }
+        require(manifest.getString("source_revision") == chapter.audioSourceRevision) { "章节修订校验失败" }
         val duration = manifest.getInt("duration_ms")
         require(duration > 0) { "音频时长无效" }
         val cues = mutableListOf<AudioCue>()
@@ -239,7 +268,10 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
             "clone:linchuan-zonos3-v1" -> "林川"
             else -> if (speaker.startsWith("clone:")) "克隆音色" else speaker.replace('_', ' ')
         }
-        return AudioChapter(id, book.id, chapter.id, index, chapter.title, voice, duration, cues, File(root, "$id/chapter.m4a"), speaker)
+        return AudioChapter(
+            id, book.id, chapter.id, index, chapter.title, voice, duration, cues,
+            File(root, "$id/chapter.m4a"), speaker, manifest.getString("source_revision")
+        )
     }
 
     companion object {
@@ -254,8 +286,10 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
             prefs.getString("$LISTENING_PREFIX$bookId", null)?.let { raw ->
                 runCatching {
                     val value = JSONObject(raw)
-                    ListeningCheckpoint(value.getString("artifact"), value.getString("chapter"),
-                        value.getInt("offset"), value.getLong("updatedAt"))
+                    ListeningCheckpoint(value.getString("artifact"),
+                        AudioReadingAnchor(bookId, value.getString("chapter"), value.getInt("offset"),
+                            value.opt("revision") as? String, value.optJSONObject("anchor")?.let(::parseAnchor)),
+                        value.getLong("updatedAt"))
                 }.getOrNull()
             }
         private val importLock = Any()

@@ -85,6 +85,7 @@ fun Glyph(name: String, tint: Color = Ink, modifier: Modifier = Modifier, size: 
                 "minus" -> line(5f,12f,19f,12f)
                 "plus" -> { line(5f,12f,19f,12f); line(12f,5f,12f,19f) }
                 "download" -> { line(12f,3f,12f,16f); path(7f to 11f,12f to 16f,17f to 11f); path(4f to 17f,4f to 21f,20f to 21f,20f to 17f) }
+                "refresh" -> { drawArc(tint,35f,285f,false,Offset(4f,4f),Size(16f,16f),style=Stroke(1.7f)); path(18f to 4f,20f to 10f,14f to 8f) }
                 "leaf" -> { val p = Path().apply { moveTo(5f,20f); cubicTo(1f,8f,9f,4f,21f,3f); cubicTo(20f,18f,13f,22f,5f,20f) }; drawPath(p,tint,style=Stroke(1.5f)); line(5f,20f,16f,9f) }
             }
         }

@@ -11,6 +11,14 @@ import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 
 class CatalogImportTest {
+    @Test fun contentFailuresIdentifyTheStageWithoutShowingRawWorkerErrors() {
+        val failed = CatalogContentTask("task-1", "failed", "<urlopen error [Errno 104] Connection reset by peer>")
+        assertEquals("服务器下载书源正文时连接中断，请稍后重试", failed.copy(kind = "content.fetch").failureMessage)
+        assertEquals("服务器未能打包正文，请稍后重试", failed.copy(kind = "content.serve").failureMessage)
+        assertEquals("服务器未能准备正文，请稍后重试", failed.copy(message = "服务器合成失败").failureMessage)
+        assertEquals(null, failed.copy(state = "running").failureMessage)
+    }
+
     @Test fun onlyRelayIsContactedAnd202IsNotWrittenAsABook() {
         ServerSocket(0, 5, InetAddress.getByName("127.0.0.1")).use { server ->
             server.soTimeout = 5_000
@@ -53,5 +61,13 @@ class CatalogImportTest {
         assertEquals("测试作者", book.author)
         assertEquals(listOf("第1章开场", "第2章：后来"), book.chapters.map { it.title })
         assertEquals(listOf("段落甲。", "段落乙。"), book.chapters.map { it.body })
+        assertEquals("online:catalog:7", book.id)
+        assertTrue(book.chapters.all { it.id.startsWith("online:catalog:7:chapter:sha256:") })
+        val inserted = BookImporter.parseCatalogText(
+            source, "序章\n这里是序章正文。\n\n${text.decodeToString()}".toByteArray()
+        )
+        assertEquals(book.chapters.map { it.id }, inserted.chapters.drop(1).map { it.id })
+        assertEquals(7L, book.remoteBookId)
     }
+
 }

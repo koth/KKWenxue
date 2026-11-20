@@ -33,12 +33,28 @@ import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItems:List<AudioChapter>,onAudioImported:()->Unit,onExit:()->Unit) {
+fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItems:List<AudioChapter>,onAudioImported:()->Unit,
+                 startPosition:ReadingPosition?=null,onExit:()->Unit) {
     val context=LocalContext.current
-    val initial=remember { store.resumePosition(book) }
+    var relocated by remember { mutableStateOf(false) }
+    if (startPosition == null && !relocated && store.needsRelocation(book)) {
+        AlertDialog(onDismissRequest=onExit, title={ Text("原文已变更，请重新定位") },
+            text={
+                LazyColumn(Modifier.heightIn(max=360.dp)) {
+                    itemsIndexed(book.chapters) { index, source ->
+                        Text(source.title, Modifier.fillMaxWidth().clickable {
+                            store.savePosition(book, index, 0)
+                            relocated = true
+                        }.padding(vertical=10.dp))
+                    }
+                }
+            },
+            confirmButton={ TextButton(onClick=onExit) { Text("返回书架") } })
+        return
+    }
+    val initial=remember { startPosition ?: store.resumePosition(book) }
     var chapter by remember { mutableIntStateOf(initial.chapter) }
     var jumpOffset by remember { mutableIntStateOf(initial.offset) }
-    var jumpToken by remember { mutableIntStateOf(0) }
     var info by remember { mutableStateOf(PageInfo()) }
     var controls by remember { mutableStateOf(false) }
     var hint by remember { mutableStateOf(true) }
@@ -48,53 +64,65 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
     val contentsState = rememberLazyListState()
     var script by remember(book.id) { mutableStateOf(store.scriptFor(book)) }
     var followAudio by remember { mutableStateOf(true) }
+    val inPlayer=sheet=="audio" || sheet=="activeAudio"
     val activeAudio=AudioPlayback.current?.takeIf { it.bookId==book.id }
+    val audioChapterIndex=remember(book,activeAudio?.chapterId) { book.chapters.indexOfFirst { it.id==activeAudio?.chapterId } }
     val audioCue=activeAudio?.cueAt(AudioPlayback.position)
     val audioOffset=activeAudio?.offsetAt(AudioPlayback.position)
     val availableChapters=remember(audioItems,book.id) { audioItems.filter { it.bookId==book.id }.map { it.chapterId }.toSet() }
     val colors=readerColors(store.theme)
     val reader=remember { ReadingView(context) }
-    val existingBookmark=store.bookmarks.firstOrNull { it.bookId==book.id && it.chapter==chapter && it.offset>=info.start && it.offset<info.end }
-    val bookmark=existingBookmark ?: Bookmark(book.id,chapter,info.start,book.chapters[chapter].text.substring(info.start.coerceAtMost(book.chapters[chapter].text.length)).trim().replace("\n"," ").take(80))
+    val existingBookmark=store.bookmarks.firstOrNull {
+        it.bookId==book.id && store.positionFor(book, it)?.let { p -> p.chapter==chapter && p.offset in info.start until info.end } == true
+    }
+    val bookmark=existingBookmark ?: Bookmark(book.id,chapter,info.start,book.chapters[chapter].text.substring(info.start.coerceIn(0, book.chapters[chapter].text.length)).trim().replace("\n"," ").take(80),
+        RevisionAnchor.capture(book, chapter, info.start))
     val bookmarked=existingBookmark!=null
     val selection = selectedSentence
-    val selectedComment = selection?.let { store.commentFor(book.id, chapter, it) }
+    val selectedComment = selection?.let { store.commentFor(book, chapter, it) }
     LaunchedEffect(Unit) { delay(4200); hint=false }
     LaunchedEffect(toast) { if(toast.isNotEmpty()) { delay(1800); toast="" } }
-    LaunchedEffect(jumpToken) { reader.goToOffset(jumpOffset) }
-    LaunchedEffect(activeAudio?.id,audioOffset,followAudio,AudioPlayback.playing) {
-        if(followAudio && AudioPlayback.playing && activeAudio!=null && audioOffset!=null) {
-            chapter=activeAudio.chapterIndex
+    LaunchedEffect(audioChapterIndex,audioOffset,followAudio,AudioPlayback.playing,inPlayer) {
+        if(!inPlayer && followAudio && AudioPlayback.playing && audioChapterIndex>=0 && audioOffset!=null) {
+            chapter=audioChapterIndex
             jumpOffset=audioOffset
             // Keep the Android reader view in sync immediately. Waiting for the
             // next recomposition leaves the spoken sentence highlighted off-page.
-            reader.followAudioTo(activeAudio.chapterIndex, audioOffset)
+            reader.followAudioTo(audioChapterIndex, audioOffset)
         }
     }
-    BackHandler((sheet!=null && sheet!="audio") || controls) { if(sheet!=null) sheet=null else controls=false }
-    fun jump(index:Int,offset:Int=0) {
-        followAudio=false; chapter=index; jumpOffset=offset; jumpToken++; sheet=null; controls=false
-        store.savePosition(book,index,offset)
+    BackHandler(!inPlayer && (sheet!=null || controls)) { if(sheet!=null) sheet=null else controls=false }
+    fun moveTo(position:ReadingPosition,fromAudio:Boolean,saveAsReading:Boolean) {
+        followAudio=fromAudio; chapter=position.chapter; jumpOffset=position.offset; sheet=null; controls=false
+        selectedSentence=null
+        reader.clearSelection()
+        reader.followAudioTo(position.chapter,position.offset)
+        if(saveAsReading) store.savePosition(book,position.chapter,position.offset)
     }
+    fun jump(index:Int,offset:Int=0) = moveTo(ReadingPosition(index,offset),fromAudio=false,saveAsReading=true)
     LaunchedEffect(sheet, chapter) {
         if (sheet == "contents" && book.chapters.isNotEmpty()) {
             contentsState.scrollToItem(chapter.coerceIn(book.chapters.indices))
         }
     }
-    if (sheet == "audio") {
-        // Capture the entry page once: background following may change chapters while the player is open.
-        val entryChapter = remember { chapter }
+    if (inPlayer) {
+        val entryChapter = remember(sheet) { chapter.takeIf { sheet=="audio" } }
         val entryPage = remember { info }
-        val resumeArtifact = remember {
-            store.listeningPosition(book)?.takeIf {
-                it.chapterId == book.chapters[entryChapter].id && it.textOffset >= entryPage.start &&
-                    (it.textOffset < entryPage.end || it.textOffset == entryPage.end && entryPage.index == entryPage.count - 1)
-            }?.artifactId
+        val resumeArtifact = remember(entryChapter) {
+            entryChapter?.let { index ->
+                store.listeningPosition(book)?.takeIf {
+                    val anchor=it.anchor
+                    anchor.chapterId == book.chapters[index].id && anchor.textOffset >= entryPage.start &&
+                        (anchor.textOffset < entryPage.end || anchor.textOffset == entryPage.end && entryPage.index == entryPage.count - 1)
+                }?.artifactId
+            }
         }
-        AudioPlayerScreen(book,audioLibrary,audioItems,onAudioImported,{sheet=null},
+        AudioPlayerScreen(book,audioLibrary,audioItems,onAudioImported,{ checkpoint ->
+            val position=checkpoint?.let { store.positionAfterListening(book,it) }
+            if(position==null) sheet=null else moveTo(position,fromAudio=true,saveAsReading=false)
+        },
             initialChapterIndex=entryChapter,initialTextOffset=entryPage.start,resumeArtifactId=resumeArtifact,onRead={item,offset ->
-            jump(item.chapterIndex,offset)
-            followAudio=true
+            item.readingAnchor(offset).positionIn(book)?.let { moveTo(it,fromAudio=true,saveAsReading=true) }
         })
         return
     }
@@ -115,7 +143,7 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
                 if (sentence != null) { controls=false; hint=false }
             }
             view.configure(book,chapter,jumpOffset,store.fontSize,store.spacious,store.serif,colors.ink.toArgb(),colors.muted.toArgb(),colors.paper.toArgb(),store.pageTurnStyle,script)
-            view.setAudioCue(activeAudio?.chapterIndex ?: -1,audioCue?.start ?: 0,audioCue?.end ?: 0)
+            view.setAudioCue(audioChapterIndex,audioCue?.start ?: 0,audioCue?.end ?: 0)
         })
         // Remove the actions immediately when the selection clears; an exit animation
         // would keep them composed and potentially clickable without a selected sentence.
@@ -175,7 +203,7 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
                 IconAction(if(AudioPlayback.playing) "pause" else "play",if(AudioPlayback.playing) "暂停听书" else "继续听书",Accent) {
                     AudioPlayback.command(context,if(AudioPlayback.playing) "pause" else "resume")
                 }
-                Text("听书 · ${audioTime(AudioPlayback.position)} / ${audioTime(activeAudio.durationMs)}",Modifier.clickable {sheet="audio"}.padding(end=12.dp),fontSize=11.sp,color=colors.ink)
+                Text("听书 · ${audioTime(AudioPlayback.position)} / ${audioTime(activeAudio.durationMs)}",Modifier.clickable {sheet="activeAudio"}.padding(end=12.dp),fontSize=11.sp,color=colors.ink)
                 Box(Modifier.width(1.dp).height(16.dp).background(colors.muted.copy(.25f)))
                 IconAction("close","退出听书",colors.muted) {
                     followAudio=false
@@ -202,7 +230,7 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
                             existing=selectedComment,
                             colors=colors,
                             onSave={ body ->
-                                store.saveComment(book.id,chapter,sentence,body)
+                                store.saveComment(book,chapter,sentence,body)
                                 sheet=null
                                 toast="这句评论已保存"
                             }

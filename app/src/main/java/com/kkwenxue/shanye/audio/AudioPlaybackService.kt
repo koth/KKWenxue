@@ -27,6 +27,9 @@ object AudioPlayback {
     var timerMode by mutableIntStateOf(0); internal set // 0 off, -1 until chapter end, otherwise minutes
     var timerRemainingMs by mutableLongStateOf(0L); internal set
     internal var requested: AudioChapter? = null
+    internal var checkpointWriter: (() -> Unit)? = null
+    /** Both the foreground service and player UI run on the main thread. */
+    internal fun checkpointNow() = checkpointWriter?.invoke()
     private var restored = false
     fun restore(context: Context) {
         if (!restored) {
@@ -102,6 +105,7 @@ class AudioPlaybackService : Service() {
         super.onCreate()
         AudioPlayback.restore(this)
         library = AudioLibrary(this)
+        AudioPlayback.checkpointWriter = { refreshPosition(); save() }
         audio = getSystemService(AudioManager::class.java)
         focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
             .setAudioAttributes(attributes()).setWillPauseWhenDucked(false)
@@ -251,6 +255,7 @@ class AudioPlaybackService : Service() {
         if (AudioPlayback.position >= (AudioPlayback.current?.durationMs ?: 0)) seek(0)
         player?.start()
         AudioPlayback.playing = true
+        // Checkpoint the new chapter as soon as it starts, before the next ticker save.
         save()
         AudioPlayback.error = null
         resumeAfterFocus = false
@@ -380,6 +385,7 @@ class AudioPlaybackService : Service() {
     override fun onDestroy() {
         refreshPosition()
         save()
+        AudioPlayback.checkpointWriter = null
         handler.removeCallbacks(ticker)
         unregisterReceiver(noisy)
         player?.release()
