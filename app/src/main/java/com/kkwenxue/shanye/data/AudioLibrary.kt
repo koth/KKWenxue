@@ -6,6 +6,7 @@ import android.content.SharedPreferences
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.media.MediaMetadataRetriever
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.InputStream
@@ -16,7 +17,7 @@ import kotlin.math.abs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-data class AudioCue(val startMs: Int, val endMs: Int, val start: Int, val end: Int, val text: String)
+data class AudioCue(val startMs: Int, val endMs: Int, val start: Int, val end: Int, val text: String, val kind: String = "body")
 
 internal data class AudioReadingAnchor(
     val bookId: String, val chapterId: String, val textOffset: Int, val revision: String? = null,
@@ -99,6 +100,41 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
     fun position(item: AudioChapter): Int = prefs.getInt("position:${item.id}", 0).coerceIn(0, item.durationMs)
     fun savePosition(item: AudioChapter, position: Int) {
         prefs.edit().putInt("position:${item.id}", position.coerceIn(0, item.durationMs)).apply()
+    }
+
+    /** Publish a locally generated chapter using the same immutable manifest contract as server artifacts. */
+    fun registerLocalChapter(
+        book: Book, chapterIndex: Int, voiceKey: String, voiceName: String, audio: File,
+        durationMs: Int, cues: List<AudioCue>, sourceRevision: String
+    ): AudioChapter {
+        val chapter = book.chapters.getOrNull(chapterIndex) ?: error("章节不在书库中")
+        require(audio.isFile && audio.length() > 44) { "本地音频文件无效" }
+        val sourceHash = sha256(chapter.text.toByteArray())
+        val artifactId = sha256("local:${book.id}:${chapter.id}:$sourceRevision:$voiceKey:${sha256(audio)}".toByteArray()).take(32)
+        val directory = File(root, artifactId).apply { mkdirs() }
+        val target = File(directory, "chapter.m4a")
+        if (target != audio) {
+            if (!target.isFile || sha256(target) != sha256(audio)) {
+                audio.inputStream().use { input -> target.outputStream().use { input.copyTo(it) } }
+            }
+        }
+        val manifest = JSONObject().apply {
+            put("schema_version", 2).put("artifact_id", artifactId).put("book_id", book.id).put("chapter_id", chapter.id)
+            put("source_revision", sourceRevision).put("source_sha256", sourceHash).put("offsets", "UTF-16 into Android Chapter.text")
+            put("duration_ms", durationMs).put("complete", true).put("audio_sha256", sha256(target))
+            put("profile", JSONObject().put("speaker", voiceKey).put("voice_name", voiceName))
+            put("cues", JSONArray().apply {
+                cues.forEach { cue -> put(JSONObject().put("kind", cue.kind).put("start_ms", cue.startMs).put("end_ms", cue.endMs)
+                    .put("start_utf16", cue.start).put("end_utf16", cue.end).put("original_text", cue.text)) }
+            })
+        }
+        File(directory, "chapter.json").writeText(manifest.toString())
+        writableDatabase.insertWithOnConflict("artifacts", null, ContentValues().apply {
+            put("id", artifactId); put("book_id", book.id); put("chapter_id", chapter.id)
+            put("manifest", manifest.toString()); put("imported_at", System.currentTimeMillis())
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+        synchronized(importChanges) { importChanges.value += 1 }
+        return parse(manifest, listOf(book.copy(chapters = book.chapters.mapIndexed { index, item -> if (index == chapterIndex) item.copy(body = chapter.body) else item })))
     }
 
     /** Only the service promotes an actual playback position to the resume checkpoint. */
@@ -256,12 +292,17 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
             val end = cue.getInt("end_utf16")
             val startMs = cue.getInt("start_ms")
             val endMs = cue.getInt("end_ms")
-            require(start >= previousEnd && end > start && end <= chapter.text.length &&
-                startMs >= previousMs && endMs > startMs && endMs <= duration &&
-                chapter.text.substring(start, end) == cue.getString("original_text")) { "${chapter.title} 音频与原文定位不一致" }
-            cues.add(AudioCue(startMs, endMs, start, end, cue.getString("original_text")))
+            val kind = cue.optString("kind", "body")
+            if (kind == "title") {
+                require(start == 0 && end == 0 && startMs >= previousMs && endMs > startMs && endMs <= duration) { "${chapter.title} 标题 cue 无效" }
+            } else {
+                require(start >= previousEnd && end > start && end <= chapter.text.length &&
+                    startMs >= previousMs && endMs > startMs && endMs <= duration &&
+                    chapter.text.substring(start, end) == cue.getString("original_text")) { "${chapter.title} 音频与原文定位不一致" }
+            }
+            cues.add(AudioCue(startMs, endMs, start, end, cue.getString("original_text"), kind))
             previousMs = endMs
-            previousEnd = end
+            if (kind != "title") previousEnd = end
         }
         require(cues.isNotEmpty()) { "章节没有可播放的语音" }
         val profile = manifest.getJSONObject("profile")

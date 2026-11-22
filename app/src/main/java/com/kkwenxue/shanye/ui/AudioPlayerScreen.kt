@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kkwenxue.shanye.audio.AudioPlayback
 import com.kkwenxue.shanye.data.*
+import com.kkwenxue.shanye.tts.LocalTtsRuntime
+import com.kkwenxue.shanye.tts.LocalTtsStreamPlayer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -58,6 +60,8 @@ internal fun AudioPlayerScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val localTts = remember { LocalTtsRuntime(context) }
+    DisposableEffect(localTts) { onDispose { localTts.release() } }
     val shelfBooks = availableBooks.ifEmpty { Library.books.toList() }
     val visible = remember(items, book?.id) {
         items.filter { book == null || it.bookId == book.id }
@@ -118,6 +122,7 @@ internal fun AudioPlayerScreen(
     var importing by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var showSynthesis by remember { mutableStateOf(false) }
+    var localSynthesizing by remember { mutableStateOf(false) }
     val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
             importing = true
@@ -127,12 +132,46 @@ internal fun AudioPlayerScreen(
                 }
                 onImported()
                 message = if (count == 0) "这些音频已经在本机了" else "已导入 $count 个章节音频版本"
-            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (cancelled: CancellationException) {
+                localTts.cancel()
+                throw cancelled
             } catch (error: Exception) { message = error.message ?: "听书包导入失败" }
             finally { importing = false }
         }
     }
     fun importAudio() = importFile.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+    fun synthesizeLocally() {
+        val targetBook = book ?: return
+        val index = initialChapterIndex ?: return
+        if (localSynthesizing) return
+        scope.launch {
+            localSynthesizing = true
+            val streamPlayer = LocalTtsStreamPlayer()
+            try {
+                val generated = withContext(Dispatchers.IO) {
+                    val hydrated = OnlineChapterStore(context).load(targetBook, index)
+                    localTts.prepare()
+                    localTts.synthesizeChapterStreaming(hydrated, index) { segment ->
+                        streamPlayer.write(segment.pcm)
+                    }
+                }
+                withContext(Dispatchers.IO) { streamPlayer.finish() }
+                val hydrated = withContext(Dispatchers.IO) { OnlineChapterStore(context).load(targetBook, index) }
+                withContext(Dispatchers.IO) {
+                    library.registerLocalChapter(hydrated, index, generated.voiceKey, generated.voiceName,
+                        generated.audio, generated.durationMs, generated.cues, generated.sourceRevision)
+                }
+                onImported()
+                message = "本章已完成本地合成"
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (error: Exception) {
+                message = error.message ?: "本地语音合成失败"
+            } finally {
+                streamPlayer.close()
+                localSynthesizing = false
+            }
+        }
+    }
     fun start(item: AudioChapter, offset: Int = library.position(item)) {
         followsPlayback = true
         chosenId = item.id
@@ -266,13 +305,16 @@ internal fun AudioPlayerScreen(
                 Column(Modifier.fillMaxWidth().heightIn(min=440.dp), horizontalAlignment=Alignment.CenterHorizontally,
                     verticalArrangement=Arrangement.Center) {
                     Glyph("audio", PlayerMuted, size=52.dp)
-                    Text(if (chapterEntry) "本章暂无听书内容" else "还没有听书音频", Modifier.padding(top=22.dp), fontSize=23.sp, color=PlayerWhite)
-                    Text(if (chapterEntry) "先合成当前章节，或导入包含本章的听书包。" else "从已导入的在线书籍中选择章节合成，或导入已有听书包。", Modifier.padding(top=12.dp), fontSize=12.sp,
+                    Text(if (localSynthesizing) "正在边合成边播放" else if (chapterEntry) "本章暂无听书内容" else "还没有听书音频", Modifier.padding(top=22.dp), fontSize=23.sp, color=PlayerWhite)
+                    Text(if (localSynthesizing) "已生成的句子会立即播放，后续句子继续合成。" else if (chapterEntry) "先合成当前章节，或导入包含本章的听书包。" else "从已导入的在线书籍中选择章节合成，或导入已有听书包。", Modifier.padding(top=12.dp), fontSize=12.sp,
                         color=PlayerMuted, textAlign=TextAlign.Center)
-                    Button(onClick={showSynthesis=true}, modifier=Modifier.padding(top=22.dp),
+                    Button(onClick={if (chapterEntry) synthesizeLocally() else showSynthesis=true}, enabled=!localSynthesizing,
+                        modifier=Modifier.padding(top=22.dp),
                         colors=ButtonDefaults.buttonColors(containerColor=PlayerAccent, contentColor=PlayerPanel)) {
-                        Text(if (chapterEntry) "去合成本章" else "去合成 / 从服务器导入")
+                        Text(if (localSynthesizing) "正在本地合成…" else if (chapterEntry) "本地合成当前章" else "去合成 / 从服务器导入")
                     }
+                    if (chapterEntry) TextButton(onClick={showSynthesis=true}, enabled=!localSynthesizing,
+                        modifier=Modifier.padding(top=8.dp)) { Text("改用服务器合成", color=PlayerAccent) }
                     TextButton(onClick=::importAudio, enabled=!importing, modifier=Modifier.padding(top=22.dp)) {
                         Text(if (importing) "正在导入…" else "导入听书包", color=PlayerAccent)
                     }

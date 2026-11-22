@@ -4,6 +4,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 val signReleaseForLocalInstall = providers.gradleProperty("signReleaseForLocalInstall").orNull == "true"
+val localTtsVoiceDir = providers.gradleProperty("shanyeZonosVoiceDir")
+    .orElse(layout.projectDirectory.dir("../tmp/zonos3-publish/voices").asFile.absolutePath)
+val localTtsAssets = layout.buildDirectory.dir("generated/localTtsAssets")
 
 android {
     namespace = "com.kkwenxue.shanye"
@@ -15,8 +18,14 @@ android {
         versionCode = 37
         versionName = "0.9.17"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
     buildFeatures { compose = true; buildConfig = true }
+    sourceSets.named("main") { assets.srcDir(localTtsAssets) }
+    androidResources { noCompress += listOf("npy") }
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt") }
+    }
     if (signReleaseForLocalInstall) {
         buildTypes.named("release") { signingConfig = signingConfigs.getByName("debug") }
     }
@@ -25,6 +34,30 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+}
+
+val syncEmbeddedLocalTtsAssets = tasks.register<Sync>("syncEmbeddedLocalTtsAssets") {
+    group = "distribution"
+    description = "Copy ZONOS3 weights and pre-encoded voices into the release APK assets."
+    from(localTtsVoiceDir) {
+        include("*.codes.npy", "voices.json")
+        into("voices")
+    }
+    // The two current Chinese narrator presets are kept in the local encoder cache
+    // until the server voice directory is exported for release builds.
+    from(rootProject.file(".workbench/reference-voices/23915d12ec06c1fca031203a127696efddbf52264a245c54d45e6d2582eca5c0/reference.codes.npy")) {
+        rename { "shuoshuren1.codes.npy" }
+        into("voices")
+    }
+    from(rootProject.file(".workbench/reference-voices/d54c9aec5d26dba1566eeebad09bc24838dec9c485b0ff1c4c3ca9d8ea8dc735/reference.codes.npy")) {
+        rename { "shuoshuren2.codes.npy" }
+        into("voices")
+    }
+    into(localTtsAssets)
+}
+
+tasks.whenTaskAdded {
+    if (name == "preReleaseBuild") dependsOn(syncEmbeddedLocalTtsAssets)
 }
 
 tasks.register<Copy>("distReleaseApk") {

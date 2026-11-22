@@ -80,6 +80,51 @@ def create_app(settings: Settings):
         title="山页语音工作台", version="1.0.0", docs_url=None, redoc_url=None
     )
     token = settings.token_file.read_text().strip()
+    local_tts_manifest_cache: dict[str, Any] = {}
+
+    def local_tts_manifest() -> dict[str, Any]:
+        model_files = [settings.zonos_model_path / "backbone-ptq.gguf", settings.zonos_model_path / "zac-keep2.gguf"]
+        entries: list[dict[str, Any]] = []
+        signatures: list[str] = []
+        for path in model_files:
+            if not path.is_file():
+                continue
+            digest_value = file_digest(path)
+            signatures.append(f"{path.name}:{path.stat().st_size}:{digest_value}")
+            entries.append({"name": path.name, "path": path.name, "bytes": path.stat().st_size, "sha256": digest_value})
+        voices: list[dict[str, Any]] = []
+        voices_file = settings.zonos_voice_path / "voices.json"
+        try:
+            published = json.loads(voices_file.read_text()).get("voices", [])
+        except (OSError, ValueError, AttributeError):
+            published = []
+        for voice in published:
+            relative = voice.get("codes_path")
+            if not isinstance(relative, str) or not relative.startswith("zonos3-voices/"):
+                continue
+            path = settings.audio / relative
+            if not path.is_file():
+                continue
+            digest_value = file_digest(path)
+            speaker = str(voice.get("speaker", ""))
+            safe_id = ("clone-" + speaker.removeprefix("clone:")) if speaker.startswith("clone:") else (
+                "zonos3-haoran-v1" if speaker == "zonos:haoran" else speaker.replace("/", "_"))
+            voices.append({"id": safe_id, "speaker": speaker,
+                           "name": voice.get("name", safe_id), "codes": relative,
+                           "sha256": digest_value})
+            entries.append({"name": f"voice:{safe_id}", "path": relative, "bytes": path.stat().st_size,
+                            "sha256": digest_value})
+            signatures.append(f"{relative}:{path.stat().st_size}:{digest_value}")
+        signature = digest(encoded(signatures))
+        cached = local_tts_manifest_cache.get("value")
+        if cached is not None and local_tts_manifest_cache.get("signature") == signature:
+            return cached
+        result = {"pack_revision": signature, "engine_revision": "zonos3-mini-ggml-cpu-arm64-v1",
+                  "abi": ["arm64-v8a"], "minimum_free_bytes": 256 * 1024 * 1024,
+                  "files": entries, "voices": voices}
+        local_tts_manifest_cache["signature"] = signature
+        local_tts_manifest_cache["value"] = result
+        return result
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next):
@@ -213,6 +258,26 @@ def create_app(settings: Settings):
     @app.get("/api/v1/voices")
     def voices():
         return capabilities(settings)
+
+    @app.get("/api/v1/local-tts/manifest")
+    def local_tts_manifest_route():
+        return local_tts_manifest()
+
+    @app.get("/api/v1/local-tts/files/{file_path:path}")
+    def local_tts_file(file_path: str):
+        manifest = local_tts_manifest()
+        entry = next((item for item in manifest["files"] if item["path"] == file_path), None)
+        if entry is None:
+            raise DomainError("本地模型文件不存在", 404)
+        target = (settings.zonos_model_path / file_path if "/" not in file_path
+                  else settings.audio / file_path).resolve()
+        allowed_roots = (settings.zonos_model_path.resolve(), settings.audio.resolve())
+        if not target.is_relative_to(allowed_roots[0]) and not target.is_relative_to(allowed_roots[1]):
+            raise DomainError("本地模型文件路径无效", 403)
+        if not target.is_file() or target.stat().st_size != entry["bytes"]:
+            raise DomainError("本地模型文件尚未就绪", 503)
+        return FileResponse(target, media_type="application/octet-stream",
+                            headers={"ETag": '"' + entry["sha256"] + '"', "Accept-Ranges": "bytes"})
 
     @app.post("/api/v1/voice-clones", status_code=201)
     async def voice_clone(

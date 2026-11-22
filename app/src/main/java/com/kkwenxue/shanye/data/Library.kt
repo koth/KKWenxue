@@ -6,7 +6,7 @@ data class Chapter(val id: String, val title: String, val body: String, val body
     val text: String by lazy { if(body.isBlank()) "" else body.trimIndent().trim().split(Regex("\n\\s*\n"))
         .joinToString("\n\n") { "　　" + it.trim().replace("\n", "") }
     }
-    internal val audioSourceRevision: String by lazy {
+    val audioSourceRevision: String by lazy {
         syncSha256("$id:${syncSha256(text)}:reader-canonical+OpenCC-t2s-v1:reader-sentence-bounded160-v1")
     }
 }

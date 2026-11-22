@@ -9,6 +9,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.Alignment
@@ -22,6 +24,9 @@ import com.kkwenxue.shanye.ui.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import com.kkwenxue.shanye.tts.LocalTtsModelPack
+import com.kkwenxue.shanye.tts.LocalTtsPackState
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
@@ -64,6 +69,53 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.fillMaxSize().background(Paper), verticalArrangement=Arrangement.Center, horizontalAlignment=Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color=Accent, modifier=Modifier.size(24.dp))
                     Text("正在整理书架…", color=Muted, modifier=Modifier.padding(top=16.dp))
+                }
+                return@setContent
+            }
+            val localTtsPack = remember { LocalTtsModelPack(applicationContext) }
+            val localTtsPackState by localTtsPack.states.collectAsState()
+            var localTtsDownload by remember { mutableStateOf<Job?>(null) }
+            fun startLocalTtsDownload() {
+                localTtsDownload?.cancel()
+                localTtsDownload = scope.launch(Dispatchers.IO) {
+                    runCatching { localTtsPack.prepare() }
+                }
+            }
+            val downloading = localTtsPackState is LocalTtsPackState.Downloading || localTtsPackState is LocalTtsPackState.Verifying
+            val localTtsReady = localTtsPack.current() != null
+            if (!localTtsReady && !downloading) {
+                val failure = (localTtsPackState as? LocalTtsPackState.Failed)?.message
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("必须下载本地语音模型") },
+                    text = { Text((failure?.let { "上次下载失败：$it\n\n" } ?: "") +
+                        "首次下载约 1.1GB 模型，使用 Hugging Face 镜像。下载完成前无法进入书架。") },
+                    confirmButton = { Button(onClick = ::startLocalTtsDownload) { Text(if (failure == null) "下载模型" else "重试下载") } }
+                )
+            }
+            if (downloading) {
+                val progress = (localTtsPackState as? LocalTtsPackState.Downloading)
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text(if (progress == null) "校验本地模型" else "下载本地模型") },
+                    text = {
+                        Column {
+                            Text(progress?.file ?: "正在校验模型文件")
+                            if (progress != null) {
+                                val fraction = if (progress.total > 0) progress.received.toFloat() / progress.total else 0f
+                                androidx.compose.material3.LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
+                                Text("${progress.received / (1024 * 1024)} / ${progress.total / (1024 * 1024)} MB", modifier = Modifier.padding(top = 8.dp))
+                            } else CircularProgressIndicator(modifier = Modifier.padding(top = 12.dp).size(22.dp))
+                        }
+                    },
+                    confirmButton = {}
+                )
+            }
+            if (!localTtsReady) {
+                Column(Modifier.fillMaxSize().background(Paper), verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Accent, modifier = Modifier.size(28.dp))
+                    Text("准备本地语音合成…", color = Muted, modifier = Modifier.padding(top = 16.dp))
                 }
                 return@setContent
             }
