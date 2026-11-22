@@ -105,7 +105,8 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
     /** Publish a locally generated chapter using the same immutable manifest contract as server artifacts. */
     fun registerLocalChapter(
         book: Book, chapterIndex: Int, voiceKey: String, voiceName: String, audio: File,
-        durationMs: Int, cues: List<AudioCue>, sourceRevision: String
+        durationMs: Int, cues: List<AudioCue>, sourceRevision: String,
+        pauseRuleRevision: String = "punctuation-pauses-v1"
     ): AudioChapter {
         val chapter = book.chapters.getOrNull(chapterIndex) ?: error("章节不在书库中")
         require(audio.isFile && audio.length() > 44) { "本地音频文件无效" }
@@ -122,6 +123,7 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
             put("schema_version", 2).put("artifact_id", artifactId).put("book_id", book.id).put("chapter_id", chapter.id)
             put("source_revision", sourceRevision).put("source_sha256", sourceHash).put("offsets", "UTF-16 into Android Chapter.text")
             put("duration_ms", durationMs).put("complete", true).put("audio_sha256", sha256(target))
+            put("pause_rule_revision", pauseRuleRevision)
             put("profile", JSONObject().put("speaker", voiceKey).put("voice_name", voiceName))
             put("cues", JSONArray().apply {
                 cues.forEach { cue -> put(JSONObject().put("kind", cue.kind).put("start_ms", cue.startMs).put("end_ms", cue.endMs)

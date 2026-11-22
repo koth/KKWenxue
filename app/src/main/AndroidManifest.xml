@@ -14,6 +14,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.ShanYe">
         <service android:name=".audio.AudioPlaybackService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
+        <service android:name="androidx.work.impl.foreground.SystemForegroundService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

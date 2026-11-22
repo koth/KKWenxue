@@ -1,6 +1,9 @@
 package com.kkwenxue.shanye.tts
 
 import android.content.Context
+import android.app.ActivityManager
+import android.os.Build
+import android.os.PowerManager
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -16,6 +19,7 @@ import com.kkwenxue.shanye.data.RelayConnection
 
 private fun localTtsSha256(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
     .joinToString("") { "%02x".format(it) }
+private const val LOCAL_TTS_PAUSE_RULE_REVISION = "punctuation-pauses-v1"
 
 data class LocalTtsSegmentKey(
     val bookId: String,
@@ -46,15 +50,17 @@ data class LocalTtsChapterResult(
     val cues: List<AudioCue>,
     val voiceKey: String,
     val voiceName: String,
-    val sourceRevision: String
+    val sourceRevision: String,
+    val pauseRuleRevision: String = LOCAL_TTS_PAUSE_RULE_REVISION
 )
 
-data class LocalTtsStreamSegment(val cue: AudioCue, val pcm: ByteArray)
+data class LocalTtsStreamSegment(val cue: AudioCue?, val pcm: ByteArray, val isPause: Boolean = false)
 
 sealed interface LocalTtsRuntimeState {
     data object Idle : LocalTtsRuntimeState
     data class Preparing(val message: String) : LocalTtsRuntimeState
     data class Generating(val chapterId: String, val segmentIndex: Int) : LocalTtsRuntimeState
+    data object Paused : LocalTtsRuntimeState
     data class Ready(val voice: String) : LocalTtsRuntimeState
     data class Failed(val message: String) : LocalTtsRuntimeState
 }
@@ -65,6 +71,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
     private val root = File(context.noBackupFilesDir, "local-tts/segments").apply { mkdirs() }
     private val state = MutableStateFlow<LocalTtsRuntimeState>(LocalTtsRuntimeState.Idle)
     private val cancelled = AtomicBoolean(false)
+    private val paused = AtomicBoolean(false)
     val states = state.asStateFlow()
 
     fun capabilities(): String = LocalTtsNative.capabilities()
@@ -87,8 +94,12 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
 
     fun cancel() {
         cancelled.set(true)
+        paused.set(false)
         LocalTtsNative.cancel()
     }
+
+    fun pause() { paused.set(true); state.value = LocalTtsRuntimeState.Paused }
+    fun resume() { paused.set(false) }
 
     fun release() {
         cancelled.set(true)
@@ -118,6 +129,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
             }.onFailure { lastError = it }.getOrNull()
             if (pcm == null && attempt < 2) Thread.yield()
         }
+        if (cancelled.get()) throw java.util.concurrent.CancellationException("本地语音合成已取消")
         val generatedPcm = pcm ?: throw IllegalStateException("本地语音合成失败", lastError)
         if (cancelled.get()) throw java.util.concurrent.CancellationException("本地语音合成已取消")
         require(generatedPcm.isNotEmpty() && generatedPcm.size % 2 == 0) { "本地合成返回了空音频" }
@@ -154,8 +166,19 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         val pcm = java.io.ByteArrayOutputStream()
         val cues = mutableListOf<AudioCue>()
         var positionMs = 0
+        var previousText: String? = null
         for (piece in pieces) {
+            waitUntilRunnable()
             if (cancelled.get()) throw java.util.concurrent.CancellationException("本地语音合成已取消")
+            previousText?.let { previous ->
+                val pauseMs = pauseFor(previous)
+                if (pauseMs > 0) {
+                    val silence = ByteArray(pauseMs * SAMPLE_RATE / 1000 * 2)
+                    pcm.write(silence)
+                    onSegment(LocalTtsStreamSegment(null, silence, isPause = true))
+                    positionMs += pauseMs
+                }
+            }
             val key = LocalTtsSegmentKey(book.id, chapter.id, sourceRevision, piece.index, piece.text, voice.id, manifest.revision, manifest.engineRevision)
             val segment = synthesizeSegment(key, piece.start, piece.end)
             val bytes = segment.path.readBytes()
@@ -169,11 +192,12 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
             cues += cue
             onSegment(LocalTtsStreamSegment(cue, payload))
             positionMs = endMs
+            previousText = piece.text
         }
         val chapterId = localTtsSha256("chapter:${book.id}:${chapter.id}:$sourceRevision:${voice.id}:${manifest.revision}")
         val output = File(root, "$chapterId.wav")
         writeWav(output, pcm.toByteArray(), SAMPLE_RATE)
-        return LocalTtsChapterResult(output, positionMs, cues, voice.id, voice.name, sourceRevision)
+        return LocalTtsChapterResult(output, positionMs, cues, voice.id, voice.name, sourceRevision, LOCAL_TTS_PAUSE_RULE_REVISION)
     }
 
     fun removeSegment(key: LocalTtsSegmentKey) { File(root, "${key.id()}.wav").delete() }
@@ -192,6 +216,29 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
     }
 
     private fun wavSamples(file: File): Int = ((file.length() - 44).coerceAtLeast(0) / 2L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+
+    private fun waitUntilRunnable() {
+        val manager = context.getSystemService(ActivityManager::class.java)
+        val power = context.getSystemService(PowerManager::class.java)
+        val memoryInfo = ActivityManager.MemoryInfo()
+        while (true) {
+            if (cancelled.get()) throw java.util.concurrent.CancellationException("本地语音合成已取消")
+            manager?.getMemoryInfo(memoryInfo)
+            val tooHot = Build.VERSION.SDK_INT >= 29 && power != null &&
+                power.currentThermalStatus >= PowerManager.THERMAL_STATUS_SEVERE
+            if (!paused.get() && !memoryInfo.lowMemory && !tooHot && root.usableSpace >= MIN_FREE_BYTES) break
+            state.value = LocalTtsRuntimeState.Paused
+            Thread.sleep(250)
+        }
+    }
+
+    private fun pauseFor(text: String): Int = when (text.trimEnd().lastOrNull()) {
+        '。', '！', '？', '!', '?', '…' -> 220
+        '；', ';' -> 150
+        '，', ',', '、' -> 100
+        '：', ':' -> 120
+        else -> 80
+    }
 
     private data class Piece(val index: Int, val start: Int, val end: Int, val text: String)
 
@@ -212,5 +259,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
     companion object {
         const val SAMPLE_RATE = 44100
         const val DEFAULT_VOICE_ID = "clone-upload-53677481cc5fa643ef6413ff"
+        const val PAUSE_RULE_REVISION = "punctuation-pauses-v1"
+        private const val MIN_FREE_BYTES = 128L * 1024 * 1024
     }
 }

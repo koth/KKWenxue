@@ -3,6 +3,8 @@ package com.kkwenxue.shanye.ui
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,8 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kkwenxue.shanye.audio.AudioPlayback
 import com.kkwenxue.shanye.data.*
-import com.kkwenxue.shanye.tts.LocalTtsRuntime
-import com.kkwenxue.shanye.tts.LocalTtsStreamPlayer
+import com.kkwenxue.shanye.tts.LocalTtsSynthesisWorker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -60,8 +61,6 @@ internal fun AudioPlayerScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val localTts = remember { LocalTtsRuntime(context) }
-    DisposableEffect(localTts) { onDispose { localTts.release() } }
     val shelfBooks = availableBooks.ifEmpty { Library.books.toList() }
     val visible = remember(items, book?.id) {
         items.filter { book == null || it.bookId == book.id }
@@ -123,6 +122,32 @@ internal fun AudioPlayerScreen(
     var message by remember { mutableStateOf("") }
     var showSynthesis by remember { mutableStateOf(false) }
     var localSynthesizing by remember { mutableStateOf(false) }
+    var localWorkId by remember { mutableStateOf<java.util.UUID?>(null) }
+    LaunchedEffect(localWorkId) {
+        val workId = localWorkId ?: return@LaunchedEffect
+        WorkManager.getInstance(context).getWorkInfoByIdFlow(workId).collect { info ->
+            when (info?.state) {
+                WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> localSynthesizing = true
+                WorkInfo.State.SUCCEEDED -> {
+                    localSynthesizing = false
+                    localWorkId = null
+                    onImported()
+                    message = "本章已完成本地合成"
+                }
+                WorkInfo.State.FAILED -> {
+                    localSynthesizing = false
+                    localWorkId = null
+                    message = info.outputData.getString("error") ?: "本地语音合成失败"
+                }
+                WorkInfo.State.CANCELLED -> {
+                    localSynthesizing = false
+                    localWorkId = null
+                    message = "本地语音合成已取消"
+                }
+                else -> Unit
+            }
+        }
+    }
     val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
             importing = true
@@ -132,9 +157,7 @@ internal fun AudioPlayerScreen(
                 }
                 onImported()
                 message = if (count == 0) "这些音频已经在本机了" else "已导入 $count 个章节音频版本"
-            } catch (cancelled: CancellationException) {
-                localTts.cancel()
-                throw cancelled
+            } catch (cancelled: CancellationException) { throw cancelled
             } catch (error: Exception) { message = error.message ?: "听书包导入失败" }
             finally { importing = false }
         }
@@ -144,33 +167,8 @@ internal fun AudioPlayerScreen(
         val targetBook = book ?: return
         val index = initialChapterIndex ?: return
         if (localSynthesizing) return
-        scope.launch {
-            localSynthesizing = true
-            val streamPlayer = LocalTtsStreamPlayer()
-            try {
-                val generated = withContext(Dispatchers.IO) {
-                    val hydrated = OnlineChapterStore(context).load(targetBook, index)
-                    localTts.prepare()
-                    localTts.synthesizeChapterStreaming(hydrated, index) { segment ->
-                        streamPlayer.write(segment.pcm)
-                    }
-                }
-                withContext(Dispatchers.IO) { streamPlayer.finish() }
-                val hydrated = withContext(Dispatchers.IO) { OnlineChapterStore(context).load(targetBook, index) }
-                withContext(Dispatchers.IO) {
-                    library.registerLocalChapter(hydrated, index, generated.voiceKey, generated.voiceName,
-                        generated.audio, generated.durationMs, generated.cues, generated.sourceRevision)
-                }
-                onImported()
-                message = "本章已完成本地合成"
-            } catch (cancelled: CancellationException) { throw cancelled
-            } catch (error: Exception) {
-                message = error.message ?: "本地语音合成失败"
-            } finally {
-                streamPlayer.close()
-                localSynthesizing = false
-            }
-        }
+        localSynthesizing = true
+        localWorkId = LocalTtsSynthesisWorker.enqueue(context, targetBook.id, index).id
     }
     fun start(item: AudioChapter, offset: Int = library.position(item)) {
         followsPlayback = true
