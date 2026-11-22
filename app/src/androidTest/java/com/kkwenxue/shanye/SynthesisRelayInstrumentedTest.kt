@@ -37,7 +37,7 @@ class SynthesisRelayInstrumentedTest {
     private val artifact=java.util.UUID.randomUUID().toString().replace("-","")
     private val book=Book(bookId,"测试小说","作者","测试","","",0,listOf(
         Chapter("$bookId-10","第10章：风声","风🌊很轻。\n\n雨停了！"),
-        Chapter("$bookId-12","第12章：灯下","灯亮了。")))
+        Chapter("$bookId-12","第12章：灯下","灯亮了。")),remoteSource="catalog",remoteBookId=1L,activeRevision="fixture-v1",remoteLatestVersion="fixture-v1")
     private val taskId="11111111-1111-4111-8111-111111111111"
     private fun clean() { context.root.deleteRecursively(); context.root.mkdirs() }
 
@@ -427,7 +427,14 @@ class SynthesisRelayInstrumentedTest {
             else -> Reply(body=response.toString().toByteArray())
         } }.use { server ->
             val repository=SynthesisRepository(app);repository.settings.save(server.config())
-            BookDatabase(app).use {it.save(book)}
+            BookDatabase(app).use { db ->
+                db.save(book)
+                book.chapters.forEach { chapter ->
+                    val file=File(app.filesDir,"online-chapters/${syncSha256("${book.id}:${chapter.id}")}.txt")
+                    file.parentFile!!.mkdirs();file.writeText(chapter.body)
+                    db.saveChapterCache(book.id,chapter.id,book.activeRevision!!,file.name,file.length(),syncSha256(chapter.body),null)
+                }
+            }
             val key=repository.prepare(server.config(),book,listOf(0),"clone-linchuan-zonos3-v1","林川")
             val manager=androidx.work.WorkManager.getInstance(app)
             try {

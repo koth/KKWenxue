@@ -138,6 +138,41 @@ function App() {
   const chapterList = useRef<HTMLDivElement>(null);
   const bookRef = useRef("");
   const [waiting, setWaiting] = useState(!!pending());
+  const [serverLibraryOpen, setServerLibraryOpen] = useState(false);
+  const [serverBooks, setServerBooks] = useState<any[]>([]);
+  const [serverBook, setServerBook] = useState("");
+  const [serverExpression, setServerExpression] = useState("");
+  const [serverLoading, setServerLoading] = useState(false);
+  const [serverPulling, setServerPulling] = useState(false);
+  const [serverLibraryError, setServerLibraryError] = useState("");
+  const [libraryVersion, setLibraryVersion] = useState(0);
+  async function openServerLibrary() {
+    setServerLibraryOpen(true);
+    setServerLoading(true);
+    setServerLibraryError("");
+    try {
+      const result = await api("/api/v1/server-library/books");
+      setServerBooks(result.items);
+      setServerBook((id) => result.items.some((item:any) => item.id === id) ? id : result.items[0]?.id || "");
+    } catch (e) { setServerLibraryError((e as Error).message); }
+    finally { setServerLoading(false); }
+  }
+  async function pullServerBook() {
+    setServerPulling(true);
+    setServerLibraryError("");
+    try {
+      const result = await api("/api/v1/server-library/pull", { book_id: serverBook, expression: serverExpression });
+      const local = await api("/api/v1/books");
+      setBooks(local.items);
+      bookRef.current = result.book_id;
+      setBook(result.book_id);
+      setLibraryVersion((version) => version + 1);
+      setSelected([]); setCurrent(null); setArtifact(""); setPage(0); setSearch(""); setExpression(""); setAmbiguous([]); setResolvedChapters(null);
+      setServerLibraryOpen(false);
+      setNotice(`已拉取《${result.title}》的 ${result.imported} 个章节，可在本地选择章节试听。`);
+    } catch (e) { setServerLibraryError((e as Error).message); }
+    finally { setServerPulling(false); }
+  }
   async function run(work: () => Promise<void>) {
     setBusy(true);
     setError("");
@@ -225,7 +260,7 @@ function App() {
       active = false;
       clearTimeout(timer);
     };
-  }, [book, page, search, completedKey, resolvedChapters]);
+  }, [book, page, search, completedKey, resolvedChapters, libraryVersion]);
   useEffect(() => {
     if (chapterList.current) chapterList.current.scrollTop = 0;
   }, [book, page, search, resolvedChapters]);
@@ -499,6 +534,25 @@ function App() {
             </span>
             <small>{books.length.toString().padStart(2, "0")} 本</small>
           </div>
+          <button className="server-library-button" onClick={openServerLibrary}>
+            <Icon name="download" size={15} /> 从服务器拉取
+          </button>
+          {serverLibraryOpen && (
+            <section className="server-library-import" aria-label="从服务器拉取书籍">
+              <div className="server-library-title"><b>选择服务器已有原文</b><button aria-label="关闭服务器书库" disabled={serverPulling} onClick={() => setServerLibraryOpen(false)}>×</button></div>
+              <p>可拉取服务器已保存的章节。测试时可以只填需要的章号。</p>
+              {serverLoading ? <p role="status">正在读取服务器书库…</p> : <>
+                <label>服务器书籍<select value={serverBook} disabled={serverPulling} onChange={(e) => {setServerBook(e.target.value);setServerExpression("");}}>
+                  <option value="">请选择书籍</option>
+                  {serverBooks.map((item) => <option key={item.id} value={item.id}>{item.title} · 已有 {item.chapters} 章</option>)}
+                </select></label>
+                {!serverBooks.length && <p>服务器还没有保存可拉取的原文。</p>}
+                <label>章号 / 范围<input value={serverExpression} disabled={serverPulling} onChange={(e) => setServerExpression(e.target.value)} placeholder="留空拉取已有章节，如 984,986-988" /></label>
+                <button className="pull-book" disabled={!serverBook || serverPulling} onClick={pullServerBook}>{serverPulling ? "正在拉取并校验原文…" : "拉到本地书库"}</button>
+              </>}
+              {serverLibraryError && <p className="server-library-error" role="alert">{serverLibraryError}</p>}
+            </section>
+          )}
           <select
             aria-label="选择书籍"
             value={book}
@@ -844,21 +898,10 @@ function App() {
               <p>
                 {books.length
                   ? "在左侧选择章节，再为文字挑一个声音。"
-                  : "本地书库暂无内容，请将书籍导入阅读器数据库。"}
+                  : "本地书库暂无内容，从服务器拉取已有原文后就能测试语音合成。"}
               </p>
               {!books.length && (
-                <details>
-                  <summary>
-                    如何导入书籍 <Icon name="arrow" size={15} />
-                  </summary>
-                  <p>
-                    默认读取阅读器自带的本地 SQLite。可将 TXT/EPUB
-                    导入阅读器，或启动时指定已有数据库。书库浏览在本机完成。
-                  </p>
-                  <code>
-                    python3 -m local.launcher --library /path/to/shanye.db
-                  </code>
-                </details>
+                <button className="empty-pull-book" onClick={openServerLibrary}>从服务器拉一本书 <Icon name="arrow" size={15} /></button>
               )}
             </div>
           )}
@@ -903,7 +946,7 @@ function App() {
             </div>
             <div>
               <b>
-                {isClone ? "参考音色" : currentVoice?.label?.split(" · ")[0] || speaker}
+                {isClone ? presets.find((item) => item.id === preset)?.name || "参考音色" : currentVoice?.label?.split(" · ")[0] || speaker}
               </b>
               <small>
                 {isClone
@@ -926,7 +969,7 @@ function App() {
             </summary>
             <p className="helper">
               选择 3–30 秒干净的单人录音，支持
-              M4A/WAV/MP3。模型跟随录音中的音色和节奏，请同时填写与录音逐字对应的文本。
+              M4A/WAV/MP3。本机首次准备音色后会保存到服务器，后续合成可直接复用。逐字稿可选。
             </p>
             <input
               aria-label="参考音频"
@@ -937,20 +980,20 @@ function App() {
             <textarea
               aria-label="参考音频逐字稿"
               rows={3}
-              placeholder="参考音频逐字稿（必填，必须与录音内容一致）"
+              placeholder="参考音频逐字稿（可选，填写时请与录音一致）"
               value={referenceText}
               onChange={(e) => setReferenceText(e.target.value)}
             />
             <button
               className="clone-upload"
-              disabled={busy || !referenceFile || !referenceText.trim()}
+              disabled={busy || !referenceFile}
               onClick={() => run(uploadVoiceClone)}
             >
-              上传并创建克隆预设
+              {busy ? "正在准备新音色…" : "使用这段 MP3 / 录音创建音色"}
             </button>
             <small>
               {cloneReady
-                ? "ZONOS3 已就绪，实际音色和节奏以试听为准。"
+                ? "首次编码可能需要几十秒，完成后即可选择章节试听。"
                 : "服务器正在准备 ZONOS3 模型；请稍后重试。"}
             </small>
           </details>}

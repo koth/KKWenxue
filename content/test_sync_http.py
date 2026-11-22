@@ -101,7 +101,6 @@ class OnlineSyncHttpTest(unittest.TestCase):
 
             relay_process = start([relay])
             catalog_process = start([catalog, "serve"])
-            start([sys.executable, "-B", "-m", "content.worker"])
 
             def health(url, process):
                 self.assertIsNone(process.poll())
@@ -114,6 +113,7 @@ class OnlineSyncHttpTest(unittest.TestCase):
 
             wait_for(lambda: health(f"http://{relay_addr}", relay_process))
             wait_for(lambda: health(base, catalog_process))
+            start([sys.executable, "-B", "-m", "content.worker"])
 
             def catalog_post(path, payload):
                 return json.loads(http(base + path, payload)[1])
@@ -135,6 +135,12 @@ class OnlineSyncHttpTest(unittest.TestCase):
                 data = wait_for(download)
                 self.assertEqual(seen[0], 202)
                 self.assertEqual(task["sha256"], hashlib.sha256(data).hexdigest())
+                ranged = Request(base + task["downloadUrl"], headers={
+                    "Range": "bytes=5-", "If-Range": f'"{task["sha256"]}"'})
+                with urlopen(ranged, timeout=5) as response:
+                    self.assertEqual(206, response.status)
+                    self.assertEqual(f"bytes 5-{len(data)-1}/{len(data)}", response.headers["Content-Range"])
+                    self.assertEqual(data[5:], response.read())
                 return data
 
             with closing(sqlite3.connect(db)) as conn:
@@ -142,7 +148,7 @@ class OnlineSyncHttpTest(unittest.TestCase):
                              "VALUES (7,'测试书','作者',1,101,'第1章 初到')")
                 conn.commit()
                 book_path = "/v1/catalog/books/7"
-                old_task = fetch_status(catalog_post(book_path + "/content", {}))
+                old_task = fetch_status(catalog_post(book_path + "/bundle", {}))
                 with zipfile.ZipFile(io.BytesIO(zip_bytes(old_task))) as package:
                     old = json.loads(package.read("manifest.json"))
                     self.assertEqual(old["sha256"], hashlib.sha256(package.read("book.txt")).hexdigest())

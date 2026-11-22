@@ -16,9 +16,9 @@ from server.tests.fixtures import install_test_voice
 from server.voices import DEFAULT_PRESET_ID,HAORAN_PRESET_ID
 from server.zonos_runtime import (
     ZonosEngine,content_report,generation_seed,VERIFICATION,LEGACY_VERIFICATION,
-    SPEECH_PLAN,LEGACY_SPEECH_PLAN,
+    SPEECH_PLAN,LEGACY_SPEECH_PLAN,PREVIOUS_SPEECH_PLAN,FIXED_PAUSE_SPEECH_PLAN,
 )
-from server.speech_quality import compare_transcript
+from server.speech_quality import compare_transcript, spoken_units
 
 FAKE='''#!{python}
 from http.server import HTTPServer,BaseHTTPRequestHandler
@@ -29,7 +29,8 @@ class H(BaseHTTPRequestHandler):
  def log_message(self,*args):pass
  def do_GET(self):
   self.send_response(200);self.end_headers()
-  self.wfile.write(json.dumps({{'speakers':[dict(id=n,original_name=n+'.wav',speaker_modes=['reference']) for n in ['Haoran','LinChuan']]}}).encode())
+  names=sorted(p.stem for p in pathlib.Path(sys.argv[sys.argv.index('--tts-default-voices-dir')+1]).glob('*.wav'))
+  self.wfile.write(json.dumps({{'speakers':[dict(id=n,original_name=n+'.wav',speaker_modes=['reference']) for n in names]}}).encode())
  def do_POST(self):
   req=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
   with record.open('a') as f:f.write(json.dumps(req)+'\\n')
@@ -63,6 +64,18 @@ class ZonosTests(unittest.TestCase):
     def requests(self):
         return [json.loads(s) for s in self.settings.zonos_binary.with_suffix('.requests').read_text().splitlines()]
 
+    def test_verifier_handles_adjacent_chinese_number_groups_without_crashing(self):
+        text = '九对，十对，十一对，十二对，十三. ..十三！！'
+        transcript = '九对十对十一对十二对十三十三'
+        units = spoken_units(transcript)
+        self.assertEqual(['shi', 'san', 'shi', 'san'], [unit[0] for unit in units[-4:]])
+        self.assertEqual([(10, 14)] * 4, [(unit[1], unit[2]) for unit in units[-4:]])
+        report = compare_transcript(text, transcript)
+        self.assertTrue(report['accepted'], report)
+        self.assertEqual([], report['gaps'])
+        missing = compare_transcript(text, '九对十对十一对十二对')
+        self.assertFalse(missing['accepted'], missing)
+
     def test_resident_native_server_preencoded_voice_and_resampling(self):
         with patch.object(self.engine.verifier,'verify',return_value=dict(accepted=True,differences=[])):
             first=self.engine.generate([self.row()],self.config)[0]
@@ -80,6 +93,20 @@ class ZonosTests(unittest.TestCase):
         self.assertNotIn('--spk-encoder',process.args)
         self.assertNotIn('--zac-encoder',process.args)
 
+    def test_newly_uploaded_voice_reloads_at_the_next_batch_boundary(self):
+        from server.voice_publish import publish_reference
+        from server.tests.test_voice_upload import reference_payload
+        with patch.object(self.engine.verifier,'verify',return_value=dict(accepted=True,differences=[])):
+            self.engine.generate([self.row()],self.config)
+            previous=self.engine.process
+            with closing(connect(self.settings)) as db:
+                created=publish_reference(db,self.settings,reference_payload())
+                config=snapshot(db,self.settings,created['id'],None)['generation']
+            result=self.engine.generate([self.row()],config)[0]
+        self.assertEqual((19200,),result.shape)
+        self.assertIsNot(previous,self.engine.process)
+        self.assertEqual(config['native_voice_name'].removesuffix('.wav'),self.requests()[-1]['speaker_embedding_id'])
+
     def test_native_request_uses_cleaned_text_but_verifier_uses_original(self):
         text='她问：“《山海经》，，，你看过吗？！”'
         row=self.row(text)
@@ -87,13 +114,67 @@ class ZonosTests(unittest.TestCase):
         with patch.object(self.engine.verifier,'verify',return_value=report) as verify:
             results=self.engine.generate([row],self.config)
         self.assertEqual((19200,),results[0].shape)
-        self.assertEqual('她问：山海经，你看过吗？',self.requests()[0]['text'])
+        self.assertEqual(['她问：山海经，你看过吗？'],[req['text'] for req in self.requests()])
         verify.assert_called_once()
         self.assertEqual(text,verify.call_args.args[0])
         self.assertEqual(text,row['spoken_text'])
         execution=self.engine.last_execution[row['id']]
         self.assertEqual(SPEECH_PLAN,execution['speech_plan'])
-        self.assertEqual(self.requests()[0]['text'],execution['native_text'])
+        self.assertEqual('她问：山海经，你看过吗？',execution['native_text'])
+
+    def test_title_space_and_comma_are_real_pcm_silence_with_one_coverage_check(self):
+        import numpy as np
+        for text, title, pause_ms in [('第1168章 看不见的人', True, 500), ('门外雨停了，林川放下书。', False, 250)]:
+            row = {**self.row(text), 'sentence_index': -1 if title else 0}
+            with patch.object(self.engine.verifier,'verify',return_value=dict(accepted=True,differences=[])) as verify:
+                samples = self.engine.generate([row],{**self.config,'speech_plan':FIXED_PAUSE_SPEECH_PLAN})[0]
+            self.assertEqual(19200 * 2 + pause_ms * 24, len(samples))
+            self.assertTrue(np.all(samples[19200:19200+pause_ms*24] == 0))
+            verify.assert_called_once()
+            self.assertEqual(text,verify.call_args.args[0])
+            self.assertIs(samples,verify.call_args.args[1])
+            execution = self.engine.last_execution[row['id']]
+            self.assertEqual(pause_ms,execution['pauses'][0]['duration_ms'])
+            self.assertNotEqual(execution['parts'][0]['seed'],execution['parts'][1]['seed'])
+
+    def test_previous_punctuation_plan_remains_a_frozen_single_request(self):
+        text = '门外雨停了，林川放下书。'
+        with patch.object(self.engine.verifier,'verify',return_value=dict(accepted=True,differences=[])):
+            samples=self.engine.generate([self.row(text)],{**self.config,'speech_plan':PREVIOUS_SPEECH_PLAN})[0]
+        self.assertEqual((19200,),samples.shape)
+        self.assertEqual([text],[req['text'] for req in self.requests()])
+        self.assertEqual([],self.engine.last_execution['sentence']['pauses'])
+
+    def test_failure_after_a_completed_clause_never_returns_partial_audio(self):
+        self.settings.zonos_timeout=1
+        result=self.engine.generate([self.row('门外雨停了，hang')],{**self.config,'speech_plan':FIXED_PAUSE_SPEECH_PLAN})[0]
+        self.assertIsInstance(result,Exception)
+        self.assertIsNone(self.engine.process)
+        self.assertEqual('failed',self.engine.last_execution['sentence']['state'])
+        self.assertEqual(1,len(self.engine.last_execution['sentence']['parts']))
+
+    def test_natural_plan_keeps_whole_sentence_and_rechecks_after_audio_adjustment(self):
+        import numpy as np
+        text='门外雨停了，林川放下书。'
+        passed=dict(accepted=True,differences=[])
+        adjusted=np.ones(18000,dtype=np.float32)*.1
+        with patch('server.zonos_runtime.natural_pauses',return_value=(adjusted,[dict(changed=True)])), \
+             patch.object(self.engine.verifier,'verify',return_value=passed) as verify:
+            result=self.engine.generate([self.row(text)],self.config)[0]
+        self.assertIs(adjusted,result)
+        self.assertEqual(2,verify.call_count)
+        self.assertEqual([text],[req['text'] for req in self.requests()])
+        self.assertTrue(self.engine.last_execution['sentence']['content_verified'])
+
+    def test_natural_pause_adjustment_cannot_publish_a_failed_second_content_check(self):
+        import numpy as np
+        passed=dict(accepted=True,differences=[])
+        failed=dict(accepted=False,differences=[],gaps=[dict(text='林川')])
+        with patch('server.zonos_runtime.natural_pauses',return_value=(np.ones(12000),[])), \
+             patch.object(self.engine.verifier,'verify',side_effect=[passed,failed]):
+            result=self.engine.generate([self.row()],self.config)[0]
+        self.assertIsInstance(result,ValueError)
+        self.assertIn('停顿调整后',str(result))
 
     def test_frozen_legacy_speech_plan_keeps_original_punctuation_rules(self):
         row=self.row('《山海经》……')
@@ -108,7 +189,7 @@ class ZonosTests(unittest.TestCase):
         report=compare_transcript(text,'山海经')
         with patch.object(self.engine.verifier,'verify',return_value=report):
             result=self.engine.generate([self.row(text)],self.config)[0]
-        self.assertEqual('山海经，林川推开木门。',self.requests()[0]['text'])
+        self.assertEqual('山海经，林川推开木门。',''.join(req['text'] for req in self.requests()))
         self.assertIsInstance(result,ValueError)
         self.assertIn('林川推开木门',str(result))
         execution=self.engine.last_execution['sentence']

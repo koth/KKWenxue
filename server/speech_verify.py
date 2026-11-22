@@ -121,6 +121,9 @@ def serve(model, threads):
             stream.accept_waveform(16000,samples)
             recognizer.decode_stream(stream)
             result=compare_transcript(request['text'],stream.result.text)
+            tokens, timestamps = list(stream.result.tokens), list(stream.result.timestamps)
+            if tokens and len(tokens) == len(timestamps):
+                result['alignment'] = dict(tokens=tokens,timestamps=timestamps)
             result.update(seconds=time.perf_counter()-started,provider='cpu',model_revision='6a65851692da9706cbddfac66ea9b96ebb1dee21')
         except Exception as exc:
             result=dict(error=str(exc))

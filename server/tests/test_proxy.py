@@ -80,7 +80,7 @@ class ProxyTests(unittest.TestCase):
         dist = root / "dist"
         dist.mkdir()
         (dist / "index.html").write_text("<html>studio</html>")
-        cls.proxy = make_server(cls.transport, 0, dist, library_path=source)
+        cls.proxy = make_server(cls.transport, 0, dist, library_path=source, downloads_path=root/"downloads.sqlite")
         cls.port = cls.proxy.server_address[1]
         cls.proxy_thread = threading.Thread(target=cls.proxy.serve_forever, daemon=True)
         cls.proxy_thread.start()
@@ -154,7 +154,7 @@ class ProxyTests(unittest.TestCase):
     def test_local_catalogue_and_inline_estimate_do_not_import_whole_book(self):
         status, _, raw = self.request_http("/api/v1/books")
         self.assertEqual(200, status)
-        self.assertEqual("studio-demo", json.loads(raw)["items"][0]["id"])
+        self.assertIn("studio-demo", [b["id"] for b in json.loads(raw)["items"]])
         before = self.db.execute("select count(*) from chapters").fetchone()[0]
         _, _, raw = self.request_http("/session")
         headers = {
@@ -171,6 +171,78 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(
             before, self.db.execute("select count(*) from chapters").fetchone()[0]
         )
+
+    def test_server_pull_preserves_identity_and_source_is_read_only(self):
+        source=self.proxy.library.path.read_bytes()
+        jobs=self.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        status,_,raw=self.request_http("/api/v1/server-library/books")
+        self.assertEqual(200,status,raw)
+        self.assertIn(self.book,[b["id"] for b in json.loads(raw)["items"]])
+        _,_,raw=self.request_http("/session")
+        headers={"Content-Type":"application/json","Origin":f"http://127.0.0.1:{self.port}","X-Local-Session":json.loads(raw)["session"]}
+        body=json.dumps({"book_id":self.book,"expression":"1"})
+        self.assertEqual(403,self.request_http("/api/v1/server-library/pull","POST",body)[0])
+        status,_,raw=self.request_http("/api/v1/server-library/pull","POST",body,headers)
+        self.assertEqual(200,status,raw)
+        self.assertEqual(1,json.loads(raw)["imported"])
+        selected=self.proxy.library.resolve(self.book,"1")["chapters"].pop()
+        server=self.db.execute("SELECT * FROM revisions WHERE id=?",(selected["current_revision"],)).fetchone()
+        self.assertIsNotNone(server)
+        self.assertEqual(server["chapter_id"],selected["id"])
+        self.assertEqual(server["canonical_text"],selected["canonical_text"])
+        self.assertEqual(server["source_sha256"],selected["source_sha256"])
+        # Repeating a whole-book pull merges without duplicate IDs or jobs.
+        body=json.dumps({"book_id":self.book,"expression":""})
+        for _ in range(2):
+            status,_,raw=self.request_http("/api/v1/server-library/pull","POST",body,headers)
+            self.assertEqual(200,status,raw)
+            self.assertEqual(2,json.loads(raw)["imported"])
+        self.assertEqual(2,self.proxy.library.chapters(self.book)["total"])
+        self.assertEqual(source,self.proxy.library.path.read_bytes())
+        self.assertEqual(jobs,self.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0])
+
+    def test_server_pull_hash_failure_keeps_last_valid_local_book(self):
+        from unittest.mock import patch
+        remote=self.proxy.remote_library
+        original=remote.request
+        def corrupt(path,body=None):
+            value=original(path,body)
+            if path.startswith("/api/v1/revisions/"):
+                value["source_sha256"]="0"*64
+            return value
+        remote.pull(self.proxy.library,self.book)
+        before=self.proxy.library.payload(self.book,self.ids)
+        with patch.object(remote,"request",side_effect=corrupt):
+            with self.assertRaisesRegex(ValueError,"校验失败"):
+                remote.pull(self.proxy.library,self.book)
+        self.assertEqual(before,self.proxy.library.payload(self.book,self.ids))
+
+    def test_reference_upload_encodes_locally_before_publishing(self):
+        from unittest.mock import patch
+        from server.tests.test_voice_upload import reference_payload
+        _,_,raw=self.request_http('/session')
+        headers={'Content-Type':'multipart/form-data; boundary=voice-boundary',
+            'Origin':f'http://127.0.0.1:{self.port}','X-Local-Session':json.loads(raw)['session']}
+        body=('--voice-boundary\r\nContent-Disposition: form-data; name="reference"; filename="new.mp3"\r\nContent-Type: audio/mpeg\r\n\r\nmp3-data\r\n'
+              '--voice-boundary\r\nContent-Disposition: form-data; name="ref_text"\r\n\r\n这是新的参考录音。\r\n--voice-boundary--\r\n').encode()
+        with patch.object(self.proxy.voice_encoder,'prepare',return_value=reference_payload()) as prepare:
+            status,_,raw=self.request_http('/api/v1/voice-clones','POST',body,headers)
+            self.assertEqual(201,status,raw)
+            prepare.assert_called_once_with(b'mp3-data','new.mp3','这是新的参考录音。')
+            self.assertTrue(json.loads(raw)['id'].startswith('clone-upload-'))
+
+    def test_workbench_starts_without_a_reader_database(self):
+        path=Path(self.temp.name)/"fresh-downloads.sqlite"
+        server=make_server(self.transport,0,self.proxy.dist,downloads_path=path)
+        try:
+            self.assertEqual([],server.library.books())
+            result=server.remote_library.pull(server.library,self.book,"1")
+            self.assertEqual(1,result["imported"])
+            self.assertEqual(1,server.library.books()[0]["chapters"])
+        finally:
+            server.server_close()
+        with self.assertRaisesRegex(ValueError,"不能覆盖"):
+            make_server(self.transport,0,self.proxy.dist,library_path=self.proxy.library.path,downloads_path=self.proxy.library.path)
 
 
 if __name__ == "__main__":

@@ -118,7 +118,8 @@ class AudioContinuationInstrumentedTest {
         test: (ActivityScenario<MainActivity>, AudioLibrary, Book, List<AudioChapter>) -> Unit) {
         val id = "continuation-${UUID.randomUUID()}"
         val book = Book(id, "连续听书测试", "山页", "测试", "", "", 0,
-            (0..2).map { Chapter("$id-$it", "第${it + 1}章：连续播放$it", "风停了。\n\n故事继续。") })
+            (0..2).map { Chapter("$id-$it", "第${it + 1}章：连续播放$it", "风停了。\n\n故事继续。") },
+            remoteSource = "catalog", remoteBookId = 1L, activeRevision = "fixture-v1", remoteLatestVersion = "fixture-v1")
         val speed = AudioPlayback.speed
         ActivityScenario.launch(MainActivity::class.java).use { activity ->
             instrumentation.waitForIdleSync()

@@ -16,15 +16,20 @@ from .config import ENGINE
 from .speech_quality import native_speech_text
 from .speech_verify import SpeechVerifier
 from .text_normalization import normalize_tts_text
+from .prosody import pause_fragments, natural_pauses
 
 INFERENCE_REVISION='a50e1411-sm87-ptq-keep2-laci-v1'
 LEGACY_SPEECH_PLAN='zonos-native-laci-bounded160-v1'
-SPEECH_PLAN='zonos-native-laci-bounded160-punctuation-v2'
+PREVIOUS_SPEECH_PLAN='zonos-native-laci-bounded160-punctuation-v2'
+FIXED_PAUSE_SPEECH_PLAN='zonos-native-laci-bounded160-pauses-v3'
+SPEECH_PLAN='zonos-native-laci-bounded160-natural-pauses-v4'
 VERIFICATION='sensevoice-tolerant-coverage-v3'
 LEGACY_VERIFICATION='sensevoice-coverage-additions-v2'
 
 _TEXT_NORMALIZERS={
     LEGACY_SPEECH_PLAN:native_speech_text,
+    PREVIOUS_SPEECH_PLAN:normalize_tts_text,
+    FIXED_PAUSE_SPEECH_PLAN:normalize_tts_text,
     SPEECH_PLAN:normalize_tts_text,
 }
 
@@ -150,6 +155,12 @@ class ZonosEngine:
             raise RuntimeError('参考语音缓存已变更，当前任务不能使用其他音色')
         self._start()
         voice=self.voices.get(config['native_voice_name'])
+        if not voice:
+            # A reference can be published while this worker is resident.
+            # Reload at this batch boundary, after previous generation finishes.
+            self.close()
+            self._start()
+            voice=self.voices.get(config['native_voice_name'])
         if not voice or 'reference' not in voice.get('speaker_modes',[]):
             raise RuntimeError('原生服务未加载这个预编码音色')
         results=[]
@@ -161,38 +172,67 @@ class ZonosEngine:
             self.last_execution[row['id']]=execution
             try:
                 if not has_spoken_content(row['spoken_text']):raise ValueError('当前分段没有可朗读文本')
-                actual_seed=seed
                 text=normalize(row['spoken_text'])
                 execution['native_text']=text
-                payload=dict(text=text,language='cmn',stream=False,format='wav',
-                    seed=actual_seed,speaker_embedding_id=voice['id'],speaker_mode='reference',
-                    max_tokens=800,laci=True,short_text='auto',temperature=.75,topk=80,top_p=.69,
-                    repetition_penalty=2.4,repetition_window=96,repetition_codebooks=6)
-                started=time.monotonic()
-                try:audio=self._request('/v2/generate',payload)
-                except Exception:
-                    self.close();raise
                 import numpy as np
                 import soundfile as sf
-                raw,sr=sf.read(io.BytesIO(audio),dtype='float32')
-                if raw.ndim!=1 or sr!=44100 or len(raw)<4410 or not np.isfinite(raw).all():
-                    raise ValueError('ZONOS3 返回的音频无效')
-                decoded=subprocess.run(['ffmpeg','-v','error','-nostdin','-i','pipe:0',
-                    '-ac','1','-ar','24000','-f','f32le','pipe:1'],input=audio,
-                    capture_output=True,check=True,timeout=30)
-                samples=np.frombuffer(decoded.stdout,dtype='<f4').copy()
-                part=dict(seed=actual_seed,state='completed',generation_seconds=time.monotonic()-started,
-                    audio_seconds=len(samples)/24000)
-                execution['parts'].append(part)
+                fragments = (pause_fragments(text, title=row.get('sentence_index', 0) < 0)
+                             if speech_plan == FIXED_PAUSE_SPEECH_PLAN else [dict(text=text, pause_ms=0, reason=None)])
+                arrays, cursor = [], 0
+                execution['pauses'] = []
+                for index, fragment in enumerate(fragments):
+                    actual_seed = (seed + index * 9973) % 2**32
+                    payload=dict(text=fragment['text'],language='cmn',stream=False,format='wav',
+                        seed=actual_seed,speaker_embedding_id=voice['id'],speaker_mode='reference',
+                        max_tokens=800,laci=True,short_text='auto',temperature=.75,topk=80,top_p=.69,
+                        repetition_penalty=2.4,repetition_window=96,repetition_codebooks=6)
+                    started=time.monotonic()
+                    try:audio=self._request('/v2/generate',payload)
+                    except Exception:
+                        self.close();raise
+                    raw,sr=sf.read(io.BytesIO(audio),dtype='float32')
+                    if raw.ndim!=1 or sr!=44100 or len(raw)<4410 or not np.isfinite(raw).all():
+                        raise ValueError('ZONOS3 返回的音频无效')
+                    decoded=subprocess.run(['ffmpeg','-v','error','-nostdin','-i','pipe:0',
+                        '-ac','1','-ar','24000','-f','f32le','pipe:1'],input=audio,
+                        capture_output=True,check=True,timeout=30)
+                    clip=np.frombuffer(decoded.stdout,dtype='<f4').copy()
+                    if len(fragments) > 1:
+                        fade = min(192, len(clip)//2)
+                        if index: clip[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
+                        if fragment['pause_ms']: clip[-fade:] *= np.linspace(1, 0, fade, dtype=np.float32)
+                    arrays.append(clip)
+                    cursor += len(clip)
+                    part=dict(seed=actual_seed,text=fragment['text'],state='completed',
+                        generation_seconds=time.monotonic()-started,audio_seconds=len(clip)/24000)
+                    execution['parts'].append(part)
+                    if fragment['pause_ms']:
+                        frames = fragment['pause_ms'] * 24
+                        execution['pauses'].append(dict(after_part=index,reason=fragment['reason'],
+                            start_sample=cursor,end_sample=cursor+frames,duration_ms=fragment['pause_ms']))
+                        arrays.append(np.zeros(frames,dtype=np.float32))
+                        cursor += frames
+                if not arrays: raise ValueError('当前分段没有可朗读文本')
+                samples=np.concatenate(arrays)
                 if config.get('verification'):
                     if config['verification'] not in (VERIFICATION,LEGACY_VERIFICATION):raise RuntimeError('未知的内容校验策略')
                     began=time.monotonic();report=content_report(self.verifier.verify(row['spoken_text'],samples))
                     execution['verification_checks'].append(report)
                     part['verify_seconds']=time.monotonic()-began
                     if not report['accepted']:
-                        part['state']='rejected-content'
+                        for part in execution['parts']: part['state']='rejected-content'
                         raise ValueError('朗读内容校验未通过，存在明显漏读或大段内容差异，当前片段未发布；'
                             f"预期「{row['spoken_text'][:160]}」；识别「{report.get('transcript', '')[:160]}」")
+                    if speech_plan == SPEECH_PLAN:
+                        adjusted, pauses = natural_pauses(samples,text,report.get('alignment'),
+                                                          title=row.get('sentence_index',0)<0)
+                        execution['pauses'] = pauses
+                        if adjusted is not samples:
+                            report=content_report(self.verifier.verify(row['spoken_text'],adjusted))
+                            execution['verification_checks'].append(report)
+                            if not report['accepted']:
+                                raise ValueError('停顿调整后的朗读内容校验未通过，当前片段未发布')
+                            samples=adjusted
                     execution.update(content_verified=True,verification_policy=VERIFICATION,
                                      requested_verification_policy=config['verification'],
                                      content_tolerated=report.get('tolerated',False))

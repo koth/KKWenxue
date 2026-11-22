@@ -10,13 +10,14 @@ from .db import encoded
 from .voices import available_voices, DEFAULT_PRESET_ID, NARRATOR_INSTRUCTION, is_clone_speaker
 from .zonos_runtime import SPEECH_PLAN, VERIFICATION, INFERENCE_REVISION
 from .zonos_voices import voice_manifest
+from .narration import VERSION as NARRATION_VERSION
 
 
 def capabilities(settings):
     return dict(engine=ENGINE,model=MODEL,revision=REVISION,
         voices=available_voices(settings),default_preset_id=DEFAULT_PRESET_ID,
         languages=['Chinese'],instruction=False,voice_cloning=True,
-        reference_upload=False,reference_text_required=False,
+        reference_upload=False,reference_text_required=False,preencoded_upload=True,
         speech_verification=VERIFICATION if settings.speech_verify else None,
         voice_clone_model=str(settings.zonos_model_path),voice_design=False,
         source='published-preencoded-voices',speed_range=[.75,1.5],pause_ms_range=[0,2000])
@@ -96,4 +97,5 @@ def snapshot(db, settings, preset_id, export):
         ref_text=voice.get('transcript',''),normalization=NORMALIZATION,segmentation=SEGMENTATION)
     if clone_id:generation['voice_clone_ref_id']=clone_id
     return dict(voice_preset_version_id=row['id'],preset_name=row['name'],generation=generation,
+        narration=dict(version=NARRATION_VERSION,titles={}),
         export=validate_export(export if export is not None else json.loads(row['export_json'])))

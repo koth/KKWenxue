@@ -48,7 +48,7 @@ class OnlineStorageInstrumentedTest {
             BookDatabase(context, name).use { db ->
                 assertEquals(2, db.load(old.id).single().chapters.size)
                 val restored = db.rollback(old.id)!!
-                assertEquals(old.chapters, restored.chapters)
+                assertEquals(old.chapters.map{it.copy(body="")}, restored.chapters)
                 assertEquals(old.activeRevision, restored.activeRevision)
                 assertEquals(7L, restored.remoteBookId)
                 assertEquals("rolled_back", db.onlineStatus(old.id).state)

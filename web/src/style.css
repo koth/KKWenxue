@@ -225,6 +225,29 @@ h1 > span {
   display: flex;
   flex-direction: column;
 }
+.server-library-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px;
+  margin: 0 0 14px;
+  background: #f9f7f0;
+  font-size: 12px;
+}
+.server-library-import { padding: 12px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 6px; background: #f9f7f0; }
+.server-library-title { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
+.server-library-title button { font-size: 20px; padding: 0 4px; }
+.server-library-import p { color: var(--muted); font-size: 11px; line-height: 1.7; margin: 8px 0; }
+.server-library-import label { display: block; font-size: 11px; margin-top: 12px; }
+.server-library-import input { display: block; width: 100%; padding: 9px 7px; margin-top: 6px; border: 1px solid var(--line); border-radius: 5px; background: white; font-size: 11px; }
+.server-library-import select { margin-top: 6px; }
+.server-library-import .pull-book { width: 100%; padding: 10px 5px; margin-top: 12px; border-radius: 5px; background: var(--accent); color: white; font-size: 12px; }
+.server-library-import .server-library-error { color: #a74632; }
+.empty-pull-book { display: flex; align-items: center; gap: 8px; margin: 18px auto 0; color: var(--accent); font-size: 13px; }
 .catalog select,
 .settings select {
   width: 100%;

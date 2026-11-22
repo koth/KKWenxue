@@ -181,12 +181,6 @@ class OnlineLibrarySync(private val context: Context) {
                 phase(if (rolledBack) "rolled_back" else "up_to_date", persist = true)
                 return null
             }
-
-            job = database.syncJob(book, version.remoteRevision)
-            if (!retry && confirmed == null && job?.state == "cancelled") {
-                phase("cancelled", "已取消等待，可手动重试", persist = true)
-                return null
-            }
             if (settings.value.unmeteredOnly && !onUnmeteredNetwork()) {
                 phase("paused", "等待不限流量网络", persist = true)
                 return null
@@ -196,6 +190,23 @@ class OnlineLibrarySync(private val context: Context) {
                 return null
             }
 
+            // Online books use a lightweight manifest revision. Refreshing it
+            // keeps already cached chapter bodies by stable source ID and never
+            // starts the legacy whole-book ZIP task during an automatic check.
+            if (book.remoteSource == "catalog" && version.remoteRevision != from) {
+                phase("syncing", "正在更新章节目录", persist = true)
+                val updated = loadOnlineManifest(book, client, version)
+                database.save(updated, from)
+                phase("completed", "目录已更新，共 ${updated.chapters.size} 章", persist = true)
+                publish(book.id, status.copy(latestCount = updated.chapters.size.toLong()))
+                return updated
+            }
+
+            job = database.syncJob(book, version.remoteRevision)
+            if (!retry && confirmed == null && job?.state == "cancelled") {
+                phase("cancelled", "已取消等待，可手动重试", persist = true)
+                return null
+            }
             val saved = job
             phase("planning", persist = true)
             var task = saved?.taskId?.let {
@@ -285,6 +296,21 @@ class OnlineLibrarySync(private val context: Context) {
             android.util.Log.w("OnlineLibrarySync", "在线书籍同步失败：${book.title}", error)
             null
         }
+    }
+
+    private suspend fun loadOnlineManifest(book: Book, client: CatalogClient, version: CatalogVersion): Book {
+        val manifest=runInterruptible(Dispatchers.IO){client.completeManifest(requireNotNull(book.remoteBookId))}
+        val refs=manifest.chapters
+        val chapters = refs.sortedBy { it.index }.map { ref ->
+            Chapter("online:catalog:${book.remoteBookId}:chapter:source:${ref.sourceId}", ref.title, "", ref.bodySha256)
+        }
+        return book.copy(
+            subtitle = "${chapters.size} 章 · 在线目录",
+            chapters = chapters,
+            activeRevision = manifest.revision,
+            remoteLatestChapterId = version.latestChapterId,
+            remoteLatestVersion = manifest.revision
+        )
     }
 
     private class UserCancelled : CancellationException("用户取消在线更新")

@@ -35,7 +35,8 @@ class AudioLibraryInstrumentedTest {
         override fun getSharedPreferences(name:String,mode:Int)=baseContext.getSharedPreferences("audio-tests:$name",mode)
     }
     private val book = Book("audio-test", "测试", "", "", "", "", 0,
-        listOf(Chapter("audio-test-1", "第一章", "风🌊很轻。\n\n雨停了！")))
+        listOf(Chapter("audio-test-1", "第一章", "风🌊很轻。\n\n雨停了！")),
+        remoteSource = "catalog", remoteBookId = 1L, activeRevision = "fixture-v1", remoteLatestVersion = "fixture-v1")
     private val id = "a".repeat(32)
 
     private fun wave(): ByteArray {
@@ -106,6 +107,25 @@ class AudioLibraryInstrumentedTest {
         AudioLibrary(context).use { library ->
             assertEquals(id,library.preferred(library.load(listOf(book)),book.chapters[0].id)?.id)
             assertEquals(1234,library.position(library.load(listOf(book)).first { it.id==id }))
+        }
+        clean()
+    }
+
+    @Test fun importsHeadingAudioWithoutTreatingHeadingOffsetsAsBodyAnchors() {
+        clean()
+        val data = manifest()
+        data.getJSONArray("cues").getJSONObject(0).put("start_ms", 1200)
+        data.put("title_cues", JSONArray().put(JSONObject()
+            .put("start_ms", 0).put("end_ms", 550).put("original_text", book.chapters[0].title)
+            .put("start_utf16", 0).put("end_utf16", book.chapters[0].title.length)))
+        AudioLibrary(context).use { library ->
+            assertEquals(1, library.importBundle(pack(data), listOf(book)))
+            val item = library.load(listOf(book)).single()
+            assertEquals(0, item.positionFor(0))
+            assertEquals(1200, item.positionFor(1))
+            assertNull(item.cueAt(300))
+            assertEquals(0, item.offsetAt(300))
+            assertEquals(book.chapters[0].text, item.cues.single().text)
         }
         clean()
     }

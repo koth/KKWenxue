@@ -12,8 +12,8 @@ android {
         applicationId = "com.kkwenxue.shanye"
         minSdk = 26
         targetSdk = 35
-        versionCode = 30
-        versionName = "0.9.10"
+        versionCode = 37
+        versionName = "0.9.17"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }

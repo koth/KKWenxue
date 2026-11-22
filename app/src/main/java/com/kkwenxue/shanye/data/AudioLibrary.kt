@@ -26,6 +26,7 @@ internal data class AudioReadingAnchor(
         if (book.id != bookId) return null
         val index = book.chapters.indexOfFirst { it.id == chapterId }
         if (index < 0) return migration?.locate(book)
+        if (book.chapters[index].body.isBlank()) return ReadingPosition(index,textOffset.coerceAtLeast(0))
         if (book.remoteBookId != null && !chapterId.contains(":chapter:sha256:") &&
             revision != book.chapters[index].audioSourceRevision) return migration?.locate(book)
         return ReadingPosition(index, textOffset.coerceIn(0, book.chapters[index].text.length))
@@ -55,7 +56,8 @@ data class AudioChapter(
         return (cue.start + ((cue.end - cue.start) * fraction).toInt()).coerceIn(cue.start, cue.end)
     }
     fun anchorAt(position: Int): Int = (cues.lastOrNull { it.startMs <= position } ?: cues.firstOrNull())?.start ?: 0
-    fun positionFor(offset: Int): Int = (cues.firstOrNull { it.end > offset } ?: cues.lastOrNull())?.startMs ?: 0
+    fun positionFor(offset: Int): Int = if (offset <= 0) 0 else
+        (cues.firstOrNull { it.end > offset } ?: cues.lastOrNull())?.startMs ?: 0
     internal fun readingAnchor(offset: Int): AudioReadingAnchor {
         val cue = cues.firstOrNull { offset in it.start..it.end && it.text.length == it.end - it.start }
         val migration = cue?.let {
@@ -235,9 +237,10 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
         val id = manifest.getString("artifact_id")
         require(id.matches(Regex("[a-f0-9]{32}"))) { "音频版本编号无效" }
         val book = books.firstOrNull { it.id == manifest.getString("book_id") } ?: error("本机没有这本书，请先导入相同的小说文本")
+        require(book.remoteBookId != null && book.remoteSource == "catalog") { "听书包只能关联在线书库中的书籍" }
         val index = book.chapters.indexOfFirst { it.id == manifest.getString("chapter_id") }
         require(index >= 0) { "本机没有对应章节，请检查小说版本" }
-        val chapter = book.chapters[index]
+        val chapter = OnlineChapterStore(context).cached(book,index) ?: error("请先缓存对应章节正文")
         val sourceHash = sha256(chapter.text.toByteArray())
         require(manifest.getString("source_sha256") == sourceHash) { "${chapter.title} 原文版本不同，无法匹配音频" }
         require(manifest.getString("source_revision") == chapter.audioSourceRevision) { "章节修订校验失败" }

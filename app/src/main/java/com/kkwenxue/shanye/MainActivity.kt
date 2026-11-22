@@ -176,7 +176,7 @@ class MainActivity : ComponentActivity() {
                             showTextAt(book, it)
                         }
                         showAudio=false
-                    })
+                    }, availableBooks=Library.books.toList())
                 }
             }
             }

@@ -80,7 +80,7 @@ class LocalAndCloneTests(unittest.TestCase):
             ["rain-1"], [r[0] for r in self.db.execute("select id from chapters")]
         )
         spoken = self.db.execute(
-            "select spoken_text from segments order by segment_index"
+            "select spoken_text from segments where sentence_index>=0 order by segment_index"
         ).fetchone()[0]
         self.assertIn("繁体文字", spoken)
         self.assertNotIn("untrusted", spoken)

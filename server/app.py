@@ -20,6 +20,7 @@ from .config import Settings
 from .db import initialize, connect, transaction
 from .jobs import submit, detail, action, cached_audio, verified_file
 from .presets import capabilities, create_preset, snapshot
+from .narration import chapter_parts
 from .voices import BUILTIN_PRESET_IDS, DEFAULT_PRESET_ID, NARRATOR_INSTRUCTION, display_instruction
 from tts.common import digest, has_spoken_content
 from .db import encoded
@@ -63,6 +64,16 @@ class BundleRequest(StrictModel):
     artifact_ids: list[str] = Field(min_length=1, max_length=2000)
 
 
+class PreencodedReference(StrictModel):
+    name: str = Field(min_length=1,max_length=100)
+    ref_text: str = Field(default='',max_length=3000)
+    audio_base64: str = Field(min_length=1,max_length=4*1024*1024)
+    codes_base64: str = Field(min_length=1,max_length=200000)
+    audio_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    codes_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    duration_ms: int | None = None
+
+
 def create_app(settings: Settings):
     initialize(settings)
     app = FastAPI(
@@ -78,6 +89,8 @@ def create_app(settings: Settings):
             return JSONResponse(
                 {"error": {"message": "需要有效服务凭据"}}, status_code=401
             )
+        if request.url.path=='/api/v1/voice-clones/preencoded' and int(request.headers.get('content-length','0'))>5*1024*1024:
+            return JSONResponse({'error':{'message':'参考音色数据过大'}},status_code=413)
         return await call_next(request)
 
     @app.exception_handler(DomainError)
@@ -144,7 +157,7 @@ def create_app(settings: Settings):
         args = (identifier, q, f"%{q}%", q)
         rows = db.execute(
             f"""SELECT c.*,length(r.canonical_text) AS characters,
-            (SELECT count(*) FROM segments s WHERE s.revision_id=r.id AND s.depth=0) AS segments,
+            (SELECT count(*) FROM segments s WHERE s.revision_id=r.id AND s.depth=0 AND s.sentence_index>=0) AS segments,
             (SELECT count(*) FROM chapters d WHERE d.book_id=c.book_id AND d.chapter_number=c.chapter_number
               AND (d.chapter_index<c.chapter_index OR (d.chapter_index=c.chapter_index AND d.id<=c.id))) AS same_number_order
             FROM chapters c JOIN revisions r ON r.id=c.current_revision WHERE {where} ORDER BY c.chapter_index,c.id LIMIT ? OFFSET ?""",
@@ -178,7 +191,7 @@ def create_app(settings: Settings):
             "segments": [
                 dict(s)
                 for s in db.execute(
-                    "SELECT * FROM segments WHERE revision_id=? AND depth=0 ORDER BY segment_index",
+                    "SELECT * FROM segments WHERE revision_id=? AND depth=0 AND sentence_index>=0 ORDER BY segment_index",
                     (identifier,),
                 )
             ],
@@ -208,14 +221,25 @@ def create_app(settings: Settings):
         x_vector_only_mode: bool = Form(False),
         db: Any = Depends(database),
     ):
-        raise DomainError('当前提供预先克隆的音色。请在管理员端离线编码参考录音后发布音色',503)
+        raise DomainError('请通过本地语音工作台上传参考录音，由本机完成 ZONOS3 编码后创建音色',503)
+
+    @app.post('/api/v1/voice-clones/preencoded',status_code=201)
+    def preencoded_voice(body: PreencodedReference,db: Any = Depends(database)):
+        from .voice_publish import publish_reference
+        return publish_reference(db,settings,body.model_dump())
 
     @app.get("/api/v1/presets")
     def presets(db: Any = Depends(database)):
         items = []
+        try:
+            published={v['speaker'] for v in json.loads((settings.zonos_voice_path/'voices.json').read_text())['voices']}
+        except (OSError,ValueError,KeyError):
+            published=set()
         for row in db.execute(
-            "SELECT * FROM presets WHERE speaker IN ('clone:linchuan-zonos3-v1','zonos:haoran') ORDER BY confirmed DESC,created DESC"
+            "SELECT * FROM presets ORDER BY confirmed DESC,created DESC"
         ):
+            if row['speaker'] not in published:
+                continue
             item = dict(row)
             item["instruct"] = display_instruction(item["instruct"])
             item["export"] = json.loads(item.pop("export_json"))
@@ -254,10 +278,7 @@ def create_app(settings: Settings):
         variant = digest(encoded(config["generation"]))
         total = reused = chars = skipped = 0
         for chapter in selected["chapters"]:
-            for part in db.execute(
-                "SELECT * FROM segments WHERE revision_id=? AND depth=0",
-                (chapter["current_revision"],),
-            ).fetchall():
+            for part in chapter_parts(db, chapter["current_revision"], chapter["title"]):
                 total += 1
                 if not has_spoken_content(part["spoken_text"]):
                     skipped += 1

@@ -37,6 +37,8 @@ import java.util.Date
 private data class SynthesisVoice(val id: String, val name: String, val custom: Boolean = false)
 
 private val NarratorVoices = listOf(
+    SynthesisVoice("clone-upload-53677481cc5fa643ef6413ff", "说书人一 · 克隆音色", custom = true),
+    SynthesisVoice("clone-upload-8b3a4bdcb1e3db46b0f78b89", "说书人二 · 克隆音色", custom = true),
     SynthesisVoice("clone-linchuan-zonos3-v1", "林川 · 克隆音色", custom = true),
     SynthesisVoice("zonos3-haoran-v1", "Haoran · 中文男声")
 )
@@ -47,7 +49,8 @@ private val ExportSpeeds = listOf(0.8f, 0.9f, 1.0f, 1.1f, 1.2f)
 private fun exportSpeedLabel(speed: Float) = "${String.format(java.util.Locale.ROOT, "%.1f", speed)} 倍速"
 
 @Composable
-fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioLibrary, onImported: () -> Unit, onClose: () -> Unit) {
+fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioLibrary, onImported: () -> Unit, onClose: () -> Unit,
+                    availableBooks: List<Book> = emptyList()) {
     val context = LocalContext.current
     val activity = LocalActivity.current
     val repository = remember { SynthesisRepository(context) }
@@ -56,8 +59,24 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
     var settingsOpen by remember { mutableStateOf(false) }
     var initialized by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    var selectedBookId by rememberSaveable { mutableStateOf(book?.id ?: Library.books.first().id) }
-    val selectedBook = Library.books.firstOrNull { it.id == selectedBookId } ?: Library.books.first()
+    val shelfBooks = availableBooks.ifEmpty { Library.books.toList() }
+    var selectedBookId by rememberSaveable { mutableStateOf(book?.id ?: shelfBooks.firstOrNull()?.id.orEmpty()) }
+    val activeBookId = selectedBookId.takeIf { id -> shelfBooks.any { it.id == id } }
+        ?: book?.id?.takeIf { id -> shelfBooks.any { it.id == id } }
+        ?: shelfBooks.firstOrNull()?.id.orEmpty()
+    val selectedBook = shelfBooks.firstOrNull { it.id == activeBookId }
+    if (selectedBook == null) {
+        OverlaySystemBars(SystemBarsMode.SYNTHESIS)
+        BackHandler(onBack = onClose)
+        Box(Modifier.fillMaxSize().background(Paper).systemBarsPadding(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+                Text("还没有可合成的书", fontFamily = Serif, fontSize = 22.sp, color = Ink)
+                Text("请先从在线书库导入一本书。", Modifier.padding(top = 10.dp), color = Muted, fontSize = 13.sp)
+                TextButton(onClick = onClose, modifier = Modifier.padding(top = 12.dp)) { Text("返回书架", color = Accent) }
+            }
+        }
+        return
+    }
     val startingIndex = (if (selectedBook.id == book?.id) initialChapterIndex else 0)?.coerceIn(selectedBook.chapters.indices) ?: 0
     var expression by rememberSaveable(selectedBookId) { mutableStateOf(
         SynthesisPayload.chapterNumber(selectedBook.chapters[startingIndex], startingIndex).toString()
@@ -69,6 +88,8 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
     var bookMenu by remember { mutableStateOf(false) }
     var voiceMenu by remember { mutableStateOf(false) }
     var speedMenu by remember { mutableStateOf(false) }
+    var taskBookMenu by remember { mutableStateOf(false) }
+    var taskBookFilterId by rememberSaveable { mutableStateOf("") }
     var tasks by remember { mutableStateOf<List<SavedSynthesis>>(emptyList()) }
     var pending by remember { mutableStateOf<List<PendingSynthesis>>(emptyList()) }
     var cursor by remember { mutableStateOf<Long?>(null) }
@@ -79,6 +100,7 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
     var networkError by remember { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
     fun notify(message: String) { scope.launch { snackbar.showSnackbar(message) } }
+
 
     suspend fun loadSaved(config: RelayConnection) {
         val saved = withContext(Dispatchers.IO) { repository.tasks(config.endpoint) to repository.pending(config.endpoint) }
@@ -165,7 +187,7 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                 Glyph("next", Muted, size=16.dp)
                             }
                             DropdownMenu(expanded=bookMenu, onDismissRequest={bookMenu=false}) {
-                                Library.books.forEach { item -> DropdownMenuItem(text={Text(item.title)}, onClick={selectedBookId=item.id; bookMenu=false}) }
+                                shelfBooks.forEach { item -> DropdownMenuItem(text={Text(item.title)}, onClick={selectedBookId=item.id; bookMenu=false}) }
                             }
                         }
                     }
@@ -244,6 +266,19 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                     }
                 }
             } else {
+                // The selector is based on the local shelf, so a book with no
+                // synthesis yet is still available as a filter and shows an
+                // honest empty state instead of disappearing from the menu.
+                val localTaskBooks = shelfBooks
+                val activeTaskBookFilter = taskBookFilterId.takeIf { id -> localTaskBooks.any { it.id == id } }.orEmpty()
+                val visiblePending = pending.filter { item ->
+                    item.bookId.isNotBlank() && localTaskBooks.any { it.id == item.bookId } &&
+                        (activeTaskBookFilter.isBlank() || item.bookId == activeTaskBookFilter)
+                }
+                val visibleTasks = tasks.filter { saved ->
+                    localTaskBooks.any { it.id == saved.task.bookId } &&
+                        (activeTaskBookFilter.isBlank() || saved.task.bookId == activeTaskBookFilter)
+                }
                 LazyColumn(Modifier.weight(1f), contentPadding=PaddingValues(24.dp), verticalArrangement=Arrangement.spacedBy(16.dp)) {
                     item {
                         Row(Modifier.fillMaxWidth(), verticalAlignment=Alignment.CenterVertically) {
@@ -254,25 +289,48 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                             TextButton(enabled=!busy && !refreshing && connection != null, onClick={connection?.let {scope.launch {refresh(it)}}}) { Text("刷新", color=Accent) }
                         }
                         networkError?.let { Text(it, Modifier.padding(top=12.dp), color=Accent, fontSize=12.sp, lineHeight=19.sp) }
-                    }
-                    items(pending, key={"pending:${it.key}"}) { item ->
-                        Column(Modifier.fillMaxWidth().border(1.dp, Rule, RoundedCornerShape(14.dp)).padding(16.dp)) {
-                            Text(item.title, fontSize=15.sp, color=Ink)
-                            Text("派发状态待确认", Modifier.padding(top=8.dp), fontSize=12.sp, color=Accent)
-                            Text("使用原任务核对，不会因重试重复创建。", Modifier.padding(top=6.dp), fontSize=11.sp, color=Muted)
-                            item.error?.let { Text(it, Modifier.padding(top=6.dp), fontSize=11.sp, color=Muted, maxLines=2) }
-                            TextButton(enabled=!busy, onClick={connection?.let {config -> runAction {
-                                try { withContext(Dispatchers.IO) { repository.publish(config, item.key) } }
-                                finally { loadSaved(config) }
-                            }}}) {Text("核对派发", color=Accent)}
+                        if (localTaskBooks.isNotEmpty()) {
+                            Text("按书籍筛选", Modifier.padding(top=18.dp), fontSize=12.sp, color=Muted)
+                            Box(Modifier.padding(top=8.dp)) {
+                                OutlinedButton(onClick={ taskBookMenu = true }, enabled=!busy, modifier=Modifier.fillMaxWidth(), shape=RoundedCornerShape(12.dp)) {
+                                    Text(localTaskBooks.firstOrNull { it.id == activeTaskBookFilter }?.title ?: "全部本地书籍", Modifier.weight(1f).padding(vertical=8.dp), color=Ink, maxLines=1, overflow=TextOverflow.Ellipsis)
+                                    Glyph("next", Muted, size=16.dp)
+                                }
+                                DropdownMenu(expanded=taskBookMenu, onDismissRequest={taskBookMenu=false}) {
+                                    DropdownMenuItem(text={Text("全部本地书籍")}, onClick={taskBookFilterId=""; taskBookMenu=false})
+                                    localTaskBooks.forEach { localBook ->
+                                        DropdownMenuItem(text={Text(localBook.title, maxLines=1, overflow=TextOverflow.Ellipsis)}, onClick={taskBookFilterId=localBook.id; taskBookMenu=false})
+                                    }
+                                }
+                            }
                         }
                     }
-                    items(tasks, key={it.task.id}) { saved ->
+                    localTaskBooks.filter { localBook ->
+                        visiblePending.any { it.bookId == localBook.id } || visibleTasks.any { it.task.bookId == localBook.id }
+                    }.forEach { localBook ->
+                        item(key="task-book:${localBook.id}") {
+                            Text(localBook.title, Modifier.padding(top=4.dp), fontFamily=Serif, fontSize=19.sp, color=Ink)
+                        }
+                        val bookPending = visiblePending.filter { it.bookId == localBook.id }
+                        items(bookPending, key={"pending:${it.key}"}) { item ->
+                            Column(Modifier.fillMaxWidth().border(1.dp, Rule, RoundedCornerShape(14.dp)).padding(16.dp)) {
+                                Text(item.title, fontSize=15.sp, color=Ink)
+                                Text("派发状态待确认", Modifier.padding(top=8.dp), fontSize=12.sp, color=Accent)
+                                Text("使用原任务核对，不会因重试重复创建。", Modifier.padding(top=6.dp), fontSize=11.sp, color=Muted)
+                                item.error?.let { Text(it, Modifier.padding(top=6.dp), fontSize=11.sp, color=Muted, maxLines=2) }
+                                TextButton(enabled=!busy, onClick={connection?.let {config -> runAction {
+                                    try { withContext(Dispatchers.IO) { repository.publish(config, item.key) } }
+                                    finally { loadSaved(config) }
+                                }}}) {Text("核对派发", color=Accent)}
+                            }
+                        }
+                        val bookTasks = visibleTasks.filter { it.task.bookId == localBook.id }
+                        items(bookTasks, key={it.task.id}) { saved ->
                         val task=saved.task
                         val delivery=saved.delivery
                         val downloading=delivery?.state == "running" && task.state == "completed"
                         val expired=task.result?.expiresAt?.let { it <= System.currentTimeMillis()/1000 } ?: true
-                        val localBook=task.bookId.isBlank() || Library.books.any { it.id == task.bookId }
+                        val hasLocalBook = task.bookId.isBlank() || Library.books.any { it.id == task.bookId }
                         val label=when {
                             saved.importedAt>0 -> "已导入"
                             delivery?.state == "blocked" -> "需要处理"
@@ -327,15 +385,16 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                 }}}) {Text("重试失败片段",color=Accent)}
                             }
                             if (task.state == "completed" && saved.importedAt == 0L && !expired && (delivery == null || delivery.state == "blocked")) {
-                                TextButton(enabled=!busy && localBook, onClick={connection?.let {config -> runAction {
+                                TextButton(enabled=!busy && hasLocalBook, onClick={connection?.let {config -> runAction {
                                     withContext(Dispatchers.IO) { SynthesisDownloads.retry(context,config,task.id) }
                                     loadSaved(config)
                                     notify("已加入后台下载，完成后会自动导入")
-                                }}}) { Glyph("download", if(localBook) Accent else Muted, size=16.dp); Text(if(localBook) (if(delivery==null) "下载并导入" else "重试自动导入") else "请先导入对应小说", Modifier.padding(start=6.dp), color=if(localBook) Accent else Muted) }
+                                }}}) { Glyph("download", if(hasLocalBook) Accent else Muted, size=16.dp); Text(if(hasLocalBook) (if(delivery==null) "下载并导入" else "重试自动导入") else "请先导入对应小说", Modifier.padding(start=6.dp), color=if(hasLocalBook) Accent else Muted) }
                             }
                         }
+                        }
                     }
-                    if (tasks.isEmpty() && pending.isEmpty()) item { Text("还没有任务。派发章节后，可在这里查看进度。", Modifier.padding(vertical=24.dp), color=Muted, fontSize=13.sp, lineHeight=22.sp) }
+                    if (visibleTasks.isEmpty() && visiblePending.isEmpty()) item { Text(if (localTaskBooks.isEmpty()) "本地书架中还没有可显示的合成任务。" else "当前筛选下还没有合成任务。", Modifier.padding(vertical=24.dp), color=Muted, fontSize=13.sp, lineHeight=22.sp) }
                     if (cursor != null) item {
                         OutlinedButton(enabled=!busy && !refreshing, onClick={connection?.let {config -> scope.launch {refresh(config,cursor)}}}, modifier=Modifier.fillMaxWidth()) {Text("加载更早的任务", color=Accent)}
                     }

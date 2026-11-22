@@ -180,15 +180,32 @@ def encode_aac(source, target, title, album, gain_db=0.0):
     )
 
 
+def quiet_edge(samples, rate=24000, tail=False):
+    """Count contiguous low-energy edge frames without touching audible speech."""
+    import numpy as np
+    frame=max(1,rate//200)
+    blocks=samples[:len(samples)//frame*frame].reshape(-1,frame)
+    if not len(blocks): return 0
+    rms=np.sqrt(np.mean(blocks**2,axis=1))
+    threshold=max(.00003,min(.0003,float(np.percentile(rms,95))*.02))
+    count=0
+    for level in (rms[::-1] if tail else rms):
+        if level>=threshold: break
+        count+=frame
+    return min(count,len(samples)//2)  # Never erase an entire low-energy clip.
+
+
 def render(
-    clips, target: Path, speed, pause_ms, title, album, normalize_loudness=False
+    clips, target: Path, speed, pause_ms, title, album, normalize_loudness=False,
+    natural_title_pause=False,
 ):
     """clips contain path and original anchor metadata; returns sample-derived cues."""
     import numpy as np
     import soundfile as sf
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    rate, cursor, cues = 24000, 0, []
+    rate, cursor, cues, title_cues = 24000, 0, [], []
+    previous_tail = 0
     fields = (
         "segment_id",
         "sentence_index",
@@ -233,13 +250,28 @@ def render(
                 ):
                     raise ValueError("Invalid clip sample format")
                 if index:
-                    gap = round(pause_ms * rate / 1000)
+                    after_heading = (clips[index-1].get("kind") == "chapter_title"
+                                     and clip.get("kind") != "chapter_title")
+                    if after_heading and natural_title_pause:
+                        target_gap=round(max(350,pause_ms)*rate/1000)
+                        head=quiet_edge(samples,rate)
+                        excess=max(0,previous_tail+head-target_gap)
+                        trim_head=min(head,excess)
+                        samples=samples[trim_head:];head-=trim_head;excess-=trim_head
+                        trim_tail=min(previous_tail,excess)
+                        if trim_tail:
+                            cursor-=trim_tail;audio.seek(cursor)
+                            title_cues[-1]['end_ms']=round(cursor*1000/rate)
+                        gap=max(0,target_gap-(previous_tail-trim_tail)-head)
+                    else:
+                        gap = round((max(650, pause_ms) if after_heading else pause_ms) * rate / 1000)
                     audio.write(np.zeros(gap, dtype=np.float32))
                     cursor += gap
                 start = cursor
                 audio.write(samples)
                 cursor += len(samples)
-                cues.append(
+                previous_tail=quiet_edge(samples,rate,tail=True) if natural_title_pause else 0
+                (title_cues if clip.get("kind") == "chapter_title" else cues).append(
                     {
                         **{k: clip[k] for k in fields},
                         "audio_id": clip.get("audio_id"),
@@ -247,6 +279,7 @@ def render(
                         "end_ms": round(cursor * 1000 / rate),
                     }
                 )
+            audio.truncate(cursor)
         loudness = None
         if normalize_loudness:
             normalized = work / "normalized.wav"
@@ -288,5 +321,6 @@ def render(
         "duration_ms": duration,
         "audio_sha256": file_digest(target),
         "encoder_tolerance_ms": 150,
+        **({"title_cues": title_cues} if title_cues else {}),
         **({"loudness": loudness} if loudness is not None else {}),
     }

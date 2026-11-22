@@ -76,7 +76,7 @@ def import_artifact(
         parts = [
             dict(r)
             for r in db.execute(
-                "SELECT * FROM segments WHERE revision_id=? AND depth=0 ORDER BY segment_index",
+                "SELECT * FROM segments WHERE revision_id=? AND depth=0 AND sentence_index>=0 ORDER BY segment_index",
                 (revision["id"],),
             )
         ]

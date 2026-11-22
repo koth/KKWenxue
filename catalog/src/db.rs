@@ -41,6 +41,17 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS books_title    ON books(title);
         CREATE INDEX IF NOT EXISTS books_author   ON books(author);
 
+        CREATE TABLE IF NOT EXISTS book_chapters (
+            book_id          INTEGER NOT NULL,
+            source_id        INTEGER NOT NULL,
+            chapter_index    INTEGER NOT NULL,
+            title            TEXT NOT NULL,
+            body_sha256      TEXT,
+            PRIMARY KEY (book_id, source_id),
+            UNIQUE (book_id, chapter_index)
+        );
+        CREATE INDEX IF NOT EXISTS book_chapters_order ON book_chapters(book_id, chapter_index);
+
         CREATE TABLE IF NOT EXISTS sync_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             kind TEXT NOT NULL,
@@ -52,8 +63,86 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
             detail_ok INTEGER NOT NULL DEFAULT 0,
             detail_failed INTEGER NOT NULL DEFAULT 0,
             error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS content_generations(book_id INTEGER PRIMARY KEY,updated_at INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS chapter_bodies(book_id INTEGER NOT NULL,source_id INTEGER NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,sha256 TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(book_id,source_id));
+        CREATE TABLE IF NOT EXISTS prefetch_jobs (
+            id TEXT PRIMARY KEY,
+            book_id INTEGER NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 50,
+            state TEXT NOT NULL DEFAULT 'queued',
+            total INTEGER NOT NULL DEFAULT 0,
+            completed INTEGER NOT NULL DEFAULT 0,
+            failed INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prefetch_items (
+            job_id TEXT NOT NULL,
+            source_id INTEGER NOT NULL,
+            state TEXT NOT NULL DEFAULT 'queued',
+            error TEXT,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY(job_id, source_id)
         );",
-    )
+    )?;
+    let has_hash = conn
+        .prepare("PRAGMA table_info(book_chapters)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == "body_sha256");
+    if !has_hash {
+        conn.execute("ALTER TABLE book_chapters ADD COLUMN body_sha256 TEXT", [])?;
+    }
+    Ok(())
+}
+
+pub fn create_prefetch_job(
+    conn: &Connection,
+    id: &str,
+    book_id: i64,
+    priority: i64,
+    source_ids: &[i64],
+) -> rusqlite::Result<()> {
+    let now = now();
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("INSERT INTO prefetch_jobs(id,book_id,priority,state,total,created_at,updated_at) VALUES(?1,?2,?3,'queued',?4,?5,?5)", params![id, book_id, priority, source_ids.len() as i64, now])?;
+    for source_id in source_ids {
+        tx.execute(
+            "INSERT INTO prefetch_items(job_id,source_id,updated_at) VALUES(?1,?2,?3)",
+            params![id, source_id, now],
+        )?;
+    }
+    tx.commit()
+}
+
+pub fn update_prefetch_item(
+    conn: &Connection,
+    job_id: &str,
+    source_id: i64,
+    state: &str,
+    error: Option<&str>,
+) -> rusqlite::Result<()> {
+    let now = now();
+    conn.execute("UPDATE prefetch_items SET state=?3,error=?4,updated_at=?5 WHERE job_id=?1 AND source_id=?2", params![job_id, source_id, state, error, now])?;
+    conn.execute("UPDATE prefetch_jobs SET state=CASE WHEN EXISTS(SELECT 1 FROM prefetch_items WHERE job_id=?1 AND state IN ('queued','running')) THEN 'running' WHEN EXISTS(SELECT 1 FROM prefetch_items WHERE job_id=?1 AND state='failed') THEN 'partial' ELSE 'completed' END, completed=(SELECT COUNT(*) FROM prefetch_items WHERE job_id=?1 AND state='completed'), failed=(SELECT COUNT(*) FROM prefetch_items WHERE job_id=?1 AND state='failed'), updated_at=?2 WHERE id=?1", params![job_id, now])?;
+    Ok(())
+}
+
+pub fn prefetch_job(conn: &Connection, id: &str) -> rusqlite::Result<Option<serde_json::Value>> {
+    let job = conn.query_row("SELECT id,book_id,priority,state,total,completed,failed,created_at,updated_at FROM prefetch_jobs WHERE id=?1", params![id], |r| {
+        Ok(serde_json::json!({"taskId": r.get::<_,String>(0)?, "bookId": r.get::<_,i64>(1)?, "priority": r.get::<_,i64>(2)?, "state": r.get::<_,String>(3)?, "total": r.get::<_,i64>(4)?, "completed": r.get::<_,i64>(5)?, "failed": r.get::<_,i64>(6)?, "createdAt": r.get::<_,i64>(7)?, "updatedAt": r.get::<_,i64>(8)?}))
+    }).optional()?;
+    let Some(mut value) = job else {
+        return Ok(None);
+    };
+    let mut stmt = conn.prepare(
+        "SELECT source_id,state,error FROM prefetch_items WHERE job_id=?1 ORDER BY source_id",
+    )?;
+    let items = stmt.query_map(params![id], |r| Ok(serde_json::json!({"sourceId": r.get::<_,i64>(0)?, "state": r.get::<_,String>(1)?, "error": r.get::<_,Option<String>>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    value["items"] = serde_json::to_value(items).unwrap_or_default();
+    Ok(Some(value))
 }
 
 fn now() -> i64 {
@@ -93,7 +182,8 @@ pub fn upsert_list(conn: &Connection, b: &ListItem) -> rusqlite::Result<()> {
 
 /// 详情页字段（meta_level=2）。
 pub fn upsert_detail(conn: &Connection, d: &Detail) -> rusqlite::Result<()> {
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO books (id, title, author, category, status, words, words_text, chapter_no,
                             latest_chapter_id, latest_chapter, last_update_at, detail_at,
                             first_seen_at, meta_level)
@@ -127,6 +217,89 @@ pub fn upsert_detail(conn: &Connection, d: &Detail) -> rusqlite::Result<()> {
             now()
         ],
     )?;
+    if d.chapters.is_empty() {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let old = chapters(&tx, d.id, 100_000, None)?
+        .into_iter()
+        .map(|c| (c.source_id, c))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut seen = std::collections::HashSet::new();
+    if d.chapters
+        .iter()
+        .any(|c| c.source_id <= 0 || c.title.is_empty() || !seen.insert(c.source_id))
+    {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    tx.execute("DELETE FROM book_chapters WHERE book_id=?1", params![d.id])?;
+    for (index, chapter) in d.chapters.iter().enumerate() {
+        let hash = old
+            .get(&chapter.source_id)
+            .filter(|c| c.title == chapter.title)
+            .and_then(|c| c.body_sha256.clone());
+        tx.execute("INSERT INTO book_chapters(book_id,source_id,chapter_index,title,body_sha256) VALUES(?1,?2,?3,?4,?5)",params![d.id,chapter.source_id,index as i64,chapter.title,hash])?;
+    }
+    tx.execute("DELETE FROM chapter_bodies WHERE book_id=?1 AND NOT EXISTS(SELECT 1 FROM book_chapters c WHERE c.book_id=chapter_bodies.book_id AND c.source_id=chapter_bodies.source_id AND c.title=chapter_bodies.title)",params![d.id])?;
+    tx.commit()?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct ChapterRow {
+    pub source_id: i64,
+    pub chapter_index: i64,
+    pub title: String,
+    pub body_sha256: Option<String>,
+}
+
+pub fn chapters(
+    conn: &Connection,
+    book_id: i64,
+    limit: usize,
+    cursor: Option<i64>,
+) -> rusqlite::Result<Vec<ChapterRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT source_id,chapter_index,title,body_sha256 FROM book_chapters
+         WHERE book_id=?1 AND (?2 IS NULL OR chapter_index>?2)
+         ORDER BY chapter_index LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(params![book_id, cursor, limit as i64], |r| {
+        Ok(ChapterRow {
+            source_id: r.get(0)?,
+            chapter_index: r.get(1)?,
+            title: r.get(2)?,
+            body_sha256: r.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn chapter_count(conn: &Connection, book_id: i64) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM book_chapters WHERE book_id=?1",
+        params![book_id],
+        |r| r.get(0),
+    )
+}
+
+pub fn has_chapter(conn: &Connection, book_id: i64, source_id: i64) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM book_chapters WHERE book_id=?1 AND source_id=?2)",
+        params![book_id, source_id],
+        |r| r.get(0),
+    )
+}
+
+pub fn set_chapter_hash(
+    conn: &Connection,
+    book_id: i64,
+    source_id: i64,
+    sha256: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE book_chapters SET body_sha256=?3 WHERE book_id=?1 AND source_id=?2",
+        params![book_id, source_id, sha256],
+    )?;
     Ok(())
 }
 
@@ -141,6 +314,21 @@ pub fn record_detail_failure(conn: &Connection, id: i64) -> rusqlite::Result<()>
 pub fn pending_detail_ids(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT id FROM books WHERE meta_level < 2 ORDER BY detail_failures, id LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, i64>(0))?;
+    rows.collect()
+}
+
+/// Existing catalog databases created before the chapter manifest table need a
+/// one-time detail refresh. Keep this separate from normal incremental sync so
+/// the API never has to invent chapter references for an unfilled book.
+pub fn pending_chapter_ids(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT b.id FROM books b
+         WHERE b.meta_level = 2
+           AND (NOT EXISTS (SELECT 1 FROM book_chapters c WHERE c.book_id=b.id)
+                OR (b.chapter_no > 0 AND (SELECT COUNT(*) FROM book_chapters c WHERE c.book_id=b.id) < b.chapter_no))
+         ORDER BY b.id LIMIT ?1",
     )?;
     let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, i64>(0))?;
     rows.collect()
@@ -191,7 +379,7 @@ pub fn stats(conn: &Connection) -> rusqlite::Result<Stats> {
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct BookRow {
     pub id: i64,
     pub title: String,
@@ -297,4 +485,27 @@ pub fn finish_sync_run(
         params![run, now(), pages, seen, changed, ok, failed, error],
     )?;
     Ok(())
+}
+
+pub fn manifest_revision(conn: &Connection, book_id: i64) -> rusqlite::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    for chapter in chapters(conn, book_id, 100_000, None)? {
+        hash.update(
+            format!(
+                "{}:{}:{}\n",
+                chapter.source_id, chapter.chapter_index, chapter.title
+            )
+            .as_bytes(),
+        );
+    }
+    // Only body changes to an already published hash advance this generation;
+    // discovering the body for the first time must not invalidate a fresh import.
+    let generation: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(updated_at),0) FROM content_generations WHERE book_id=?1",
+        params![book_id],
+        |r| r.get(0),
+    )?;
+    hash.update(generation.to_le_bytes());
+    Ok(format!("catalog-v2:{book_id}:{:x}", hash.finalize()))
 }

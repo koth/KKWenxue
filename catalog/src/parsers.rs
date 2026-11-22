@@ -28,6 +28,35 @@ pub struct Detail {
     pub latest_chapter_id: i64,
     pub latest_chapter: String,
     pub chapter_no: i64,
+    pub chapters: Vec<ChapterLink>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChapterLink {
+    pub source_id: i64,
+    pub title: String,
+}
+
+/// A detail page may cap the visible directory and expose the next page as
+/// `p-2.html#dir`. Returning only a validated numeric page keeps fetchers from
+/// following unrelated links when the source HTML changes.
+pub fn next_directory_page(html: &str) -> Option<usize> {
+    let doc = Html::parse_document(html);
+    let links = Selector::parse("a[href]").unwrap();
+    doc.select(&links)
+        .filter_map(|a| {
+            if text_of(&a) != "下一页" {
+                return None;
+            }
+            let href = a.value().attr("href")?.split('#').next()?;
+            let page = href
+                .strip_prefix("p-")?
+                .strip_suffix(".html")?
+                .parse()
+                .ok()?;
+            Some(page)
+        })
+        .min()
 }
 
 /// `/7407/` 或 `/7407/12345.html` → (7407, Some(12345))
@@ -115,7 +144,8 @@ pub fn parse_detail(html: &str, id: i64) -> Option<Detail> {
     let h1_a = Selector::parse("h1 a").unwrap();
     let author_a = Selector::parse("p a").unwrap();
     let dir_span = Selector::parse("h2#dir span").unwrap();
-    let chap_a = Selector::parse("a[href]").unwrap();
+    let latest_a = Selector::parse("div.itemtxt ul li a[href]").unwrap();
+    let dir_a = Selector::parse("#list a[href]").unwrap();
 
     let h1_el = doc.select(&h1).next()?;
     let title = h1_el
@@ -167,11 +197,27 @@ pub fn parse_detail(html: &str, id: i64) -> Option<Detail> {
 
     // 目录最多列 999 条，但「最新三章节」里一定有最大的章号。
     let mut latest = (0i64, String::new());
-    for a in doc.select(&chap_a) {
+    let mut chapters = Vec::new();
+    let mut seen_chapters = std::collections::HashSet::new();
+    for a in doc.select(&latest_a) {
         let href = a.value().attr("href").unwrap_or("");
         if let Some((bid, Some(cid))) = parse_book_href(href) {
             if bid == id && cid > latest.0 {
                 latest = (cid, text_of(&a));
+            }
+        }
+    }
+    for a in doc.select(&dir_a) {
+        let href = a.value().attr("href").unwrap_or("");
+        if let Some((bid, Some(cid))) = parse_book_href(href) {
+            if bid == id && seen_chapters.insert(cid) {
+                let title = text_of(&a);
+                if !title.is_empty() {
+                    chapters.push(ChapterLink {
+                        source_id: cid,
+                        title,
+                    });
+                }
             }
         }
     }
@@ -188,6 +234,7 @@ pub fn parse_detail(html: &str, id: i64) -> Option<Detail> {
         latest_chapter_id: latest.0,
         latest_chapter: latest.1.clone(),
         chapter_no: chapter_number(&latest.1),
+        chapters,
     })
 }
 
@@ -308,6 +355,16 @@ mod tests {
         assert_eq!(d.words, 6_535_000);
         assert_eq!(d.last_update_at, "2026-09-03 06:31:42");
         assert!(d.latest_chapter_id > 0);
+        assert!(d.chapters.len() > 700);
+        assert_eq!(
+            d.chapters
+                .iter()
+                .map(|chapter| chapter.source_id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            d.chapters.len()
+        );
+        assert!(d.chapters.iter().any(|chapter| chapter.source_id == 3194));
     }
 
     /// 分类不总是「××小说」：言情类是「现代言情」，诸天类是「诸天无限」。
@@ -319,5 +376,15 @@ mod tests {
         assert_eq!(d.category, "现代言情");
         assert_eq!(d.author, "九九月");
         assert!(d.words > 0);
+        assert_eq!(d.chapters.len(), 202);
+    }
+
+    #[test]
+    fn directory_page_link_is_detected() {
+        assert_eq!(
+            next_directory_page("<a href=\"p-2.html#dir\">下一页</a>"),
+            Some(2)
+        );
+        assert_eq!(next_directory_page("<a href=\"/2/#dir\">目录</a>"), None);
     }
 }

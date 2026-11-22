@@ -23,7 +23,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PageTurnInstrumentedTest {
     private val instrumentation=InstrumentationRegistry.getInstrumentation()
-    private val book=Library.books.first()
+    private val book=TestBooks.reader
     private val paper=0xfff7f4ed.toInt()
 
     private inner class ReaderHarness(val activity:Activity, val view:ReadingView) {

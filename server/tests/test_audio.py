@@ -10,6 +10,24 @@ from tts.common import file_digest
 
 
 class LoudnessTests(unittest.TestCase):
+    def test_title_gap_counts_existing_quiet_edges_instead_of_adding_them(self):
+        title={**self.clip('heading'), 'kind':'chapter_title'}
+        body=self.clip('body')
+        result=render([title,body],self.root/'title.m4a',1,180,'title','book',natural_title_pause=True)
+        self.assertEqual(150,result['cues'][0]['start_ms']-result['title_cues'][0]['end_ms'])
+        self.assertEqual(4150,result['duration_ms'])
+
+    def test_title_gap_can_remove_excess_quiet_without_shortening_speech(self):
+        title={**self.clip('heading'), 'kind':'chapter_title'}
+        body=self.clip('body')
+        for clip in [title,body]:
+            samples,rate=sf.read(clip['path'],dtype='float32')
+            samples=np.concatenate((np.zeros(7200),samples,np.zeros(7200)))
+            write_flac(clip['path'],samples)
+        result=render([title,body],self.root/'title-trim.m4a',1,180,'title','book',natural_title_pause=True)
+        self.assertEqual(result['title_cues'][0]['end_ms'],result['cues'][0]['start_ms'])
+        self.assertEqual(4750,result['duration_ms'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

@@ -18,7 +18,7 @@ class ReaderInstrumentedTest {
 
     @Test fun paginationDoesNotLoseTextOrOverflowAcrossSizes() {
         val paint=TextPaint(Paint.ANTI_ALIAS_FLAG).apply { typeface=context.resources.getFont(R.font.reader_serif) }
-        Library.books.filter { !it.id.startsWith("local-") }.flatMap { it.chapters }.forEach { chapter ->
+        TestBooks.reader.chapters.forEach { chapter ->
             for(fontSize in listOf(16,20,28)) for(width in listOf(264,337)) for(extra in listOf(.14f,.37f)) {
                 paint.textSize=fontSize.toFloat()
                 val pages=Pagination.paginate(chapter.text,paint,width,330,460,fontSize*extra)
@@ -35,7 +35,7 @@ class ReaderInstrumentedTest {
     }
 
     @Test fun fontChangesKeepTheReadingAnchorOnTheNewPage() {
-        val text=Library.books.first().chapters.first().text
+        val text=TestBooks.reader.chapters.first().text
         val paint=TextPaint().apply { textSize=20f; typeface=context.resources.getFont(R.font.reader_serif) }
         val original=Pagination.paginate(text,paint,337,330,460,7f)
         val anchor=original[2].start
@@ -56,9 +56,10 @@ class ReaderInstrumentedTest {
     @Test fun readingPreferencesAndBookmarksSurviveStoreRecreation() {
         val prefs=context.getSharedPreferences("shanye_reader",0)
         val previous=HashMap(prefs.all)
+        val book=TestBooks.reader
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { Library.books.add(book) }
         try {
             prefs.edit().clear().commit()
-            val book=Library.books.first()
             ReaderStore(context).apply {
                 savePosition(book,1,123)
                 changeTheme(1); changeFontSize(25); changeSpacious(false); changeSerif(false)
@@ -78,6 +79,7 @@ class ReaderInstrumentedTest {
             restored.toggleBookmark(restored.bookmarks.single())
             assertTrue(ReaderStore(context).bookmarks.isEmpty())
         } finally {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync { Library.books.removeAll { it.id==book.id } }
             val edit=prefs.edit().clear()
             previous.forEach { (key,value) -> when(value) {
                 is String -> edit.putString(key,value)

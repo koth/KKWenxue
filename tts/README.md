@@ -1,6 +1,6 @@
 # 《噩夢使徒》本地语音合成
 
-本目录从 Android 使用的 `app/src/main/assets/shanye.db` 读取章节，生成男声有声书。源数据库以只读方式打开。音频文件独立存放，SQLite 保存文本定位、生成参数、文件路径、时长、校验和及任务状态。
+本目录从 `--source` 指定的阅读器 SQLite 读取已导入在线书籍章节，生成男声有声书。源数据库以只读方式打开。音频文件独立存放，SQLite 保存文本定位、生成参数、文件路径、时长、校验和及任务状态。
 
 当前使用 Qwen3-TTS 1.7B CustomVoice 的 MLX 4-bit 版本，在 Apple Silicon 上本地推理；固定 `Uncle_Fu` 男声，加入沉稳、克制的悬疑旁白指令。模型 revision 固定，首次约需下载 2.3 GB 权重；下载不涉及上传小说内容或付费 API。
 
@@ -75,7 +75,7 @@ tts/.venv/bin/python tts/check_audio.py --profile <profile_id> --first 1 --last 
 
 2026-11-09 的任务位于 `koth@192.168.3.32:/h/work/shanye-tts-emengshitu-20261109`，使用 RTX 3090 24GB、PyTorch 2.5.1 + CUDA 12.1、Qwen3-TTS 1.7B CustomVoice BF16。服务器环境独立安装在 `.cuda-venv`，只读复用原有 PyTorch，不修改原环境。模型通过官方 ModelScope 镜像下载，并逐文件校验 `cuda-model-manifest.json` 中固定 Hugging Face revision 的对象哈希。
 
-准备的源文件为 `data/shanye.db`，结果在任务根目录的 `output/`。以下命令在服务器任务目录执行：
+准备一个已导入在线书籍的 SQLite 作为 `data/shanye.db`，结果在任务根目录的 `output/`。以下命令在服务器任务目录执行：
 
 ```sh
 # 首次准备分句库

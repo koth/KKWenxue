@@ -1,6 +1,8 @@
 package com.kkwenxue.shanye.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -26,18 +28,34 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.kkwenxue.shanye.data.*
 import com.kkwenxue.shanye.reader.*
 import com.kkwenxue.shanye.audio.AudioPlayback
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItems:List<AudioChapter>,onAudioImported:()->Unit,
+fun ReaderScreen(initialBook:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItems:List<AudioChapter>,onAudioImported:()->Unit,
                  startPosition:ReadingPosition?=null,onExit:()->Unit) {
     val context=LocalContext.current
+    var book by remember { mutableStateOf(initialBook) }
+    var loadingChapter by remember { mutableStateOf(false) }
+    var chapterError by remember { mutableStateOf<String?>(null) }
+    var chapterRetry by remember { mutableIntStateOf(0) }
     var relocated by remember { mutableStateOf(false) }
-    if (startPosition == null && !relocated && store.needsRelocation(book)) {
+    var pendingResume by remember { mutableStateOf(startPosition==null) }
+    var pendingBookmark by remember { mutableStateOf<RevisionAnchor?>(null) }
+    var needsAnchorRelocation by remember { mutableStateOf(false) }
+    val initial=remember { startPosition ?: store.resumePosition(book) }
+    var chapter by remember { mutableIntStateOf(initial.chapter) }
+    var jumpOffset by remember { mutableIntStateOf(initial.offset) }
+    if (needsAnchorRelocation || (startPosition == null && !relocated && store.needsRelocation(book))) {
         AlertDialog(onDismissRequest=onExit, title={ Text("原文已变更，请重新定位") },
             text={
                 LazyColumn(Modifier.heightIn(max=360.dp)) {
@@ -45,6 +63,8 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
                         Text(source.title, Modifier.fillMaxWidth().clickable {
                             store.savePosition(book, index, 0)
                             relocated = true
+                            pendingResume=false;pendingBookmark=null;needsAnchorRelocation=false
+                            chapter=index;jumpOffset=0
                         }.padding(vertical=10.dp))
                     }
                 }
@@ -52,14 +72,15 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
             confirmButton={ TextButton(onClick=onExit) { Text("返回书架") } })
         return
     }
-    val initial=remember { startPosition ?: store.resumePosition(book) }
-    var chapter by remember { mutableIntStateOf(initial.chapter) }
-    var jumpOffset by remember { mutableIntStateOf(initial.offset) }
     var info by remember { mutableStateOf(PageInfo()) }
     var controls by remember { mutableStateOf(false) }
     var hint by remember { mutableStateOf(true) }
     var sheet by remember { mutableStateOf<String?>(null) }
     var toast by remember { mutableStateOf("") }
+    var cacheRangeDialog by remember { mutableStateOf(false) }
+    var cacheRangeStart by remember { mutableStateOf("") }
+    var cacheRangeEnd by remember { mutableStateOf("") }
+    var failedCacheJob by remember { mutableStateOf<String?>(null) }
     var selectedSentence by remember { mutableStateOf<SentenceRange?>(null) }
     val contentsState = rememberLazyListState()
     var script by remember(book.id) { mutableStateOf(store.scriptFor(book)) }
@@ -72,6 +93,49 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
     val availableChapters=remember(audioItems,book.id) { audioItems.filter { it.bookId==book.id }.map { it.chapterId }.toSet() }
     val colors=readerColors(store.theme)
     val reader=remember { ReadingView(context) }
+    val scope=rememberCoroutineScope()
+    val cacheTick by ChapterQueue.changes.collectAsState()
+    var cacheJobs by remember { mutableStateOf<List<CacheJob>>(emptyList()) }
+    val exportInfos by WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(OnlineFullBookExportWorker.name(book)).collectAsState(initial=emptyList())
+    val exportInfo=exportInfos.firstOrNull{!it.state.isFinished} ?: exportInfos.firstOrNull()
+    val exportFile=exportInfo?.outputData?.getString("path") ?: OnlineFullBookExportWorker.savedPath(context,book)
+    val saveExport=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if(uri!=null && exportFile!=null)scope.launch {
+            try {
+                withContext(Dispatchers.IO){context.contentResolver.openOutputStream(uri)?.use { out -> java.io.File(exportFile).inputStream().use { it.copyTo(out) } } ?: error("无法保存文件")}
+                toast="整本导出已保存"
+            } catch(error: Exception){toast=error.message ?: "导出失败"}
+        }
+    }
+    LaunchedEffect(cacheTick, book.id) {
+        cacheJobs=withContext(Dispatchers.IO){ChapterQueue(context).use{it.jobs(book.id)}}
+    }
+
+    LaunchedEffect(book.id, chapter, chapterRetry) {
+        val selected = book.chapters.getOrNull(chapter)
+        if (book.remoteBookId == null || selected == null || selected.body.isNotBlank()) {loadingChapter=false;chapterError=null;return@LaunchedEffect}
+        loadingChapter = true
+        chapterError = null
+        try {
+            val loaded = OnlineChapterStore(context).load(book, chapter)
+            if(pendingResume) {
+                if(store.needsRelocation(loaded))needsAnchorRelocation=true
+                else jumpOffset=store.resumePosition(loaded).offset
+                pendingResume=false
+            }
+            pendingBookmark?.let { anchor ->
+                val position=anchor.locate(loaded)
+                if(position==null)needsAnchorRelocation=true else jumpOffset=position.offset
+                pendingBookmark=null
+            }
+            book = loaded.copy(chapters=loaded.chapters.mapIndexed { i, ref -> if(kotlin.math.abs(i-chapter)<=2)ref else ref.copy(body="") })
+            withContext(Dispatchers.IO){OnlineChapterPrefetchWorker.enqueue(context, loaded, chapter)}
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (error: Exception) {
+            chapterError = error.message ?: "章节加载失败"
+        }
+        loadingChapter = false
+    }
     val existingBookmark=store.bookmarks.firstOrNull {
         it.bookId==book.id && store.positionFor(book, it)?.let { p -> p.chapter==chapter && p.offset in info.start until info.end } == true
     }
@@ -92,12 +156,13 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
         }
     }
     BackHandler(!inPlayer && (sheet!=null || controls)) { if(sheet!=null) sheet=null else controls=false }
-    fun moveTo(position:ReadingPosition,fromAudio:Boolean,saveAsReading:Boolean) {
+    fun moveTo(position:ReadingPosition,fromAudio:Boolean,saveAsReading:Boolean,anchor:RevisionAnchor?=null) {
+        pendingResume=false;pendingBookmark=anchor?.takeIf{book.chapters[position.chapter].body.isBlank()}
         followAudio=fromAudio; chapter=position.chapter; jumpOffset=position.offset; sheet=null; controls=false
         selectedSentence=null
         reader.clearSelection()
         reader.followAudioTo(position.chapter,position.offset)
-        if(saveAsReading) store.savePosition(book,position.chapter,position.offset)
+        if(saveAsReading && pendingBookmark==null) store.savePosition(book,position.chapter,position.offset)
     }
     fun jump(index:Int,offset:Int=0) = moveTo(ReadingPosition(index,offset),fromAudio=false,saveAsReading=true)
     LaunchedEffect(sheet, chapter) {
@@ -137,7 +202,13 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
             view.onPageTurn={ store.countPage() }
             view.onPageTurned={ page -> store.savePosition(book,page.chapter,page.start) }
             view.onTurnStarted={controls=false; hint=false; followAudio=false}
-            view.onBoundary={toast=it}
+            view.onChapterRequested={ index, offset -> pendingResume=false;pendingBookmark=null;chapter=index; jumpOffset=offset }
+            view.onBoundary={message ->
+                if (message == "这本故事读完了" && chapter + 1 < book.chapters.size) {
+                    chapter += 1
+                    jumpOffset = 0
+                } else toast=message
+            }
             view.onSentenceSelected={ sentence ->
                 selectedSentence=sentence
                 if (sentence != null) { controls=false; hint=false }
@@ -145,6 +216,19 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
             view.configure(book,chapter,jumpOffset,store.fontSize,store.spacious,store.serif,colors.ink.toArgb(),colors.muted.toArgb(),colors.paper.toArgb(),store.pageTurnStyle,script)
             view.setAudioCue(audioChapterIndex,audioCue?.start ?: 0,audioCue?.end ?: 0)
         })
+        if (loadingChapter || chapterError != null) {
+            Box(Modifier.fillMaxSize().background(colors.paper.copy(alpha=.94f)), contentAlignment=Alignment.Center) {
+                Column(horizontalAlignment=Alignment.CenterHorizontally) {
+                    Text(book.chapters[chapter].title,color=colors.ink,fontSize=18.sp)
+                    if (loadingChapter) CircularProgressIndicator(Modifier.padding(top=16.dp),color=Accent)
+                    Text(chapterError ?: "正在加载本章…", Modifier.padding(top=14.dp), color=colors.muted, fontSize=13.sp)
+                    chapterError?.let {
+                        TextButton(onClick={ chapterError = null; chapterRetry++ }) { Text("重试") }
+                        TextButton(onClick={sheet="contents"}){Text("查看目录")}
+                    }
+                }
+            }
+        }
         // Remove the actions immediately when the selection clears; an exit animation
         // would keep them composed and potentially clickable without a selected sentence.
         if (selection != null && !controls) {
@@ -165,7 +249,16 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
                     Text(book.author,Modifier.padding(top=5.dp),fontSize=10.sp,color=colors.muted)
                 }
                 IconAction(if(bookmarked) "bookmarked" else "bookmark",if(bookmarked) "移除书签" else "添加书签",if(bookmarked) Accent else colors.ink) {
-                    store.toggleBookmark(bookmark); toast=if(bookmarked) "书签已移除" else "已收藏这一页"
+                    store.toggleBookmark(bookmark)
+                    if (book.remoteBookId != null) {
+                        val selected=book.chapters[chapter].id
+                        val hasBookmark=store.bookmarks.any{it.bookId==book.id && it.anchor?.chapterId==selected}
+                        scope.launch(Dispatchers.IO) {
+                            if (hasBookmark) OnlineChapterStore(context).protect(book.id,selected,2)
+                            else OnlineChapterStore(context).unprotect(book.id,selected,2)
+                        }
+                    }
+                    toast=if(bookmarked) "书签已移除" else "已收藏这一页"
                 }
             }
         }
@@ -239,6 +332,39 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
                 }
                 "contents" -> {
                     SheetTitle("目录", "${book.title} · ${book.chapters.size} 章",colors)
+                    if (book.remoteBookId != null) {
+                        Row(Modifier.fillMaxWidth().padding(start=24.dp, end=24.dp, bottom=8.dp), verticalAlignment=Alignment.CenterVertically) {
+                            Text("正文缓存", Modifier.weight(1f), fontSize=12.sp, color=colors.muted)
+                            TextButton(onClick={ cacheRangeDialog=true }) { Text("缓存范围", color=Accent) }
+                            TextButton(onClick={
+                                scope.launch(Dispatchers.IO){ OnlineChapterPrefetchWorker.enqueueRange(context, book, book.chapters.indices.toList(), "full") }
+                                toast="已加入后台缓存全书，不影响当前阅读"
+                            }) { Text("缓存全书", color=Accent) }
+                            TextButton(onClick={
+                                scope.launch(Dispatchers.IO){OnlineChapterPrefetchWorker.cancel(context, book)}
+                                toast="已暂停后台缓存"
+                            }) { Text("暂停", color=colors.muted) }
+                        }
+                        cacheJobs.filter { it.scope != "adjacent" }.forEach { job ->
+                            Column(Modifier.fillMaxWidth().padding(horizontal=24.dp)) {
+                                Text("${if(job.scope=="full") "全书缓存" else "范围缓存"} · ${job.completed}/${job.total} 章${if(job.state=="paused") " · 已暂停" else ""}", fontSize=12.sp,color=colors.muted)
+                                if(job.total>0)LinearProgressIndicator(progress={job.completed.toFloat()/job.total},modifier=Modifier.fillMaxWidth().padding(top=6.dp),color=Accent,trackColor=Rule)
+                                if(job.failed.isNotEmpty())TextButton(onClick={failedCacheJob=job.id}){Text("查看 ${job.failed.size} 个失败章节",color=Accent)}
+                                if(job.state=="paused" || job.failed.isNotEmpty()) TextButton(onClick={scope.launch(Dispatchers.IO){OnlineChapterPrefetchWorker.resume(context,book)}}){Text(if(job.failed.isNotEmpty())"重试失败章节" else "继续缓存")}
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth().padding(horizontal=20.dp)) {
+                            TextButton(onClick={OnlineFullBookExportWorker.enqueue(context,book)}){Text("准备整本导出",color=Accent)}
+                            if(exportFile!=null)TextButton(onClick={saveExport.launch("${book.title}.zip")}){Text("保存 ZIP",color=Accent)}
+                            if(exportInfo?.state in listOf(WorkInfo.State.RUNNING,WorkInfo.State.ENQUEUED))TextButton(onClick={OnlineFullBookExportWorker.cancel(context,book)}){Text("暂停导出")}
+                        }
+                        exportInfo?.let { task ->
+                            Text(task.outputData.getString("error") ?: task.progress.getString("phase") ?: when(task.state){WorkInfo.State.SUCCEEDED->"导出包已就绪"; WorkInfo.State.CANCELLED->"导出已暂停，可继续准备"; else->""}, Modifier.padding(horizontal=24.dp),fontSize=11.sp,color=colors.muted)
+                            val total=task.progress.getLong("total",0L)
+                            if(total>0)LinearProgressIndicator(progress={task.progress.getLong("received",0L).toFloat()/total},modifier=Modifier.fillMaxWidth().padding(horizontal=24.dp,vertical=6.dp),color=Accent,trackColor=Rule)
+                        }
+
+                    }
                     LazyColumn(state=contentsState,modifier=Modifier.heightIn(max=410.dp).padding(bottom=24.dp)) {
                         itemsIndexed(book.chapters) { index,item ->
                             Row(Modifier.fillMaxWidth().clickable { jump(index) }.padding(horizontal=28.dp,vertical=22.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -258,9 +384,10 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
                     } else LazyColumn(Modifier.heightIn(max=420.dp).padding(horizontal=28.dp)) {
                         items(marks.size) { index ->
                             val mark=marks[index]
-                            Column(Modifier.fillMaxWidth().clickable {jump(mark.chapter,mark.offset)}.padding(vertical=16.dp)) {
+                            val position=store.positionFor(book,mark)
+                            Column(Modifier.fillMaxWidth().clickable {position?.let{moveTo(it,false,true,mark.anchor)}}.padding(vertical=16.dp)) {
                                 Text(mark.quote,fontFamily=Serif,fontSize=15.sp,lineHeight=25.sp,color=colors.ink,maxLines=3)
-                                Text("第${mark.chapter+1}章 · ${book.chapters[mark.chapter].title}",Modifier.padding(top=10.dp),fontSize=10.sp,color=Accent)
+                                Text(position?.let{"第${it.chapter+1}章 · ${book.chapters[it.chapter].title}"} ?: "章节已移除，请重新定位",Modifier.padding(top=10.dp),fontSize=10.sp,color=Accent)
                                 HorizontalDivider(Modifier.padding(top=18.dp),color=colors.muted.copy(.15f))
                             }
                         }
@@ -269,6 +396,39 @@ fun ReaderScreen(book:Book,store:ReaderStore,audioLibrary:AudioLibrary,audioItem
                 }
             }
         }
+    }
+    failedCacheJob?.let { id ->
+        val failures=cacheJobs.firstOrNull{it.id==id}?.failed.orEmpty()
+        AlertDialog(onDismissRequest={failedCacheJob=null},title={Text("缓存失败章节")},
+            text={LazyColumn(Modifier.heightIn(max=360.dp)){itemsIndexed(failures){_,failure ->
+                Text("${book.chapters.firstOrNull{it.id==failure.first}?.title ?: "已移除章节"}：${failure.second}",Modifier.padding(vertical=8.dp),fontSize=13.sp)
+            }}},confirmButton={TextButton(onClick={scope.launch(Dispatchers.IO){OnlineChapterPrefetchWorker.resume(context,book)};failedCacheJob=null}){Text("重试失败章节")}},
+            dismissButton={TextButton(onClick={failedCacheJob=null}){Text("关闭")}})
+    }
+    if (cacheRangeDialog) {
+        AlertDialog(
+            onDismissRequest={ cacheRangeDialog=false },
+            title={ Text("缓存章节范围", fontFamily=Serif, color=colors.ink) },
+            text={ Column {
+                Text("按目录序号填写，例如 120–140。任务会在后台运行，不阻塞当前阅读。", fontSize=12.sp, color=colors.muted)
+                Row(Modifier.padding(top=14.dp), horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(cacheRangeStart, { cacheRangeStart=it.filter(Char::isDigit) }, Modifier.weight(1f), singleLine=true, label={ Text("起始章") })
+                    OutlinedTextField(cacheRangeEnd, { cacheRangeEnd=it.filter(Char::isDigit) }, Modifier.weight(1f), singleLine=true, label={ Text("结束章") })
+                }
+            } },
+            dismissButton={ TextButton(onClick={ cacheRangeDialog=false }) { Text("取消", color=colors.muted) } },
+            confirmButton={ TextButton(onClick={
+                val start = cacheRangeStart.toIntOrNull()
+                val end = cacheRangeEnd.toIntOrNull()
+                if (start == null || end == null || start !in 1..book.chapters.size || end !in start..book.chapters.size) {
+                    toast="请输入有效的目录序号范围"
+                } else {
+                    scope.launch(Dispatchers.IO){OnlineChapterPrefetchWorker.enqueueRange(context, book, (start - 1 until end).toList(), "range")}
+                    cacheRangeDialog=false
+                    toast="已加入第 $start–$end 章后台缓存"
+                }
+            }) { Text("开始缓存", color=Accent) } }
+        )
     }
 }
 

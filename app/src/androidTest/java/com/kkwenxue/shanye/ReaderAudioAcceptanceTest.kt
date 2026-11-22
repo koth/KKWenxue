@@ -25,6 +25,7 @@ class ReaderAudioAcceptanceTest {
         assumeTrue("Pass -e audioBundle with a downloaded 984 ZIP for this acceptance test",path!=null)
         val context=instrumentation.targetContext
         val books=LocalBookRepository(context).load()
+        assumeTrue("Provide an online book fixture before running audio acceptance", books.isNotEmpty())
         Library.restoreImported(books)
         val library=AudioLibrary(context)
         library.importBundle(File(path!!).inputStream(),Library.books.toList())

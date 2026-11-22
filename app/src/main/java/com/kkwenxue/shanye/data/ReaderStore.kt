@@ -42,7 +42,7 @@ class ReaderStore(context: Context) {
     var serif by mutableStateOf(prefs.getBoolean("serif", true)); private set
     var pageTurnStyle by mutableStateOf(PageTurnStyle.entries.getOrElse(prefs.getInt("pageTurnStyle",0)) {PageTurnStyle.PAPER}); private set
     var pagesRead by mutableIntStateOf(prefs.getInt("pagesRead", 0)); private set
-    private var lastReadBook by mutableStateOf(prefs.getString("lastBook", "mountain") ?: "mountain")
+    private var lastReadBook by mutableStateOf(prefs.getString("lastBook", "") ?: "")
     private var lastOpenedAt by mutableLongStateOf(prefs.getLong("lastOpenedAt", 0))
     val lastBook: String
         get() {

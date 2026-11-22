@@ -24,8 +24,7 @@ local.properties
 .cxx/
 captures/
 
-# 注意：app/src/main/assets/shanye.db（16 MB 种子书库）和
-#       app/src/main/res/font/reader_serif.ttf（24 MB 字体）是随包资源，必须提交。
+# 阅读字体属于随包资源；生产 APK 不内置书籍或种子数据库。
 
 # ---------- Rust ----------
 target/

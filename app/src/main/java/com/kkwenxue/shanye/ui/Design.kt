@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -94,48 +95,73 @@ fun Glyph(name: String, tint: Color = Ink, modifier: Modifier = Modifier, size: 
 
 @Composable
 fun BookCover(book: Book, modifier: Modifier = Modifier) {
-    val base = listOf(Color(0xFFAA583E),Color(0xFF263F47),Color(0xFFE3D6BC),Color(0xFF72847B))[book.cover]
-    val light = if(book.cover == 2) Color(0xFF4D5947) else Color(0xFFF4E9D2)
+    // Online books do not carry a remote image in the manifest.  Give each
+    // title a stable editorial cover instead of showing the same placeholder
+    // art for every book.  The palette is derived from the stable book id, so
+    // it does not change when the manifest is refreshed or the app restarts.
+    val style = remember(book.id) { (book.id.hashCode() and Int.MAX_VALUE) % 5 }
+    val palettes = listOf(
+        Triple(Color(0xFF243A42), Color(0xFFB7D0C1), Color(0xFFF3E4C2)),
+        Triple(Color(0xFF4A2F3B), Color(0xFFD99B83), Color(0xFFF5DCC8)),
+        Triple(Color(0xFF2F3B2F), Color(0xFFB9C98C), Color(0xFFF0E8C8)),
+        Triple(Color(0xFF3B3553), Color(0xFFAAB3E4), Color(0xFFF0E9D9)),
+        Triple(Color(0xFF8A4E32), Color(0xFFE6B27F), Color(0xFFFFE2B8))
+    )
+    val (base, accent, light) = palettes[style]
     BoxWithConstraints(modifier.clip(RoundedCornerShape(3.dp)).background(base)) {
         val coverWidth = maxWidth
         Canvas(Modifier.fillMaxSize()) {
             val w=size.width; val h=size.height
-            drawRect(Brush.horizontalGradient(listOf(Color.Black.copy(.14f),Color.Transparent,Color.White.copy(.05f),Color.Transparent)),size=Size(w*.12f,h))
-            when(book.cover) {
+            drawRect(Brush.verticalGradient(listOf(base.lighten(.12f),base,Color.Black.copy(.18f))),size=Size(w,h))
+            // Fine grain and a restrained geometric motif keep the cover from
+            // looking like a random generated poster at thumbnail size.
+            for (i in 0..10) {
+                val x=w*(i/10f)
+                drawLine(light.copy(alpha=.055f),Offset(x,0f),Offset(x+w*.16f,h),1.2f)
+            }
+            when (style % 3) {
                 0 -> {
-                    drawCircle(Color(0xFFE6BF8E).copy(.8f),w*.13f,Offset(w*.77f,h*.51f))
-                    val back=Path().apply { moveTo(0f,h*.77f); lineTo(w*.35f,h*.47f); lineTo(w*.72f,h*.82f); lineTo(w,h*.65f); lineTo(w,h); lineTo(0f,h); close() }
-                    drawPath(back,Color(0xFF7C493C))
-                    val front=Path().apply { moveTo(0f,h*.85f); cubicTo(w*.4f,h*.6f,w*.5f,h*.96f,w,h*.78f); lineTo(w,h); lineTo(0f,h); close() }
-                    drawPath(front,Color(0xFF3B4E46))
-                    for(i in 0..6) drawLine(Color(0xFFD6BC98).copy(.25f),Offset(w*.15f,h*(.87f+i*.014f)),Offset(w*.65f,h*(.87f+i*.014f)),.6f)
+                    drawCircle(accent.copy(alpha=.9f),w*.16f,Offset(w*.76f,h*.39f))
+                    val mountain=Path().apply { moveTo(0f,h*.77f); lineTo(w*.34f,h*.49f); lineTo(w*.55f,h*.66f); lineTo(w*.74f,h*.43f); lineTo(w,h*.75f); lineTo(w,h); lineTo(0f,h); close() }
+                    drawPath(mountain,Color.Black.copy(alpha=.24f))
+                    drawLine(light.copy(alpha=.7f),Offset(w*.12f,h*.82f),Offset(w*.88f,h*.82f),1.5f)
                 }
                 1 -> {
-                    drawCircle(Color(0xFFE7DABC),w*.15f,Offset(w*.73f,h*.45f))
-                    drawRect(Color(0xFF1C3038),Offset(w*.17f,h*.64f),Size(w*.68f,h*.36f))
-                    drawRect(Color(0xFFBCA575),Offset(w*.43f,h*.76f),Size(w*.13f,h*.1f))
-                    for(i in 0..9) drawLine(Color.White.copy(.08f),Offset(w*i/8f,0f),Offset(w*(i/8f-.18f),h),.7f)
+                    drawCircle(accent.copy(alpha=.85f),w*.27f,Offset(w*.78f,h*.67f))
+                    drawArc(light.copy(alpha=.65f),190f,145f,false,Offset(w*.05f,h*.31f),Size(w*.9f,h*.55f),style=Stroke(1.5f))
+                    drawArc(light.copy(alpha=.28f),190f,145f,false,Offset(w*.14f,h*.39f),Size(w*.72f,h*.42f),style=Stroke(1f))
                 }
-                2 -> {
-                    val p=Path().apply { moveTo(w*.48f,h*.9f); cubicTo(w*.28f,h*.78f,w*.3f,h*.6f,w*.7f,h*.46f); cubicTo(w*.75f,h*.75f,w*.68f,h*.82f,w*.48f,h*.9f) }
-                    drawPath(p,Color(0xFFA15C39)); drawLine(Color(0xFF58644D),Offset(w*.42f,h*.95f),Offset(w*.65f,h*.54f),w*.009f)
-                    drawCircle(Color(0xFFFBF5E5).copy(.45f),w*.32f,Offset(w*.9f,h*.75f))
-                }
-                3 -> {
-                    for(i in 0..2) {
-                        val p=Path().apply { moveTo(0f,h*(.8f-i*.13f)); cubicTo(w*.3f,h*(.5f-i*.13f),w*.65f,h*(1f-i*.13f),w,h*(.7f-i*.13f)); lineTo(w,h); lineTo(0f,h); close() }
-                        drawPath(p,listOf(Color(0xFFAAB5A6),Color(0xFF899C8A),Color(0xFF4B675E))[i].copy(.7f))
+                else -> {
+                    for (i in 0..3) {
+                        val p=Path().apply { moveTo(0f,h*(.78f-i*.08f)); cubicTo(w*.22f,h*(.57f-i*.08f),w*.63f,h*(.93f-i*.08f),w,h*(.66f-i*.08f)); lineTo(w,h); lineTo(0f,h); close() }
+                        drawPath(p,accent.copy(alpha=.12f+i*.035f))
                     }
-                    drawOval(Color(0xFFECE9D9).copy(.8f),Offset(w*.4f,h*.46f),Size(w*.5f,h*.06f))
+                    drawOval(light.copy(alpha=.75f),Offset(w*.48f,h*.31f),Size(w*.35f,h*.08f))
                 }
             }
-            drawRect(Color.White.copy(.1f),topLeft=Offset(0f,0f),size=Size(w,1.5f))
+            drawRect(light.copy(alpha=.65f),topLeft=Offset(w*.12f,h*.14f),size=Size(w*.76f,1.2f))
+            drawRect(light.copy(alpha=.28f),topLeft=Offset(w*.12f,h*.86f),size=Size(w*.76f,1f))
         }
-        Column(Modifier.padding(start=coverWidth*.13f,top=coverWidth*.16f)) {
-            Text(book.title.chunked(2).joinToString("\n"),fontFamily=Serif,fontWeight=FontWeight.Medium,fontSize=(coverWidth.value*if(book.title.length>4) .175f else .21f).sp,lineHeight=(coverWidth.value*if(book.title.length>4) .26f else .31f).sp,letterSpacing=(coverWidth.value*.035f).sp,color=light)
-            Spacer(Modifier.height(coverWidth*.065f))
-            Text(book.author+"  / 著",fontSize=(coverWidth.value*.065f).sp,letterSpacing=1.sp,color=light.copy(.8f))
+        Column(Modifier.fillMaxSize().padding(horizontal=coverWidth*.16f,vertical=coverWidth*.2f)) {
+            Text("山页 · 在线书库",fontSize=(coverWidth.value*.052f).sp,letterSpacing=1.2.sp,color=light.copy(.72f))
+            Spacer(Modifier.weight(1f))
+            Text(book.title, fontFamily=Serif,fontWeight=FontWeight.Medium,
+                fontSize=(coverWidth.value*if(book.title.length>8) .13f else .18f).sp,
+                lineHeight=(coverWidth.value*.22f).sp,letterSpacing=(coverWidth.value*.018f).sp,
+                color=light,maxLines=3,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            Spacer(Modifier.height(coverWidth*.055f))
+            Text(book.author.ifBlank { "未知作者" },fontSize=(coverWidth.value*.058f).sp,letterSpacing=.6.sp,color=light.copy(.8f),maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            Spacer(Modifier.weight(.55f))
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                Box(Modifier.width(coverWidth*.2f).height(2.dp).background(accent))
+                Text(" FICTION",Modifier.padding(start=5.dp),fontSize=(coverWidth.value*.043f).sp,letterSpacing=1.sp,color=light.copy(.65f))
+            }
         }
-        Text("SHANYE  ·  FICTION",Modifier.align(Alignment.BottomCenter).padding(bottom=coverWidth*.09f),fontSize=(coverWidth.value*.048f).sp,letterSpacing=1.sp,color=light.copy(.65f))
     }
 }
+
+private fun Color.lighten(amount: Float) = Color(
+    (red + (1f - red) * amount).coerceIn(0f, 1f),
+    (green + (1f - green) * amount).coerceIn(0f, 1f),
+    (blue + (1f - blue) * amount).coerceIn(0f, 1f), alpha
+)

@@ -10,7 +10,7 @@ import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-data class PendingSynthesis(val key: String, val title: String, val error: String?)
+data class PendingSynthesis(val key: String, val title: String, val error: String?, val bookId: String = "")
 data class SavedSynthesis(val task: RelayTask, val importedAt: Long, val error: String?, val delivery: SynthesisDelivery? = null)
 data class SynthesisDelivery(val key: String, val endpoint: String, val taskId: String?, val state: String,
     val phase: String, val received: Long, val total: Long, val failures: Int, val nextAt: Long, val error: String?)
@@ -40,8 +40,15 @@ class SynthesisRepository(context: Context) {
     val settings = RelaySettings(this.context)
     private fun <T> database(block: (SQLiteDatabase) -> T): T = SynthesisDatabase(context).use { block(it.writableDatabase) }
     fun pending(endpoint: String): List<PendingSynthesis> = database { db ->
-        db.rawQuery("SELECT key,title,error FROM outbox WHERE endpoint=? ORDER BY created DESC", arrayOf(endpoint)).use { rows ->
-            buildList { while (rows.moveToNext()) add(PendingSynthesis(rows.getString(0), rows.getString(1), rows.getString(2))) }
+        db.rawQuery("SELECT key,title,error,request FROM outbox WHERE endpoint=? ORDER BY created DESC", arrayOf(endpoint)).use { rows ->
+            buildList {
+                while (rows.moveToNext()) {
+                    val request = runCatching { JSONObject(rows.getString(3)) }.getOrNull()
+                    val metadataBookId = request?.optJSONObject("metadata")?.optString("book_id").orEmpty()
+                    val payloadBookId = request?.optJSONObject("payload")?.optJSONObject("request")?.optString("book_id").orEmpty()
+                    add(PendingSynthesis(rows.getString(0), rows.getString(1), rows.getString(2), metadataBookId.ifBlank { payloadBookId }))
+                }
+            }
         }
     }
     fun tasks(endpoint: String): List<SavedSynthesis> = database { db ->
@@ -94,7 +101,12 @@ class SynthesisRepository(context: Context) {
     }
     fun prepare(connection: RelayConnection, book: Book, indices: List<Int>, voiceId: String, voiceName: String, speed: Float = 1f): String {
         val key = UUID.randomUUID().toString()
-        val request = SynthesisPayload.create(book, indices, voiceId, voiceName, key, speed)
+        val hydrated = kotlinx.coroutines.runBlocking {
+            var selectedBook=book
+            for(index in indices) selectedBook=OnlineChapterStore(context).load(selectedBook,index)
+            selectedBook
+        }
+        val request = SynthesisPayload.create(hydrated, indices, voiceId, voiceName, key, speed)
         return saveRequest(connection, key, request)
     }
     fun prepareRetry(connection: RelayConnection, id: String): String {
@@ -242,7 +254,11 @@ class SynthesisRepository(context: Context) {
                 client.download(id, remote, archive) { received, total -> progress("中转下载中", received, total) }
             }
             progress("校验并导入", result.bytes, result.bytes)
-            val count = library.importBundle(archive.inputStream(), books)
+            val count = library.importBundle(archive.inputStream(), kotlinx.coroutines.runBlocking {
+                var hydrated=book
+                for(n in 0 until chapterIds.length()) { val index=hydrated.chapters.indexOfFirst { it.id==chapterIds.getString(n) }; hydrated=OnlineChapterStore(context).load(hydrated,index) }
+                books.map{if(it.id==hydrated.id)hydrated else it}
+            })
             database { db -> db.update("tasks", ContentValues().apply {
                 put("imported_at", System.currentTimeMillis()); putNull("error")
             }, "endpoint=? AND id=?", arrayOf(client.connection.endpoint, id))

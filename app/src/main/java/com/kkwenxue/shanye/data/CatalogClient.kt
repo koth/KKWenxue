@@ -31,6 +31,41 @@ data class CatalogBook(
     }
 }
 
+data class CatalogChapterRef(
+    val sourceId: Long,
+    val index: Int,
+    val title: String,
+    val bodySha256: String? = null,
+)
+
+data class CatalogManifest(
+    val bookId: Long,
+    val revision: String,
+    val chapterCount: Int,
+    val chapters: List<CatalogChapterRef>,
+    val nextCursor: Int?,
+)
+
+data class CatalogChapterContent(
+    val bookId: Long,
+    val sourceId: Long,
+    val chapterId: String,
+    val revision: String,
+    val body: String,
+    val bytes: Long,
+    val sha256: String,
+    val etag: String? = null,
+)
+
+data class CatalogPrefetchTask(
+    val taskId: String,
+    val bookId: Long,
+    val state: String,
+    val total: Int,
+    val completed: Int,
+    val failed: Int,
+)
+
 data class CatalogContentTask(
     val taskId: String,
     val state: String,
@@ -115,6 +150,71 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
 
     fun book(id: Long): CatalogBook = parseBook(request("/v1/catalog/books/$id"))
 
+    fun manifest(id: Long, cursor: Int? = null, limit: Int = 500, revision: String? = null): CatalogManifest {
+        val suffix = buildString {
+            append("/v1/catalog/books/$id/manifest?limit=${limit.coerceIn(1, 500)}")
+            cursor?.let { append("&cursor=$it") }
+            revision?.let { append("&revision=" + URLEncoder.encode(it,"UTF-8")) }
+        }
+        val value = request(suffix)
+        val items = value.optJSONArray("items") ?: JSONArray()
+        val chapters = buildList {
+            for (i in 0 until items.length()) {
+                val item = items.getJSONObject(i)
+                add(CatalogChapterRef(item.getLong("source_id"), item.getInt("chapter_index"), item.getString("title"),
+                    item.optString("body_sha256").takeIf { it.matches(Regex("[a-fA-F0-9]{64}")) }))
+            }
+        }
+        return CatalogManifest(value.getLong("bookId"), value.getString("revision"),
+            value.optInt("chapterCount", chapters.size), chapters,
+            value.optInt("nextCursor").takeIf { value.has("nextCursor") && !value.isNull("nextCursor") })
+    }
+
+    fun completeManifest(id: Long): CatalogManifest {
+        var cursor: Int?=null
+        var first: CatalogManifest?=null
+        val refs=mutableListOf<CatalogChapterRef>()
+        val cursors=mutableSetOf<Int>()
+        do {
+            val page=manifest(id,cursor,500,first?.revision)
+            if(first==null)first=page
+            require(page.bookId==id && page.revision==first.revision && page.chapterCount==first.chapterCount) { "章节目录在下载时变化，请重试" }
+            require(page.chapters.all{it.sourceId>0 && it.title.isNotBlank()}) { "章节目录格式无效" }
+            refs+=page.chapters
+            require(refs.size<=100000 && refs.size<=page.chapterCount) { "目录数量超过限制" }
+            cursor=page.nextCursor
+            require(cursor==null || cursors.add(cursor)) { "目录分页重复" }
+        } while(cursor!=null)
+        require(refs.isNotEmpty() && refs.size==first.chapterCount && refs.map{it.sourceId}.distinct().size==refs.size && refs.withIndex().all{it.index==it.value.index}) { "章节目录不完整或顺序错误" }
+        return first.copy(chapters=refs,nextCursor=null)
+    }
+
+    fun chapter(bookId: Long, sourceId: Long, etag: String? = null, revision: String? = null): CatalogChapterContent? {
+        val suffix = revision?.let { "?revision=" + URLEncoder.encode(it, "UTF-8") }.orEmpty()
+        val connection = (URL("${baseUrl.trimEnd('/')}/v1/catalog/books/$bookId/chapters/$sourceId$suffix").openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15_000; readTimeout = 60_000
+            setRequestProperty("Accept", "application/json")
+            etag?.let { setRequestProperty("If-None-Match", it) }
+        }
+        return try {
+            val status = connection.responseCode
+            if (status == HttpURLConnection.HTTP_NOT_MODIFIED) return null
+            if (status !in 200..299) error(errorMessage(connection, status, "章节正文"))
+            val value = connection.inputStream.bufferedReader(Charsets.UTF_8).use { JSONObject(it.readText()) }
+            CatalogChapterContent(value.getLong("bookId"), value.getLong("sourceId"), value.getString("chapterId"),
+                value.getString("revision"), value.getString("body"), value.getLong("bytes"), value.getString("sha256"),
+                connection.getHeaderField("ETag"))
+        } finally { connection.disconnect() }
+    }
+
+    fun prefetch(bookId: Long, sourceIds: List<Long>, priority: Int = 50): CatalogPrefetchTask {
+        require(sourceIds.isNotEmpty() && sourceIds.size <= 2000) { "预取章节数量应为 1–2000" }
+        val ids = JSONArray().apply { sourceIds.distinct().forEach { put(it) } }
+        return parsePrefetch(request("/v1/catalog/books/$bookId/prefetch", "POST", JSONObject().put("chapterIds", ids).put("priority", priority.coerceIn(0, 100))))
+    }
+
+    fun prefetchStatus(taskId: String): CatalogPrefetchTask = parsePrefetch(request("/v1/catalog/prefetch/${URLEncoder.encode(taskId, "UTF-8")}"))
+
     fun version(id: Long): CatalogVersion {
         val item = request("/v1/catalog/books/$id/version")
         return CatalogVersion(
@@ -143,6 +243,8 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
         return parseTask(request("/v1/catalog/books/${book.remoteBookId}/update-plan", "POST", body))
     }
 
+    fun startBundle(id: Long): CatalogContentTask = parseTask(request("/v1/catalog/books/$id/bundle", "POST"))
+
     fun startContent(id: Long): CatalogContentTask {
         val value = request("/v1/catalog/books/$id/content", "POST")
         val task = parseTask(value)
@@ -160,44 +262,50 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
             require(task.sha256?.matches(Regex("[a-fA-F0-9]{64}")) == true &&
                 task.bytes != null && task.bytes in 1L..MAX_PACKAGE.toLong()) { "目录服务未返回有效的更新包校验信息" }
         }
-        val url = URL("${baseUrl.trimEnd('/')}/v1/catalog/content/${task.taskId}/download")
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10_000; readTimeout = 30_000
-            instanceFollowRedirects = false
-            setRequestProperty("Accept", "application/zip")
+        if(task.bytes!=null && target.length()>task.bytes)target.delete()
+        var offset=if(task.sha256!=null && task.bytes!=null)target.length() else 0L
+        fun hashFile():String {
+            val digest=MessageDigest.getInstance("SHA-256")
+            target.inputStream().use{input->val buffer=ByteArray(65536);while(true){val n=input.read(buffer);if(n<0)break;digest.update(buffer,0,n)}}
+            return digest.digest().joinToString(""){"%02x".format(it)}
+        }
+        if(offset>0 && offset==task.bytes) {
+            if(hashFile().equals(task.sha256,true)){onBytes(offset);return true}
+            target.delete();offset=0
+        }
+        val connection=(URL("${baseUrl.trimEnd('/')}/v1/catalog/content/${task.taskId}/download").openConnection() as HttpURLConnection).apply {
+            connectTimeout=10000;readTimeout=30000;instanceFollowRedirects=false
+            setRequestProperty("Accept","application/zip");setRequestProperty("Accept-Encoding","identity")
+            if(offset>0){setRequestProperty("Range","bytes=$offset-");setRequestProperty("If-Range","\"${task.sha256}\"")}
         }
         try {
-            val status = connection.responseCode
-            if (status == HttpURLConnection.HTTP_ACCEPTED) return false
-            if (status != HttpURLConnection.HTTP_OK) throw IOException(errorMessage(connection, status, "正文下载"))
-            val length = connection.contentLengthLong
-            require(length <= MAX_PACKAGE) { "正文包过大，无法导入" }
-            var total = 0L
-            val digest = MessageDigest.getInstance("SHA-256")
-            connection.inputStream.use { input ->
-                target.outputStream().use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        if (Thread.currentThread().isInterrupted) throw InterruptedIOException("下载已取消")
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        total += read
-                        require(total <= MAX_PACKAGE) { "正文包过大，无法导入" }
-                        digest.update(buffer, 0, read)
-                        output.write(buffer, 0, read)
-                        onBytes(total)
-                    }
+            val status=connection.responseCode
+            if(status==202)return false
+            if(status !in listOf(200,206))throw IOException(errorMessage(connection,status,"正文下载"))
+            val append=status==206
+            if(append) {
+                val expected="bytes $offset-${(task.bytes ?: 0)-1}/${task.bytes}"
+                require(connection.getHeaderField("Content-Range")==expected){"导出包断点范围不匹配"}
+            } else offset=0
+            val length=connection.contentLengthLong
+            require(length<=MAX_PACKAGE){"正文包过大"}
+            var total=offset
+            connection.inputStream.use{input->java.io.FileOutputStream(target,append).use{output->
+                val buffer=ByteArray(65536)
+                while(true){
+                    if(Thread.currentThread().isInterrupted)throw InterruptedIOException("下载已暂停")
+                    val read=input.read(buffer);if(read<0)break;total+=read
+                    require(total<=MAX_PACKAGE){"正文包过大"}
+                    output.write(buffer,0,read);onBytes(total)
                 }
-            }
-            if (total == 0L || (length >= 0 && total != length)) throw IOException("正文包下载不完整")
-            if (task.kind == "content.update") require(total == task.bytes) { "正文更新包大小不匹配" }
+                output.fd.sync()
+            }}
+            if(total==0L || (length>=0 && total-offset!=length) || (task.bytes!=null && total!=task.bytes))throw IOException("导出包下载中断，将继续下载")
             task.sha256?.let { expected ->
-                require(digest.digest().joinToString("") { "%02x".format(it) }.equals(expected, true)) {
-                    "正文更新包整体校验失败，请重试"
-                }
+                if(!hashFile().equals(expected,true)){target.delete();throw IOException("导出包校验失败，将重新下载")}
             }
             return true
-        } finally { connection.disconnect() }
+        } finally {connection.disconnect()}
     }
 
     private fun request(path: String, method: String = "GET", body: JSONObject? = null): JSONObject {
@@ -228,10 +336,28 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
             if (read > 0) String(buffer, 0, read).trim() else ""
         }.orEmpty()
         val safeDetail = if (detail.startsWith("{")) {
-            runCatching { JSONObject(detail).optString("error") }.getOrDefault("")
+            runCatching {
+                val json = JSONObject(detail)
+                val code = json.optString("code")
+                val message = json.optString("error")
+                when (code) {
+                    "manifest_unavailable" -> "章节目录暂不可用，请稍后重试"
+                    "book_not_found" -> "在线书籍不存在"
+                    "chapter_not_found" -> "章节不在当前目录中"
+                    "body_too_large" -> "章节正文超过大小限制"
+                    "parse_failed" -> "章节正文解析失败"
+                    "source_unavailable", "source_http" -> "书源暂时不可用，请稍后重试"
+                    else -> message
+                }
+            }.getOrDefault("")
         } else detail
         return "$stage HTTP $status" + if (safeDetail.isBlank() || safeDetail.startsWith("<")) "" else "：$safeDetail"
     }
+
+    private fun parsePrefetch(value: JSONObject): CatalogPrefetchTask = CatalogPrefetchTask(
+        taskId = value.getString("taskId"), bookId = value.getLong("bookId"), state = value.optString("state", "queued"),
+        total = value.optInt("total"), completed = value.optInt("completed"), failed = value.optInt("failed")
+    )
 
     companion object {
         const val BASE_URL = "http://120.48.49.190"

@@ -92,6 +92,7 @@ class ReadingView(context:Context):View(context) {
     var onPageTurned: (PageInfo)->Unit = {}
     var onTurnStarted: ()->Unit = {}
     var onBoundary: (String)->Unit = {}
+    var onChapterRequested: (Int, Int)->Unit = { _, _ -> }
     var onSentenceSelected: (SentenceRange?)->Unit = {}
     private val firstTop get() = dp(196f)
     private val otherTop get() = dp(66f)
@@ -106,13 +107,14 @@ class ReadingView(context:Context):View(context) {
 
     fun configure(book:Book,chapter:Int,requestedOffset:Int,fontSize:Int,spacious:Boolean,serif:Boolean,
                   ink:Int,muted:Int,paper:Int=paperColor,turnStyle:PageTurnStyle=style,script:ChineseScript=this.script) {
-        val layoutChanged=this.book?.id!=book.id || this.fontSize!=fontSize || this.spacious!=spacious || this.serif!=serif || this.script!=script
+        val contentChanged = this.book?.chapters?.getOrNull(chapter)?.body != book.chapters.getOrNull(chapter)?.body
+        val layoutChanged=contentChanged || this.book?.id!=book.id || this.fontSize!=fontSize || this.spacious!=spacious || this.serif!=serif || this.script!=script
         val chapterChanged=this.chapterIndex!=chapter
         if(layoutChanged || chapterChanged || textColor!=ink || paperColor!=paper || style!=turnStyle) {
             cancelTransition()
             clearSelection()
         }
-        val savedAnchor=if(!chapterChanged && this.book?.id==book.id && pages.isNotEmpty()) pages[page].start else requestedOffset
+        val savedAnchor=if(!contentChanged && !chapterChanged && this.book?.id==book.id && pages.isNotEmpty()) pages[page].start else requestedOffset
         this.book=book; chapterIndex=chapter; this.fontSize=fontSize; this.spacious=spacious; this.serif=serif
         textColor=ink; mutedColor=muted; paperColor=paper; style=turnStyle; this.script=script
         body.textSize=fontSize*scaledDensity
@@ -248,10 +250,14 @@ class ReadingView(context:Context):View(context) {
         velocity?.recycle(); velocity=null
     }
 
-    private fun notifyBoundary(direction:Int) = onBoundary(if(direction<0) "已经是第一页了" else "这本故事读完了")
+    private fun notifyBoundary(direction:Int) {
+        val next = chapterIndex + direction
+        if (next in (book?.chapters?.indices ?: IntRange.EMPTY)) onChapterRequested(next, if (direction < 0) -1 else 0)
+        else onBoundary(if(direction<0) "已经是第一页了" else "这本故事读完了")
+    }
 
     private fun pagesForChapter(chapter:Int):List<TextPage> {
-        if(width<=0 || height<=0) return emptyList()
+        if(width<=0 || height<=0 || book?.chapters?.getOrNull(chapter)?.body.isNullOrBlank()) return emptyList()
         return chapterCache.getOrPut(chapter) {
             Pagination.paginate(textForChapter(chapter),body,(width-margin*2).toInt(),
                 (bottom-firstTop).toInt(),(bottom-otherTop).toInt(),body.textSize*if(spacious) .37f else .14f)

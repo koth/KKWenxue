@@ -31,6 +31,7 @@ BOOKS = ROOT / "books"
 PACKS = ROOT / "packs"
 DB_PATH = ROOT / "content.db"
 SOURCE = os.environ.get("SHANYE_CONTENT_SOURCE", "https://www.suduguu.com").rstrip("/")
+SOURCE_TOKEN = os.environ.get("SHANYE_CONTENT_SOURCE_TOKEN", "")
 RELAY_URL = os.environ.get("SHANYE_RELAY_URL", "").rstrip("/")
 RELAY_TOKEN = os.environ.get("SHANYE_RELAY_TOKEN", "")
 WORKER_ID = os.environ.get("SHANYE_RELAY_WORKER_ID", socket.gethostname())
@@ -97,7 +98,10 @@ def decode(raw: bytes) -> str:
 
 
 def fetch_page(book_id: int, page: int, limit: int) -> bytes:
-    request = Request(f"{SOURCE}/txt/?id={book_id}&p={page}", headers={"User-Agent": "shanye-content/1.0", "Accept": "text/plain"})
+    headers = {"User-Agent": "shanye-content/1.0", "Accept": "text/plain"}
+    if SOURCE_TOKEN:
+        headers["X-Relay-Token"] = SOURCE_TOKEN
+    request = Request(f"{SOURCE}/txt/?id={book_id}&p={page}", headers=headers)
     with urlopen(request, timeout=45) as response:
         if response.status != 200:
             raise RuntimeError(f"正文 HTTP {response.status}")

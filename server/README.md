@@ -55,7 +55,7 @@ python3 -m local.launcher --open
 
 正式引擎为 ZONOS3-Mini C++/GGML CUDA，使用 `backbone-ptq.gguf` 和 `zac-keep2.gguf`。GPU worker 与 API/CPU 共用轻量 Python 3.11 环境，不依赖 Python torch、Transformers 或 Audio8 GPU 环境。原生进程由 GPU worker 拉起并常驻，通过 loopback HTTP 调用；中文 `cmn`，reference 模式，启用中文 LACI 对齐纠错与短句处理。所有新任务的引擎、权重版本、编码音色哈希和校验策略均冻结到快照，旧引擎缓存不会混用。
 
-配置入口见 `server/deploy/service.env.example`：`SHANYE_ZONOS_ROOT`、`SHANYE_ZONOS_PORT`、`SHANYE_ZONOS_TIMEOUT` 和 `SHANYE_SPEECH_VERIFY*`。线上两种音色为 **Haoran**（预置）和 **林川**（用户参考录音预先克隆，默认）；Android 0.9.7 对应同一组稳定 ID。部署验收见 [记录](../reviews/zonos3-production-20261118/README.md)。
+配置入口见 `server/deploy/service.env.example`：`SHANYE_ZONOS_ROOT`、`SHANYE_ZONOS_PORT`、`SHANYE_ZONOS_TIMEOUT` 和 `SHANYE_SPEECH_VERIFY*`。内置音色为 **Haoran**（预置）和 **林川**（默认）；Android 0.9.7 对应同一组稳定 ID。Web 工作台可另外上传新参考录音创建音色，见下方说明。原部署验收见 [记录](../reviews/zonos3-production-20261118/README.md)。
 
 原生引擎重启时，私有端口若尚未释放，会先等待至多 65 秒（不超过 `SHANYE_ZONOS_TIMEOUT`），再开始实际生成，避免瞬时端口占用耗尽排队片段的尝试次数。不连接或终止占用端口的其他进程。宽容校验与队列恢复验收见 [记录](../reviews/tts-tolerant-qa-20261118/README.md)。
 
@@ -86,9 +86,21 @@ systemctl --user status shanye-tts-api shanye-tts-cpu shanye-tts-gpu
 
 ## 本地书库
 
-启动器默认读取 `app/src/main/assets/shanye.db`，当前包含《噩夢使徒》1,281 章。也可用 `--library /absolute/path/shanye.db` 指定其他阅读器 SQLite（`books`、`chapters`，正文为 `body`）。数据库只读打开；浏览目录、搜索、范围解析和原文预览均在本机完成。服务器没有整本书也能正常使用。
+直接运行 `python3 -m local.launcher --open`，在左侧「从服务器拉取」选择书籍。可填写 `984,986-988` 等测试章号，留空拉取服务器已经保存的全部章节（每次最多 2000 章、64 MB 原文）。GPU 服务保存的是已导入或合成过的原文，页面显示其实际章节数，目录可能不连续。原文通过现有 SSH 隧道拉取，校验章节 ID、版本和 SHA-256 后一次事务保存；重复拉取合并章节，失败保留本地原文，不自动派发合成。
 
-只有提交试听/合成时才发送选中章节的原文及版本信息，服务器重新校验哈希和 UTF-16 分段，保存任务所需快照。预估在临时数据库计算，不向正式数据库导入书籍。浏览器中的书库始终来自本地；服务端保存任务、片段缓存、成品及其对应原文版本。
+下载书库默认位于仓库 `.workbench/server-library.sqlite`，可用 `--downloads /path/to/library.sqlite` 更换。`--library /absolute/path/shanye.db` 改为可选，用于只读浏览含 `body` 正文的阅读器 SQLite（`books`、`chapters`）；下载内容与该文件分开保存，不需要复制服务端整个数据库或手工转换表结构。
+
+命令行操作：
+
+```sh
+python3 -m local.pull_book                         # 列出服务器已有书籍和章节数
+python3 -m local.pull_book --book-id BOOK_ID       # 拉取已有章节
+python3 -m local.pull_book --book-id BOOK_ID --chapters 984-986
+```
+
+浏览目录、搜索、范围解析和原文预览均在本机完成。开发前端 `http://127.0.0.1:5173` 已代理 `/session`、`/api` 到启动器 `17861`，启动器仍负责持有服务凭据和本地写入校验。
+
+只有提交试听/合成时才发送选中章节的原文及版本信息，服务器重新校验哈希和 UTF-16 分段，保存任务所需快照。预估在临时数据库计算，不向正式数据库导入书籍。工作台的日常书库来自本地缓存；仅在用户点击服务器拉取入口时读取服务端书目与选定原文。服务端保存任务、片段缓存、成品及其对应原文版本。
 
 网页支持 `914,916-919`、目录勾选与标题搜索；章号与物理顺序分别保存，同号单章需明确选择，范围包含所有同号源章节。
 
@@ -103,11 +115,15 @@ systemctl --user status shanye-tts-api shanye-tts-cpu shanye-tts-gpu
 
 ## 用参考音频克隆音色
 
-当前采用管理员预先克隆并发布的方式，Web/App 直接选择 **林川** 或 **Haoran**，不在每次任务中上传、重新编码或训练参考音频。即时参考上传入口已关闭，避免产生不可合成的预设。
+Web 工作台支持使用新 MP3/M4A/WAV 录音创建音色：展开「声音设置 → 用参考音频创建 ZONOS3 音色」，选择 3–30 秒干净单人录音，点击创建。逐字稿可选。首次由本机编码，随后将录音和参考码发布到服务器；新音色按文件名显示在旁白预设中，后续任务复用缓存。林川、Haoran 和已经生成的任务继续使用原有快照。
+
+本机编码器默认位于仓库 `tmp/zonos3-mini`：`build-metal/zac-encoder-cli`、`clone-models/zac-encoder.gguf`、`clone-models/ssl-teacher.gguf`。可通过 `SHANYE_ZONOS_ENCODER_ROOT` 指定该目录。编码结果按原音频 SHA-256 缓存在 `.workbench/reference-voices/`。仅当本机编码器可用、服务器支持预编码音色发布时，工作台展示上传入口；不需要 Jetson 加载 5.6 GB 的编码模型。
+
+服务器的 `/api/v1/voice-clones/preencoded` 使用既有服务凭据，校验 WAV 参数、时长、参考码形状/取值及两个文件的 SHA-256，发布不可变音色与预设。原生常驻进程在下一个合成批次需要新音色时重新加载；不会中断正在生成的批次。上传失败不创建可选择的空预设。原始 MP3 上传由本地启动器处理，服务端原始上传接口保留明确提示。
 
 一次性准备林川：使用官方 `zac-encoder-cli`，载入 `zac-encoder.gguf` 和 `ssl-teacher.gguf`，将干净单人录音编码成 `LinChuan.codes.npy`（普通 `[T,10]` 编码）；可额外用 `spk-encoder-cli` 保存 `LinChuan.embedding.npy`。编码完成后只将录音、编码和哈希清单发布到服务端。正式合成走 reference 模式，优先复用同名 `.codes.npy`，无需部署约 5.6GB 的克隆编码模型。它是音色参考编码，不是微调模型。
 
-同目录文件结构：`Haoran.mp3` / `Haoran.codes.npy`、`LinChuan.mp3` / `LinChuan.codes.npy` 及 `voices.json`。清单冻结 speaker、native_name、相对于音频根目录的 audio_path/codes_path 和各自 SHA-256。可选的 `.embedding.npy` 不会额外显示为音色。参考转写留在清单供审计；ZONOS3 的 reference 模式不需要将逐字稿输入生成模型。
+同目录文件结构：`Haoran.mp3` / `Haoran.codes.npy`、`LinChuan.mp3` / `LinChuan.codes.npy` 及 `voices.json`；工作台上传的新录音使用 `upload-<内容身份>.wav` 与同名 `.codes.npy`。清单冻结 speaker、native_name、相对于音频根目录的 audio_path/codes_path 和各自 SHA-256。可选的 `.embedding.npy` 不会额外显示为音色。参考转写留在清单供审计；ZONOS3 的 reference 模式不需要将逐字稿输入生成模型。
 
 逐段生成后使用常驻 CPU ASR 粗查明显的大段漏读和增词；小幅差异放行并留记录，严重异常才有限重试，缺段不能发布成完整章节。ASR 容忍同音字，不能替代人名、多音字的人工听评。音色、权重或策略变化须发布新版本，不覆盖既有任务快照。
 
@@ -118,6 +134,8 @@ systemctl --user status shanye-tts-api shanye-tts-cpu shanye-tts-gpu
 - 每段最多初次加 1 次重试；失败分支必要时最多切一层，每个子段最多尝试 2 次，过短片段停止继续切分。每个原片段最多 6 次原生生成调用，不再叠加引擎内部重试或内容失败的中转整轮重试。成功子段和同批有效段独立保存复用，缺段不会发布为完整章节。错误显示父段与子段总尝试次数、具体校验原因及原文/识别结果。
 - 仅含空白、标点或符号的片段（如章末 `>`）标为 `skipped`，不调用模型或消耗重试；单字、数字及混合正文仍需有效音频。进度与预估单独计数，manifest 的 `skipped_segments` 保留原文和 UTF-16 范围，正文 cue 不移位。全章无朗读内容时标记章节跳过，不生成空音频。
 - `retry-failed` 创建关联新任务，快照原配置并复用有效结果；历史终态不覆盖。关联重试轮次使用不同种子，避免重复生成同一份坏音频；语音内容校验继续保留。
+- 新任务使用 `zonos-native-laci-bounded160-pauses-v3`：中文章号与标题空格间插入 500ms 实际停顿，逗号/顿号 250ms、冒号 300ms、分号 400ms。英文单词、千分位和时间保持完整。新生成缓存与旧策略分开；已有音频需重新合成才包含新停顿，App 无需更新。
+- 新任务使用同一音色先朗读章节名，再停顿至少 650ms 朗读正文。章节名独立生成、校验和缓存，正文缓存继续复用；标题已是正文首段时不重复播报。manifest 的 `title_cues` 描述标题时间轴，`cues` 仍只包含正文 UTF-16 锚点，音频时长包含标题。标题快照与任务一同冻结；旧任务和旧听书包保留原样，重新派发即可补标题并导出新版本。
 - 新版本有独立音频及 JSON 地址。UTF-16 cue 对应原文 revision，点击句子从首个 cue 播放，停顿时不提前高亮下一句。
 - 单章 M4A、JSON 和 ZIP 经同源代理流式传输，支持 Range。ZIP 含目录与哈希，文件名含身份后缀，同号章节不覆盖。
 - 浏览器决定保存位置，界面“下载已发起”不表示已经写到某个目录。

@@ -42,8 +42,8 @@ class AudioPlaybackInstrumentedTest {
             repeat(samples) { putShort((kotlin.math.sin(it*2*Math.PI*220/8000)*200).toInt().toShort()) }
         }.array()
         val file=File(context.cacheDir,"playback-controls.wav").apply { writeBytes(bytes) }
-        val chapter=Library.book("mountain").chapters.first()
-        val item=AudioChapter("c".repeat(32), "mountain", chapter.id, 0, chapter.title, "测试音频", duration,
+        val chapter=TestBooks.reader.chapters.first()
+        val item=AudioChapter("c".repeat(32), TestBooks.reader.id, chapter.id, 0, chapter.title, "测试音频", duration,
             listOf(AudioCue(0,duration,0,chapter.text.length,chapter.text)),file)
         context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         instrumentation.waitForIdleSync()

@@ -10,7 +10,13 @@ NUMBER = re.compile(r'[0-9零〇一二两三四五六七八九十百千万亿点
 
 def spoken_units(text):
     """Return pronunciation units and their offsets into the unmodified text."""
-    import cn2an
+    try:
+        import cn2an
+    except ImportError:
+        # The verifier runs in a deliberately small QA environment. Number
+        # canonicalization is an optimization; phonetic character fallback is
+        # sufficient and must never make the whole TTS job fail.
+        cn2an = None
     from opencc import OpenCC
     from pypinyin import lazy_pinyin
 
@@ -28,9 +34,15 @@ def spoken_units(text):
                 units.append((lazy_pinyin(char)[0].lower(), i, i+1))
         number = match.group()
         try:
+            if cn2an is None:
+                raise ImportError('cn2an unavailable')
             value = cn2an.cn2an(number.replace('幺','一'), 'smart')
             canonical = cn2an.an2cn(str(int(value)) if value == int(value) else str(value))
-        except (ValueError, TypeError):
+        except (ImportError, KeyError, ValueError, TypeError, IndexError):
+            # cn2an rejects adjacent number groups such as “十三十三”
+            # (common when ASR removes punctuation). Fall back to the
+            # individual characters so verification never turns an audio
+            # result into an infrastructure error.
             canonical = number
         for phone in lazy_pinyin(canonical):
             if phone.isalnum():

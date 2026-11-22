@@ -1,8 +1,5 @@
 package com.kkwenxue.shanye.ui
 
-import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -55,25 +52,9 @@ fun HomeScreen(store: ReaderStore, onOpen: (Book) -> Unit, onBookmark: (Bookmark
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var searching by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
-    var importing by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) scope.launch {
-            importing = true
-            try {
-                val book = withContext(Dispatchers.IO) { LocalBookRepository(context).import(uri) }
-                Library.addImported(book)
-                Toast.makeText(context, "已导入《${book.title}》 · ${book.chapters.size} 章", Toast.LENGTH_LONG).show()
-                onOpen(book)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                snackbar.showSnackbar(error.message ?: "导入失败，请检查文件后重试。")
-            } finally { importing = false }
-        }
-    }
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(Paper).statusBarsPadding()) {
         Box(Modifier.weight(1f)) {
@@ -81,7 +62,7 @@ fun HomeScreen(store: ReaderStore, onOpen: (Book) -> Unit, onBookmark: (Bookmark
                 0 -> Discover(store,onOpen,onAll={tab=1},onSearch={searching=true; tab=1})
                 1 -> Shelf(context,store,onOpen,searching,query,{searching=!searching},{query=it}, onSync, onlineStatuses,
                     syncSettings, onSyncSettings, onCancelSync, onRetrySync, onPostponeSync, onRollback,
-                    onImport={importFile.launch(arrayOf("text/plain", "application/epub+zip", "application/octet-stream"))})
+                    )
                 else -> Profile(store,onBookmark)
             }
         }
@@ -100,83 +81,57 @@ fun HomeScreen(store: ReaderStore, onOpen: (Book) -> Unit, onBookmark: (Bookmark
     }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(start=16.dp,end=16.dp,bottom=78.dp))
     }
-    if (importing) AlertDialog(
-        onDismissRequest={},
-        title={Text("正在导入书籍",fontFamily=Serif)},
-        text={Row(verticalAlignment=Alignment.CenterVertically) {
-            CircularProgressIndicator(Modifier.size(22.dp),color=Accent,strokeWidth=2.dp)
-            Text("正在整理目录和正文…",Modifier.padding(start=16.dp),color=Muted)
-        }},
-        confirmButton={},
-        containerColor=Paper
-    )
 }
 
 @Composable
-private fun Discover(store: ReaderStore, onOpen: (Book)->Unit,onAll:()->Unit,onSearch:()->Unit) {
-    var category by rememberSaveable { mutableStateOf("全部") }
-    val featured=Library.book(store.lastBook)
+private fun Discover(store: ReaderStore, onOpen: (Book)->Unit, onAll: ()->Unit, onSearch: ()->Unit) {
+    val featured = Library.books.firstOrNull{it.id==store.lastBook} ?: Library.books.firstOrNull()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom=20.dp)) {
         Row(Modifier.fillMaxWidth().padding(start=24.dp,end=16.dp,top=16.dp),verticalAlignment=Alignment.CenterVertically) {
             Glyph("mountain",Accent,size=25.dp)
             Text("山页",Modifier.padding(start=9.dp),fontFamily=Serif,fontSize=23.sp,letterSpacing=3.sp,fontWeight=FontWeight.SemiBold,color=Ink)
             Spacer(Modifier.weight(1f))
-            Text(LocalDate.now().format(DateTimeFormatter.ofPattern("MM.dd"))+"  /  "+listOf("周一","周二","周三","周四","周五","周六","周日")[LocalDate.now().dayOfWeek.value-1],fontSize=11.sp,color=Muted,letterSpacing=1.sp)
+            Text(LocalDate.now().format(DateTimeFormatter.ofPattern("MM.dd")),fontSize=11.sp,color=Muted,letterSpacing=1.sp)
             Spacer(Modifier.width(8.dp))
-            IconAction("search","搜索书籍",onClick=onSearch)
+            IconAction("search","搜索在线书库",onClick=onSearch)
         }
-        Spacer(Modifier.height(19.dp))
+        Spacer(Modifier.height(28.dp))
         Text("把时间，留给好故事。",Modifier.padding(horizontal=24.dp),fontFamily=Serif,fontWeight=FontWeight.Medium,fontSize=25.sp,color=Ink,letterSpacing=.7.sp)
-        Text("世界很快，在这里慢一点。",Modifier.padding(start=24.dp,top=9.dp),fontSize=12.sp,color=Muted,letterSpacing=1.sp)
-        Spacer(Modifier.height(20.dp))
-        Row(Modifier.padding(horizontal=24.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color(0xFFE9EBE3)).clickable { onOpen(featured) }.padding(18.dp),verticalAlignment=Alignment.CenterVertically) {
+        Text("从在线书库选择一本书，目录会立即出现在书架。",Modifier.padding(start=24.dp,top=9.dp,end=24.dp),fontSize=12.sp,color=Muted,letterSpacing=.4.sp)
+        if (featured == null) {
+            Column(Modifier.fillMaxWidth().padding(horizontal=24.dp,vertical=54.dp),horizontalAlignment=Alignment.CenterHorizontally) {
+                Glyph("book",Muted,size=42.dp)
+                Text("书架还是空的",Modifier.padding(top=18.dp),fontFamily=Serif,fontSize=20.sp,color=Ink)
+                Text("先搜索在线书库，导入目录后即可开始阅读。",Modifier.padding(top=8.dp),fontSize=12.sp,color=Muted)
+                Button(onClick=onSearch,Modifier.padding(top=22.dp)) { Text("搜索在线书库") }
+            }
+            return@Column
+        }
+        Row(Modifier.padding(horizontal=24.dp,vertical=24.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color(0xFFE9EBE3)).clickable { onOpen(featured) }.padding(18.dp),verticalAlignment=Alignment.CenterVertically) {
             BookCover(featured,Modifier.width(100.dp).height(150.dp))
             Column(Modifier.weight(1f).padding(start=18.dp)) {
-                Text("正在读  /  CONTINUE",fontSize=9.sp,color=Color(0xFF72806C),letterSpacing=1.1.sp,fontWeight=FontWeight.Medium)
+                Text("继续阅读",fontSize=9.sp,color=Color(0xFF72806C),letterSpacing=1.1.sp,fontWeight=FontWeight.Medium)
                 Spacer(Modifier.height(8.dp))
                 Text(featured.title,fontFamily=Serif,fontSize=21.sp,color=Ink,fontWeight=FontWeight.SemiBold)
                 Text(featured.author+" 著",Modifier.padding(top=6.dp),fontSize=11.sp,color=Color(0xFF7A8275))
                 val pos=store.resumePosition(featured)
-                Text(if (store.needsRelocation(featured)) "原文已变更，请重新定位" else "第${pos.chapter+1}章 · "+featured.chapters[pos.chapter].title,
-                    Modifier.padding(top=12.dp),fontSize=10.sp,color=Color(0xFF7A8275),maxLines=1)
+                Text("第${pos.chapter+1}章 · "+featured.chapters[pos.chapter].title,Modifier.padding(top=12.dp),fontSize=10.sp,color=Color(0xFF7A8275),maxLines=1)
                 Spacer(Modifier.height(7.dp))
                 LinearProgressIndicator(progress={store.progress(featured)},modifier=Modifier.fillMaxWidth().height(2.dp),color=Accent,trackColor=Color(0xFFD5D9CD),drawStopIndicator={})
-                Row(Modifier.fillMaxWidth().padding(top=12.dp),verticalAlignment=Alignment.CenterVertically) {
-                    Text("继续阅读",fontSize=12.sp,fontWeight=FontWeight.Medium,color=Accent)
-                    Spacer(Modifier.weight(1f))
-                    Glyph("arrow",Accent,size=18.dp)
-                }
             }
         }
-        Spacer(Modifier.height(24.dp))
         Row(Modifier.padding(start=24.dp,end=19.dp).fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-            Text("为你精选",fontSize=19.sp,fontFamily=Serif,fontWeight=FontWeight.SemiBold,color=Ink)
+            Text("我的书架",fontSize=19.sp,fontFamily=Serif,fontWeight=FontWeight.SemiBold,color=Ink)
             Spacer(Modifier.weight(1f))
-            Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick=onAll).padding(5.dp),verticalAlignment=Alignment.CenterVertically) {
-                Text("全部书籍",fontSize=11.sp,color=Muted)
-                Glyph("next",Muted,Modifier.padding(start=4.dp),14.dp)
-            }
+            TextButton(onClick=onAll) { Text("查看全部") }
         }
-        Row(Modifier.padding(start=24.dp,top=13.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-            listOf("全部","文学","悬疑","幻想").forEach { label ->
-                Text(label,Modifier.clip(RoundedCornerShape(7.dp)).background(if(category==label) Ink else Color.Transparent).clickable{category=label}.padding(horizontal=15.dp,vertical=7.dp),color=if(category==label) Paper else Muted,fontSize=11.sp)
-            }
-        }
-        Spacer(Modifier.height(15.dp))
         LazyRow(contentPadding=PaddingValues(horizontal=24.dp),horizontalArrangement=Arrangement.spacedBy(18.dp)) {
-            items(Library.books.filter { category=="全部" || it.genre==category },key={it.id}) { book ->
+            items(Library.books,key={it.id}) { book ->
                 Column(Modifier.width(105.dp).clickable { onOpen(book) }) {
                     BookCover(book,Modifier.fillMaxWidth().height(146.dp))
                     Text(book.title,Modifier.padding(top=11.dp),fontSize=12.sp,color=Ink,fontWeight=FontWeight.Medium,maxLines=1)
                     Text(book.author+" · "+book.genre,Modifier.padding(top=4.dp),fontSize=10.sp,color=Muted)
                 }
-            }
-        }
-        Row(Modifier.padding(start=24.dp,end=24.dp,top=29.dp).fillMaxWidth().background(Color(0xFFEEEBE3),RoundedCornerShape(10.dp)).padding(16.dp),verticalAlignment=Alignment.CenterVertically) {
-            Text("“",fontFamily=Serif,fontSize=35.sp,color=Accent.copy(.7f))
-            Column(Modifier.padding(start=13.dp)) {
-                Text("总有一句话，让你停留。",fontFamily=Serif,fontSize=14.sp,color=Ink)
-                Text("打开一本书，去别处生活。",Modifier.padding(top=6.dp),fontSize=10.sp,color=Muted)
             }
         }
     }
@@ -186,7 +141,7 @@ private fun Discover(store: ReaderStore, onOpen: (Book)->Unit,onAll:()->Unit,onS
 private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(Book)->Unit,searching:Boolean,query:String,onSearch:()->Unit,onQuery:(String)->Unit,onSync:()->Unit,onlineStatuses: Map<String, OnlineSyncStatus>,
     syncSettings: OnlineSyncSettings, onSyncSettings: (OnlineSyncSettings) -> Unit, onCancelSync: (String) -> Unit,
     onRetrySync: (Book, OnlineUpdatePlan?) -> Unit, onPostponeSync: (Book, OnlineUpdatePlan) -> Unit,
-    onRollback: (Book) -> Unit, onImport:()->Unit) {
+    onRollback: (Book) -> Unit) {
     val catalog = remember { CatalogClient() }
     var network by rememberSaveable { mutableStateOf(false) }
     var remoteResults by remember { mutableStateOf<List<CatalogBook>>(emptyList()) }
@@ -213,14 +168,10 @@ private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(B
             Text("我的书架",fontFamily=Serif,fontSize=28.sp,color=Ink,fontWeight=FontWeight.Medium)
             Spacer(Modifier.weight(1f))
             IconAction("refresh", "检查在线更新", onClick=onSync)
-            TextButton(onClick=onImport) {
-                Glyph("plus",Accent,size=16.dp)
-                Text("导入",Modifier.padding(start=5.dp),fontSize=12.sp,color=Accent)
-            }
             IconAction(if(searching) "close" else "search","搜索书架",onClick=onSearch)
         }
         Row(Modifier.fillMaxWidth().padding(horizontal=24.dp), verticalAlignment=Alignment.CenterVertically) {
-            Text("${Library.books.size} 本书 · 支持导入 TXT / EPUB",Modifier.weight(1f),fontSize=12.sp,color=Muted)
+            Text("${Library.books.size} 本书 · 书籍来自在线书库",Modifier.weight(1f),fontSize=12.sp,color=Muted)
             TextButton(onClick={ showSyncSettings = true }) { Text("更新设置") }
         }
         if(searching) {
@@ -506,28 +457,21 @@ private fun CatalogBookDialog(item: CatalogBook, context: android.content.Contex
 
 private suspend fun downloadCatalogBook(context: android.content.Context, catalog: CatalogClient, item: CatalogBook,
     phase: (String) -> Unit = {}): Book {
-    phase("服务器正在准备正文…")
-    var task = runInterruptible(Dispatchers.IO) { catalog.startContent(item.id) }
-    var pollCount = 0
-    while (!task.done) {
-        task.failureMessage?.let { error(it) }
-        check(pollCount++ < 360) { "服务器仍在处理正文，请稍后重试" }
-        delay(1000)
-        val id = task.taskId
-        task = runInterruptible(Dispatchers.IO) { catalog.status(id) }
-    }
-    phase("正在通过中转下载正文…")
-    return withContext(Dispatchers.IO) {
-        val file = File.createTempFile("catalog-", ".zip", context.cacheDir)
-        try {
-            var waits = 0
-            while (!runInterruptible { catalog.download(task, file) }) {
-                check(waits++ < 60) { "中转仍在上传，请稍后重试" }
-                delay(2000)
-            }
-            ContentPackageImporter.import(file, item)
-        } finally { file.delete() }
-    }
+    phase("正在读取章节目录…")
+    val manifest=runInterruptible(Dispatchers.IO){catalog.completeManifest(item.id)}
+    val chapters=manifest.chapters
+    val revision=manifest.revision
+    phase("目录已就绪，共 ${chapters.size} 章")
+    return Book(
+        id = "online:catalog:${item.id}", title = item.title, author = item.author,
+        genre = item.category, subtitle = "${chapters.size} 章 · 在线目录",
+        description = "从在线书库导入，正文按章节加载。", cover = 1,
+        chapters = chapters.sortedBy { it.index }.map { ref ->
+            Chapter("online:catalog:${item.id}:chapter:source:${ref.sourceId}", ref.title, "", ref.bodySha256)
+        }, remoteSource = "catalog", remoteBookId = item.id,
+        activeRevision = revision, remoteLatestChapterId = item.latestChapterId,
+        remoteLatestVersion = revision
+    )
 }
 
 @Composable

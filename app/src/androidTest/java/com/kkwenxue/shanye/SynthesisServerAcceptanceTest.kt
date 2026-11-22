@@ -22,7 +22,8 @@ class SynthesisServerAcceptanceTest {
         val config=RelayConnection(raw.getString("endpoint"),raw.getString("token")).validated()
         val book=Book("relay-app-smoke-20261114","云端合成试音","山页","测试","App 派发与导入验收","原创试音",0,
             listOf(Chapter("relay-app-smoke-20261114-1","第1章：雨后",
-                "雨停了，窗台还留着几滴水。\n\n林舟翻开书，平静地说：“故事就从这里开始。”")))
+                "雨停了，窗台还留着几滴水。\n\n林舟翻开书，平静地说：“故事就从这里开始。”")),
+            remoteSource="catalog",remoteBookId=1L,activeRevision="fixture-v1",remoteLatestVersion="fixture-v1")
         BookDatabase(context).use {it.save(book)}
         val repository=SynthesisRepository(context)
         repository.settings.save(config)

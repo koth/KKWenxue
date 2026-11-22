@@ -53,13 +53,27 @@ internal fun AudioPlayerScreen(
     onImported: () -> Unit, onClose: (ListeningCheckpoint?) -> Unit,
     initialChapterIndex: Int? = null, initialTextOffset: Int = 0,
     resumeArtifactId: String? = null,
-    onRead: (AudioChapter, Int) -> Unit
+    onRead: (AudioChapter, Int) -> Unit,
+    availableBooks: List<Book> = emptyList()
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val shelfBooks = availableBooks.ifEmpty { Library.books.toList() }
     val visible = remember(items, book?.id) {
         items.filter { book == null || it.bookId == book.id }
             .sortedWith(compareBy<AudioChapter> { it.bookId }.thenBy { it.chapterIndex })
+    }
+    if (visible.isEmpty() && shelfBooks.isEmpty()) {
+        OverlaySystemBars(SystemBarsMode.PLAYER)
+        BackHandler { onClose(null) }
+        Box(Modifier.fillMaxSize().background(PlayerPanel).windowInsetsPadding(WindowInsets.systemBars), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+                Text("还没有听书内容", color = PlayerWhite, fontSize = 22.sp, fontFamily = Serif)
+                Text("请先从在线书库导入书籍，再导入对应的听书包。", Modifier.padding(top = 10.dp), color = PlayerMuted, fontSize = 13.sp, textAlign = TextAlign.Center)
+                TextButton(onClick = { onClose(null) }, modifier = Modifier.padding(top = 12.dp)) { Text("返回书架", color = PlayerAccent) }
+            }
+        }
+        return
     }
     val active = AudioPlayback.current?.takeIf { book == null || it.bookId == book.id }
     val chapterEntry = book != null && initialChapterIndex != null
@@ -147,7 +161,7 @@ internal fun AudioPlayerScreen(
     }
     if (showSynthesis) {
         SynthesisScreen(displayBook ?: book, displayItem?.chapterIndex ?: initialChapterIndex,
-            library, onImported, { showSynthesis=false })
+            library, onImported, { showSynthesis=false }, availableBooks=shelfBooks)
         return
     }
     LaunchedEffect(Unit) { AudioPlayback.restore(context) }
@@ -253,7 +267,7 @@ internal fun AudioPlayerScreen(
                     verticalArrangement=Arrangement.Center) {
                     Glyph("audio", PlayerMuted, size=52.dp)
                     Text(if (chapterEntry) "本章暂无听书内容" else "还没有听书音频", Modifier.padding(top=22.dp), fontSize=23.sp, color=PlayerWhite)
-                    Text(if (chapterEntry) "先合成当前章节，或导入包含本章的听书包。" else "派发章节到服务器合成，或导入已有听书包。", Modifier.padding(top=12.dp), fontSize=12.sp,
+                    Text(if (chapterEntry) "先合成当前章节，或导入包含本章的听书包。" else "从已导入的在线书籍中选择章节合成，或导入已有听书包。", Modifier.padding(top=12.dp), fontSize=12.sp,
                         color=PlayerMuted, textAlign=TextAlign.Center)
                     Button(onClick={showSynthesis=true}, modifier=Modifier.padding(top=22.dp),
                         colors=ButtonDefaults.buttonColors(containerColor=PlayerAccent, contentColor=PlayerPanel)) {

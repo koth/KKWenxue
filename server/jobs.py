@@ -9,6 +9,7 @@ from .catalog import DomainError, materialize_inline, resolve
 from .config import ENGINE
 from .db import encoded, event, transaction
 from .presets import snapshot
+from .narration import chapter_parts, store_headings
 
 TERMINAL = {"succeeded", "partial_failed", "failed", "cancelled"}
 
@@ -109,15 +110,16 @@ def submit(db, settings, request, key, kind="synthesis", parent=None, frozen=Non
             if frozen_revisions
             else chapter["current_revision"]
         )
-        parts = db.execute(
-            "SELECT * FROM segments WHERE revision_id=? AND depth=0 ORDER BY segment_index",
-            (revision,),
-        ).fetchall()
+        narration = config.get("narration")
+        title = None
+        if narration:
+            title = narration["titles"].setdefault(revision, chapter["title"])
+        parts = chapter_parts(db, revision, title)
         if kind == "preview":
             chosen, chars = [], 0
             for part in parts:
                 chosen.append(part)
-                if has_spoken_content(part["spoken_text"]):
+                if part["sentence_index"] >= 0 and has_spoken_content(part["spoken_text"]):
                     chars += len(part["spoken_text"])
                 if (
                     chars >= 160
@@ -170,6 +172,7 @@ def submit(db, settings, request, key, kind="synthesis", parent=None, frozen=Non
         )
         position = 0
         for index, (revision, parts) in enumerate(chapter_data):
+            store_headings(db, [part for part, _audio in parts])
             db.execute(
                 "INSERT INTO job_chapters(job_id,revision_id,position) VALUES (?,?,?)",
                 (identifier, revision, index),

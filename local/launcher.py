@@ -11,13 +11,17 @@ import socket
 import subprocess
 import threading
 import urllib.parse
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from urllib.parse import urlsplit, unquote
 import webbrowser
 
 from .library import LocalLibrary
+from .server_library import ServerLibrary
+from .voice_clone import LocalVoiceEncoder
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_LIBRARY = ROOT / "app/src/main/assets/shanye.db"
+DEFAULT_DOWNLOADS = ROOT / ".workbench/server-library.sqlite"
 
 
 class Transport:
@@ -191,6 +195,50 @@ class Handler(BaseHTTPRequestHandler):
                 200,
                 {"session": self.server.session, "server": self.server.transport.host},
             )
+        if path == "/api/v1/server-library/books" and self.command == "GET":
+            try:
+                return self.reply(200,self.server.remote_library.books())
+            except Exception as exc:
+                return self.reply(502,{"error":{"message":str(exc)}})
+        if path == '/api/v1/voices' and self.command=='GET':
+            try:
+                value=self.server.remote_library.request(path)
+                value['reference_upload']=bool(value.get('preencoded_upload') and self.server.voice_encoder.ready)
+                value['reference_text_required']=False
+                return self.reply(200,value)
+            except Exception as exc:
+                return self.reply(502,{'error':{'message':str(exc)}})
+        if path == '/api/v1/voice-clones' and write:
+            try:
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<length<=20*1024*1024:
+                    raise ValueError('参考音频须小于 20 MB')
+                raw=self.rfile.read(length)
+                message=BytesParser(policy=email_policy).parsebytes(('Content-Type: '+self.headers['Content-Type']+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+raw)
+                fields={part.get_param('name',header='content-disposition'):part for part in message.iter_parts()}
+                reference=fields.get('reference')
+                if reference is None:
+                    raise ValueError('请选择参考音频文件')
+                transcript=fields['ref_text'].get_payload(decode=True).decode('utf-8') if 'ref_text' in fields else ''
+                prepared=self.server.voice_encoder.prepare(reference.get_payload(decode=True),reference.get_filename() or '新音色.wav',transcript)
+                return self.reply(201,self.server.remote_library.request('/api/v1/voice-clones/preencoded',prepared))
+            except Exception as exc:
+                return self.reply(422,{'error':{'message':str(exc)}})
+        if path == "/api/v1/server-library/pull" and write:
+            try:
+                length=int(self.headers.get("Content-Length","0"))
+                if not 0<length<=8192:
+                    return self.reply(413,{"error":{"message":"拉取参数过大"}})
+                payload=json.loads(self.rfile.read(length))
+                identifier=payload.get("book_id")
+                expression=payload.get("expression","")
+                if not isinstance(identifier,str) or not identifier or not isinstance(expression,str):
+                    raise ValueError("请选择服务器书籍并填写有效章号")
+                return self.reply(200,self.server.remote_library.pull(self.server.library,identifier,expression))
+            except ConnectionError as exc:
+                return self.reply(502,{"error":{"message":str(exc)}})
+            except Exception as exc:
+                return self.reply(422,{"error":{"message":str(exc)}})
         if path == "/api/v1/books" and self.command == "GET":
             try:
                 return self.reply(200, {"items": self.server.library.books()})
@@ -345,16 +393,21 @@ class Handler(BaseHTTPRequestHandler):
         self.handle_request()
 
 
-def make_server(
-    transport, port=17861, dist=ROOT / "web/dist", library_path=DEFAULT_LIBRARY
-):
+def make_server(transport, port=17861, dist=ROOT / "web/dist", library_path=None, downloads_path=DEFAULT_DOWNLOADS):
+    if library_path is not None and not Path(library_path).is_file():
+        raise ValueError("--library 指定的阅读器 SQLite 不存在")
+    if library_path is not None and Path(library_path).expanduser().resolve()==Path(downloads_path).expanduser().resolve():
+        raise ValueError("下载书库需要使用独立 SQLite 文件，不能覆盖阅读器数据库")
+    downloads=LocalLibrary.initialize_downloads(downloads_path)
     server = LocalServer(("127.0.0.1", port), Handler)
     server.transport, server.dist, server.session = (
         transport,
         dist,
         secrets.token_urlsafe(32),
     )
-    server.library = LocalLibrary(library_path)
+    server.library = LocalLibrary(Path(library_path) if library_path else downloads,downloads=downloads)
+    server.remote_library = ServerLibrary(transport)
+    server.voice_encoder = LocalVoiceEncoder()
     return server
 
 
@@ -370,7 +423,8 @@ def main():
         "--direct", action="store_true", help="Connect a local API for development"
     )
     parser.add_argument("--open", action="store_true")
-    parser.add_argument("--library", type=Path, default=DEFAULT_LIBRARY)
+    parser.add_argument("--library", type=Path, help="可选的只读阅读器 SQLite；不指定时使用本地拉取书库")
+    parser.add_argument("--downloads",type=Path,default=DEFAULT_DOWNLOADS,help="从服务器拉取的原文缓存数据库")
     args = parser.parse_args()
     transport = Transport(
         args.host,
@@ -381,7 +435,7 @@ def main():
         args.direct,
     )
     # Bind UI first; do not create a tunnel if the UI port is occupied.
-    server = make_server(transport, args.port, library_path=args.library)
+    server = make_server(transport, args.port, library_path=args.library,downloads_path=args.downloads)
     try:
         transport.start()
         url = f"http://127.0.0.1:{server.server_address[1]}"

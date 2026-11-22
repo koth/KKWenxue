@@ -22,7 +22,7 @@ from server.voices import DEFAULT_PRESET_ID, DEFAULT_CLONE_ID, HAORAN_PRESET_ID
 from server.tests.fixtures import install_test_voice
 from server.db import initialize, connect, backup
 from server.jobs import submit, detail, action, claim, release, recover, assert_owner
-from server.presets import create_preset
+from server.presets import create_preset, snapshot
 from server.worker import Worker, recovery_split_position
 from server.zonos_runtime import LEGACY_SPEECH_PLAN, SPEECH_PLAN, generation_seed
 from tts.common import GPULock, has_spoken_content, utf16_len
@@ -338,7 +338,7 @@ class ServiceTests(unittest.TestCase):
         )
         self.gpu.tick()
         d = detail(self.db, job)
-        self.assertEqual(len(parts) - 1, d["counts"]["completed"])
+        self.assertEqual(d["counts"]["total"] - 1, d["counts"]["completed"])
         self.engine.invalid = set()
         self.finish()
         self.assertEqual("succeeded", detail(self.db, job)["state"])
@@ -393,7 +393,7 @@ class ServiceTests(unittest.TestCase):
             (self.settings.audio / artifact["manifest_path"]).read_text()
         )
         self.assertTrue(manifest["complete"])
-        self.assertEqual(result["counts"]["completed"], len(manifest["cues"]))
+        self.assertEqual(result["counts"]["completed"], len(manifest["cues"]) + len(manifest["title_cues"]))
         self.assertEqual(
             marker["original_text"], manifest["skipped_segments"][0]["original_text"]
         )
@@ -471,8 +471,9 @@ class ServiceTests(unittest.TestCase):
         result = detail(self.db, job)
         self.assertEqual("failed", result["state"], result)
         self.assertEqual(0, result["counts"]["skipped"])
-        self.assertEqual(1, result["counts"]["failed"])
-        self.assertEqual(2, result["errors"][0]["attempts"])
+        body_errors = [error for error in result["errors"] if '嗯' in error['original_text']]
+        self.assertEqual(1, len(body_errors))
+        self.assertEqual(2, body_errors[0]["attempts"])
 
     def test_bounded_split_and_failure_retry(self):
         job = submit(
@@ -516,7 +517,7 @@ class ServiceTests(unittest.TestCase):
         job = submit(self.db, self.settings, self.request([chapter["id"]]), "split-seeds")
         self.finish()
         self.assertEqual("succeeded", detail(self.db, job)["state"])
-        parent = next(row for row in seen if row["depth"] == 0)
+        parent = next(row for row in seen if row["depth"] == 0 and row["sentence_index"] >= 0)
         attempts = list(self.db.execute("SELECT * FROM attempts WHERE job_id=? AND segment_id=? ORDER BY number", (job, parent["id"])))
         self.assertEqual([1, 2], [a["number"] for a in attempts])
         self.assertEqual(2, len({a["seed"] for a in attempts}))
@@ -546,6 +547,9 @@ class ServiceTests(unittest.TestCase):
             nonlocal first_child
             output = generate(rows, config)
             for i, row in enumerate(rows):
+                if row["sentence_index"] < 0:
+                    output[i] = ValueError("内容校验未通过")
+                    continue  # The following budget assertions apply to one body segment.
                 seen.append(dict(row))
                 if row["depth"] == 1 and first_child is None:
                     first_child = row["id"]

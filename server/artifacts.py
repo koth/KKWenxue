@@ -37,6 +37,7 @@ def export_chapter(db, settings, job, revision_id):
             (revision_id,),
         ).fetchone()
     )
+    chapter["title"] = config.get("narration", {}).get("titles", {}).get(revision_id, chapter["title"])
     parts = db.execute(
         """SELECT ji.state,ji.audio_id,s.*,a.path,a.sha256,a.ready AS audio_ready
         FROM job_items ji JOIN segments s ON s.id=ji.segment_id LEFT JOIN segment_audio a ON a.id=ji.audio_id
@@ -65,7 +66,7 @@ def export_chapter(db, settings, job, revision_id):
             {
                 "clips": [(p["audio_id"], p["sha256"]) for p in parts],
                 "export": config["export"],
-                "index_version": 2,
+                "index_version": 4,
                 "encoder": "aac64k-" + LOUDNESS_VERSION
                 if config["export"].get("normalize_loudness", False)
                 else "aac64k-v1",
@@ -86,7 +87,8 @@ def export_chapter(db, settings, job, revision_id):
     folder = Path(chapter["book_id"]) / job["variant_id"] / chapter["id"] / identifier
     target = settings.audio / folder / "chapter.m4a"
     clips = [
-        {**dict(p), "segment_id": p["id"], "path": settings.audio / p["path"]}
+        {**dict(p), "segment_id": p["id"], "path": settings.audio / p["path"],
+         "kind": "chapter_title" if p["sentence_index"] < 0 else "body"}
         for p in parts
     ]
     timing = render(
@@ -97,6 +99,7 @@ def export_chapter(db, settings, job, revision_id):
         chapter["title"],
         chapter["book_title"],
         normalize_loudness=config["export"].get("normalize_loudness", False),
+        natural_title_pause=config["generation"].get("speech_plan") == "zonos-native-laci-bounded160-natural-pauses-v4",
     )
     manifest = {
         "schema_version": 2,

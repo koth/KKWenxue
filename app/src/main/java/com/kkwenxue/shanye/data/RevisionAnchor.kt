@@ -11,7 +11,11 @@ data class RevisionAnchor(
 ) {
     fun locate(book: Book, rangeLength: Int = 0): ReadingPosition? {
         val same = book.chapters.indexOfFirst { it.id == chapterId }
-        if (same >= 0 && (revision == book.activeRevision || chapterId.contains(":chapter:sha256:"))) {
+        if (same >= 0 && book.remoteBookId != null && book.chapters[same].body.isBlank()) {
+            return ReadingPosition(same, offset.coerceAtLeast(0))
+        }
+        val chapterRevision = book.chapters.getOrNull(same)?.takeIf { it.body.isNotBlank() }?.let { "chapter:" + syncSha256(it.body) }
+        if (same >= 0 && (revision == chapterRevision || revision == book.activeRevision || chapterId.contains(":chapter:sha256:"))) {
             return ReadingPosition(same, offset).takeIf { validOffset(book.chapters[same].text, offset, rangeLength) }
         }
         if (context.length < 8 || withinContext !in 0..context.length) return null
@@ -26,7 +30,8 @@ data class RevisionAnchor(
     companion object {
         fun capture(book: Book, chapter: Int, start: Int, end: Int = start): RevisionAnchor {
             val source = book.chapters[chapter]
-            return fromText(source.id, source.title, book.activeRevision, source.text, start, end)
+            if(book.remoteBookId!=null && source.body.isBlank())return RevisionAnchor(source.id,source.title,book.activeRevision,start.coerceAtLeast(0),"",0)
+            return fromText(source.id, source.title, if (book.remoteBookId != null && source.body.isNotBlank()) "chapter:" + syncSha256(source.body) else book.activeRevision, source.text, start, end)
         }
 
         internal fun fromText(chapterId: String, title: String, revision: String?, text: String,

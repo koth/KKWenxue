@@ -3,6 +3,7 @@
 //! 用法：
 //!   shanye-catalog bootstrap  [--pages N] [--no-details]   全量首爬
 //!   shanye-catalog incremental [--pages N] [--quiet K]     增量同步
+//!   shanye-catalog backfill-manifests [--limit N]          旧库章节目录回填
 //!   shanye-catalog serve                                   只读 API
 //!   shanye-catalog stats                                   打印库统计
 
@@ -254,8 +255,63 @@ async fn fetch_details(
                 let url = format!("{BASE}/{id}/");
                 match fetcher.get(&url).await {
                     Ok((200, body)) => match parsers::parse_detail(&body, id) {
-                        Some(d) if db::upsert_detail(&conn, &d).is_ok() => ok += 1,
-                        _ => {
+                        Some(mut d) => {
+                            let mut next_page = parsers::next_directory_page(&body);
+                            let mut seen = d
+                                .chapters
+                                .iter()
+                                .map(|chapter| chapter.source_id)
+                                .collect::<std::collections::HashSet<_>>();
+                            let mut pages = 0usize;
+                            let mut complete = true;
+                            let mut visited = std::collections::HashSet::new();
+                            while let Some(page) = next_page {
+                                if page <= 1 || page > 100 || !visited.insert(page) {
+                                    complete = false;
+                                    break;
+                                }
+                                let page_url = format!("{BASE}/{id}/p-{page}.html");
+                                match fetcher.get(&page_url).await {
+                                    Ok((200, page_body)) => {
+                                        if let Some(page_detail) =
+                                            parsers::parse_detail(&page_body, id)
+                                        {
+                                            for chapter in page_detail.chapters {
+                                                if seen.insert(chapter.source_id) {
+                                                    d.chapters.push(chapter);
+                                                }
+                                            }
+                                            next_page = parsers::next_directory_page(&page_body);
+                                            pages += 1;
+                                        } else {
+                                            complete = false;
+                                            break;
+                                        }
+                                    }
+                                    Ok((code, _)) => {
+                                        eprintln!("  目录 {id}/p-{page} HTTP {code}");
+                                        complete = false;
+                                        break;
+                                    }
+                                    Err(error) => {
+                                        eprintln!("  目录 {id}/p-{page} 失败：{error}");
+                                        complete = false;
+                                        break;
+                                    }
+                                }
+                                if pages >= 100 && next_page.is_some() {
+                                    complete = false;
+                                    break;
+                                }
+                            }
+                            if complete && db::upsert_detail(&conn, &d).is_ok() {
+                                ok += 1;
+                            } else {
+                                failed += 1;
+                                let _ = db::record_detail_failure(&conn, id);
+                            }
+                        }
+                        None => {
                             failed += 1;
                             let _ = db::record_detail_failure(&conn, id);
                         }
@@ -405,6 +461,30 @@ async fn cmd_incremental(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+async fn cmd_backfill_manifests(args: &[String]) -> Result<(), String> {
+    let db_path = std::env::var("SHANYE_CATALOG_DB").unwrap_or_else(|_| "./catalog.sqlite".into());
+    let rate: f64 = std::env::var("SHANYE_CATALOG_RATE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2.0);
+    let limit: usize = arg_value(args, "--limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000)
+        .clamp(1, 100_000);
+    let conn = db::open(&db_path).map_err(|e| e.to_string())?;
+    let ids = db::pending_chapter_ids(&conn, limit).map_err(|e| e.to_string())?;
+    if ids.is_empty() {
+        eprintln!("章节目录已全部回填");
+        return Ok(());
+    }
+    eprintln!("待回填章节目录 {} 本（{} 并发）", ids.len(), workers_env());
+    drop(conn);
+    let fetcher = Arc::new(Fetcher::new(rate));
+    let (ok, failed) = fetch_details(&db_path, fetcher, ids, workers_env()).await?;
+    eprintln!("章节目录回填完成：成功 {ok} 本，失败 {failed} 本");
+    Ok(())
+}
+
 async fn cmd_serve() -> Result<(), String> {
     let db_path = std::env::var("SHANYE_CATALOG_DB").unwrap_or_else(|_| "./catalog.sqlite".into());
     let bind = std::env::var("SHANYE_CATALOG_BIND").unwrap_or_else(|_| "127.0.0.1:17872".into());
@@ -422,7 +502,12 @@ async fn cmd_serve() -> Result<(), String> {
         relay_url: relay_url.trim_end_matches('/').to_owned(),
         relay_token,
         relay_client,
+        source_url: std::env::var("SHANYE_CATALOG_SOURCE")
+            .unwrap_or_else(|_| "https://www.suduguu.com".into()),
+        chapter_cache: Arc::new(Mutex::new(api::ChapterCache::default())),
+        chapter_fetches: Arc::new(Mutex::new(std::collections::HashMap::new())),
     };
+    tokio::spawn(api::run_prefetch(state.clone()));
     let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
@@ -446,11 +531,12 @@ async fn main() {
     let result = match cmd {
         "bootstrap" => cmd_bootstrap(&args).await,
         "incremental" => cmd_incremental(&args).await,
+        "backfill-manifests" => cmd_backfill_manifests(&args).await,
         "preheat" => cmd_preheat(&args).await,
         "serve" => cmd_serve().await,
         "stats" => cmd_stats(),
         _ => {
-            eprintln!("用法: shanye-catalog <bootstrap|incremental|preheat|serve|stats> [选项]");
+            eprintln!("用法: shanye-catalog <bootstrap|incremental|backfill-manifests|preheat|serve|stats> [选项]");
             eprintln!("环境变量: SHANYE_CATALOG_DB, SHANYE_CATALOG_BIND, SHANYE_CATALOG_RATE, SHANYE_RELAY_URL, SHANYE_RELAY_TOKEN");
             std::process::exit(2);
         }

@@ -1,8 +1,4 @@
-"""Read-only local novel catalogue used by the Web workbench.
-
-The browser never receives a server catalogue. Selected chapter payloads are
-copied to the synthesis request only when the user submits a job.
-"""
+"""Local reader catalogue with a separate, explicitly downloaded test library."""
 
 from __future__ import annotations
 
@@ -22,9 +18,55 @@ from tts.common import (
 
 
 class LocalLibrary:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, downloads: Path | None = None):
         self.path = path.expanduser().resolve()
+        self.downloads = (downloads or path).expanduser().resolve()
         self._revision_chapters = {}
+
+    @staticmethod
+    def initialize_downloads(path):
+        path = Path(path).expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(path, timeout=10) as db:
+            books={r[1] for r in db.execute("PRAGMA table_info(books)")}
+            chapters={r[1] for r in db.execute("PRAGMA table_info(chapters)")}
+            if (books and books!={"id","title"}) or (chapters and chapters!={"id","book_id","chapter_index","title","body","chapter_number"}):
+                raise ValueError("下载书库需要使用独立 SQLite 文件，不能覆盖阅读器数据库")
+            db.execute("PRAGMA journal_mode=WAL")
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS books(id TEXT PRIMARY KEY,title TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS chapters(id TEXT PRIMARY KEY,book_id TEXT NOT NULL,
+                    chapter_index INTEGER NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,chapter_number INTEGER NOT NULL);
+                CREATE INDEX IF NOT EXISTS chapters_book ON chapters(book_id,chapter_index);
+            """)
+        return path
+
+    def import_chapters(self, book, chapters):
+        """Verify the entire selection before committing; never edit the reader DB."""
+        if not chapters or len(chapters) > 2000:
+            raise ValueError("每次可拉取 1–2000 个章节，请填写测试范围")
+        prepared = []
+        seen = set()
+        for row in chapters:
+            text = row["canonical_text"]
+            if (row["book_id"] != book["id"] or row["id"] in seen or
+                not isinstance(text,str) or not text.strip() or len(text)>1_000_000 or
+                canonical_text(text) != text or digest(text) != row["source_sha256"] or
+                self._revision(row,text) != row["current_revision"]):
+                raise ValueError("服务器章节身份、原文或版本校验失败，本地书库未改动")
+            seen.add(row["id"])
+            prepared.append((row["id"],book["id"],row["chapter_index"],row["title"],text,row["chapter_number"]))
+        self.initialize_downloads(self.downloads)
+        with sqlite3.connect(self.downloads,timeout=10) as db:
+            db.execute("BEGIN IMMEDIATE")
+            for row in prepared:
+                owner=db.execute("SELECT book_id FROM chapters WHERE id=?",(row[0],)).fetchone()
+                if owner and owner[0]!=book["id"]:
+                    raise ValueError("章节 ID 与本地其他书籍冲突，本地书库未改动")
+            db.execute("INSERT INTO books VALUES(?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title",(book["id"],book["title"]))
+            db.executemany("""INSERT INTO chapters VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                chapter_index=excluded.chapter_index,title=excluded.title,body=excluded.body,chapter_number=excluded.chapter_number""",prepared)
+        return {"book_id":book["id"],"title":book["title"],"imported":len(prepared)}
 
     @staticmethod
     def _revision(row, text):
@@ -35,7 +77,19 @@ class LocalLibrary:
     def _db(self):
         if not self.path.is_file():
             raise FileNotFoundError(f"本地书库不存在: {self.path}")
-        db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True)
+        if self.path == self.downloads or not self.downloads.is_file():
+            db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True)
+        else:
+            db=sqlite3.connect(":memory:",uri=True)
+            db.execute("ATTACH DATABASE ? AS reader",(self.path.as_uri()+"?mode=ro",))
+            db.execute("ATTACH DATABASE ? AS downloaded",(self.downloads.as_uri()+"?mode=ro",))
+            db.executescript("""
+                CREATE TEMP VIEW books AS SELECT id,title FROM downloaded.books UNION ALL
+                    SELECT id,title FROM reader.books b WHERE NOT EXISTS(SELECT 1 FROM downloaded.books d WHERE d.id=b.id);
+                CREATE TEMP VIEW chapters AS SELECT id,book_id,chapter_index,title,body,chapter_number FROM downloaded.chapters UNION ALL
+                    SELECT id,book_id,chapter_index,title,body,NULL AS chapter_number FROM reader.chapters c
+                    WHERE NOT EXISTS(SELECT 1 FROM downloaded.chapters d WHERE d.id=c.id);
+            """)
         db.row_factory = sqlite3.Row
         return db
 
@@ -80,7 +134,7 @@ class LocalLibrary:
             "book_id": row["book_id"],
             "book_title": book_title,
             "chapter_index": row["chapter_index"],
-            "chapter_number": chapter_number(row["title"], row["chapter_index"]),
+            "chapter_number": row["chapter_number"] if "chapter_number" in row.keys() and row["chapter_number"] is not None else chapter_number(row["title"], row["chapter_index"]),
             "title": row["title"],
             "current_revision": revision,
             "canonical_text": text,
@@ -132,10 +186,13 @@ class LocalLibrary:
                         "artifacts": [],
                     }
                 )
+            number_column = "chapter_number" if any(
+                field[1] == "chapter_number" for field in db.execute("PRAGMA table_info(chapters)")
+            ) else "NULL AS chapter_number"
             headings = [
-                dict(r) | {"number": chapter_number(r["title"], r["chapter_index"])}
+                dict(r) | {"number": r["chapter_number"] if "chapter_number" in r.keys() and r["chapter_number"] is not None else chapter_number(r["title"], r["chapter_index"])}
                 for r in db.execute(
-                    "SELECT id,title,chapter_index FROM chapters WHERE book_id=?",
+                    f"SELECT id,title,chapter_index,{number_column} FROM chapters WHERE book_id=?",
                     (book_id,),
                 )
             ]
@@ -156,7 +213,7 @@ class LocalLibrary:
             book = self._book(db, book_id)
             rows = [
                 dict(row)
-                | {"chapter_number": chapter_number(row["title"], row["chapter_index"])}
+                | {"chapter_number": row["chapter_number"] if "chapter_number" in row.keys() and row["chapter_number"] is not None else chapter_number(row["title"], row["chapter_index"])}
                 for row in db.execute(
                     "SELECT * FROM chapters WHERE book_id=? ORDER BY chapter_index,id",
                     (book_id,),
