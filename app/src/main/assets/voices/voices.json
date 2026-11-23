@@ -1,0 +1,9 @@
+{
+  "voices": [
+    {
+      "speaker": "clone:upload-53677481cc5fa643ef6413ff",
+      "name": "说书人一",
+      "codes_path": "voices/shuoshuren1.codes.npy"
+    }
+  ]
+}

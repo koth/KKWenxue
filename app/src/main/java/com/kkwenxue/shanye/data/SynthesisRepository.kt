@@ -187,6 +187,16 @@ class SynthesisRepository(context: Context) {
         remember(client.connection.endpoint, task)
         return task
     }
+    fun control(connection: RelayConnection, id: String, operation: String): RelayTask {
+        val client = SynthesisRelay(connection)
+        val task = client.action(id.trim(), operation)
+        remember(client.connection.endpoint, task)
+        changed()
+        return task
+    }
+    fun pauseTask(connection: RelayConnection, id: String) = control(connection, id, "pause")
+    fun resumeTask(connection: RelayConnection, id: String) = control(connection, id, "resume")
+    fun cancelTask(connection: RelayConnection, id: String) = control(connection, id, "cancel")
     fun importTask(
         connection: RelayConnection, id: String, library: AudioLibrary, books: List<Book>,
         waitForTransfer: Boolean = true,

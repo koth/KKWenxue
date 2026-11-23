@@ -48,6 +48,10 @@ class LocalJobFailed(RelayError):
         self.retryable = retryable
 
 
+class TaskControlHandled(RelayError):
+    """The relay task was paused/cancelled deliberately, not failed."""
+
+
 class RelayConfig:
     def __init__(self):
         self.url = os.environ.get("SHANYE_RELAY_URL", "").rstrip("/")
@@ -128,6 +132,13 @@ class RelayClient:
             },
         )[1]
 
+    def control_ack(self, task_id, lease_token, action):
+        return self._request(
+            "POST",
+            f"/v1/tasks/{task_id}/control/ack",
+            {"worker_id": self.config.worker_id, "lease_token": lease_token, "action": action},
+        )[1]
+
     def complete(self, task_id, lease_token, result):
         return self._request("POST", f"/v1/tasks/{task_id}/complete", {
             "worker_id": self.config.worker_id, "lease_token": lease_token, **result,
@@ -194,6 +205,8 @@ class LeaseKeeper:
         self.stopped = threading.Event()
         self.lost = None
         self.confirmed = time.monotonic()
+        self._control = None
+        self._control_lock = threading.Lock()
 
     def __enter__(self):
         self.heartbeat()
@@ -223,7 +236,19 @@ class LeaseKeeper:
             raise RelayError("relay 租约续约超时", 409)
 
     def heartbeat(self):
-        return self.relay.heartbeat(self.task["id"], self.task["lease_token"], self.progress, transfer=self.transfer)
+        response = self.relay.heartbeat(
+            self.task["id"], self.task["lease_token"], self.progress, transfer=self.transfer
+        )
+        if not self.transfer:
+            requested = response.get("control")
+            if requested in {"pause", "cancel"}:
+                with self._control_lock:
+                    self._control = requested
+        return response
+
+    def control_requested(self):
+        with self._control_lock:
+            return self._control
 
     def __exit__(self, *_):
         self.stopped.set()
@@ -245,6 +270,13 @@ class RemoteWorker:
         with closing(connect(self.settings)) as db:
             row = db.execute("SELECT id FROM jobs WHERE idempotency_key=?", (key,)).fetchone()
             return row[0] if row else None
+
+    def resume_local_if_paused(self, local_id):
+        current = self.local_detail(local_id)
+        if current["state"] != "paused":
+            return
+        with closing(connect(self.settings)) as db:
+            action(db, self.settings, local_id, "resume")
 
     def submit_local(self, task):
         payload = task.get("payload") or {}
@@ -284,6 +316,10 @@ class RemoteWorker:
             else:
                 with closing(connect(self.settings)) as db:
                     local_id = submit(db, self.settings, request, key, "synthesis")
+        # A relay pause only releases the relay lease; the local queue keeps the
+        # exact completed segment state. Resume that same local job instead of
+        # submitting a fresh full synthesis.
+        self.resume_local_if_paused(local_id)
         # Relay redelivery must resume a fresh failed-only local retry rather than replaying
         # the same terminal job. Keys are stable across worker restarts and lease loss.
         for attempt in range(2, min(20, int(task.get("attempts", 1))) + 1):
@@ -298,6 +334,40 @@ class RemoteWorker:
             with closing(connect(self.settings)) as db:
                 local_id = action(db, self.settings, local_id, "retry-failed", retry_key)
         return local_id
+
+    def honor_control(self, lease, local_id):
+        if not isinstance(lease, LeaseKeeper):
+            return
+        requested = lease.control_requested()
+        if requested not in {"pause", "cancel"}:
+            return
+        applied = None
+        deadline = time.monotonic() + max(30, self.relay.config.lease_seconds)
+        while True:
+            lease.check()
+            latest = lease.control_requested()
+            if latest in {"pause", "cancel"} and latest != requested:
+                requested = latest
+                applied = None
+            target = "paused" if requested == "pause" else "cancelled"
+            current = self.local_detail(local_id)
+            if applied != requested and current["state"] not in TERMINAL and current["state"] != target:
+                with closing(connect(self.settings)) as db:
+                    action(db, self.settings, local_id, requested)
+                applied = requested
+            if current["state"] == target or current["state"] in TERMINAL:
+                try:
+                    self.relay.control_ack(lease.task["id"], lease.task["lease_token"], requested)
+                except RelayError:
+                    # The user may have replaced pause with cancel while the
+                    # local worker was releasing its lease; re-read control.
+                    if lease.control_requested() != requested:
+                        continue
+                    raise
+                raise TaskControlHandled(f"relay task {requested}")
+            if time.monotonic() >= deadline:
+                raise RelayError(f"本地任务未能及时{requested}")
+            time.sleep(0.2)
 
     @staticmethod
     def retryable_synthesis(job):
@@ -336,6 +406,7 @@ class RemoteWorker:
     def wait_for_local(self, lease, local_id, phase):
         while not self.stopping:
             lease.check()
+            self.honor_control(lease, local_id)
             current = self.local_detail(local_id)
             lease.progress = {"phase": phase, "local_job_id": local_id, "state": current["state"],
                               "counts": current.get("counts", {}), "retrying": bool(current.get("parent_job_id"))}
@@ -411,6 +482,9 @@ class RemoteWorker:
             return False
         try:
             self.handle(task)
+        except TaskControlHandled:
+            log.info("relay task %s control applied", task.get("id"))
+            return True
         except Exception as exc:
             log.exception("relay task %s failed", task.get("id"))
             try:

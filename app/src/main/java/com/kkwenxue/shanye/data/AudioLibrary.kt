@@ -154,6 +154,41 @@ class AudioLibrary(private val context: Context) : SQLiteOpenHelper(context, "sh
         edit.apply()
     }
 
+    /**
+     * Persist a live local-TTS checkpoint before its complete audio artifact is
+     * published. This keeps reader progress working when the screen is closed
+     * or the app is backgrounded during synthesis.
+     */
+    internal fun saveLocalPlaybackPosition(book: Book, chapterIndex: Int, textOffset: Int) {
+        val chapter = book.chapters.getOrNull(chapterIndex) ?: return
+        val offset = textOffset.coerceIn(0, chapter.text.length)
+        val anchor = RevisionAnchor.capture(book, chapterIndex, offset)
+        val liveArtifact = "local-live:${book.id}:${chapter.id}"
+        prefs.edit()
+            .putString(LAST_LISTENED_BOOK, book.id)
+            .putString("$LISTENING_PREFIX${book.id}",
+                JSONObject().put("artifact", liveArtifact).put("chapter", chapter.id)
+                    .put("offset", offset).put("revision", chapter.audioSourceRevision)
+                    .put("anchor", anchor.json())
+                    .put("updatedAt", System.currentTimeMillis()).toString())
+            .apply()
+    }
+
+    /**
+     * Return the last safe sentence boundary for the local streaming synthesizer.
+     *
+     * A live local-TTS checkpoint is deliberately different from a completed
+     * audio-artifact checkpoint. Completed artifacts must keep their normal
+     * playback position, while an interrupted live stream needs to restart the
+     * current sentence and continue generating the remainder of the chapter.
+     */
+    internal fun localTtsResumeOffset(bookId: String, chapterId: String): Int? =
+        latestPlaybackCheckpoint(bookId)
+            ?.takeIf { it.artifactId == "local-live:$bookId:$chapterId" }
+            ?.anchor
+            ?.textOffset
+            ?.coerceAtLeast(0)
+
     internal fun latestPlaybackCheckpoint(bookId: String? = null): ListeningCheckpoint? =
         (bookId ?: lastListenedBook(prefs))?.let { listeningCheckpoint(prefs, it) }
 

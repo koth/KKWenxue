@@ -360,20 +360,56 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                 else -> "合成已完成 · 文件保留在合成服务器，尚未上传中转"
                             }, Modifier.padding(top=8.dp), fontSize=11.sp, color=Muted)
                             Text("${task.id.take(8)} · ${if (task.createdAt>0) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(task.createdAt*1000)) else "服务器任务"}", Modifier.padding(top=7.dp), fontSize=10.sp, color=Muted)
-                            if (task.state == "running") {
+                            if (task.state in setOf("running", "pausing", "paused", "cancelling")) {
                                 val counts=task.progress.optJSONObject("counts")
                                 val total=counts?.optInt("total") ?: 0
                                 val completed=(counts?.optInt("completed") ?: 0) + (counts?.optInt("skipped") ?: 0)
-                                Text(when(task.progress.optString("phase")) {
-                                    "bundle" -> "正在打包听书包"
-                                    "upload" -> "正在上传结果"
-                                    "synthesis" -> (if (task.progress.optBoolean("retrying")) "重试失败片段" else "合成进度") +
-                                        (if (total>0) " $completed / $total 段" else " · 等待合成")
+                                Text((when {
+                                    task.state == "paused" -> "已暂停"
+                                    task.state == "pausing" -> "正在暂停"
+                                    task.state == "cancelling" -> "正在取消"
+                                    task.progress.optString("phase") == "bundle" -> "正在打包听书包"
+                                    task.progress.optString("phase") == "upload" -> "正在上传结果"
+                                    task.progress.optString("phase") == "synthesis" ->
+                                        if (task.progress.optBoolean("retrying")) "重试失败片段" else "合成进度"
                                     else -> "等待 worker 处理"
-                                }, Modifier.padding(top=12.dp), fontSize=12.sp, color=Muted)
+                                }) + if (total>0) " · $completed / $total 段" else "", Modifier.padding(top=12.dp), fontSize=12.sp, color=Muted)
                                 if (total>0) LinearProgressIndicator(progress={completed.toFloat()/total}, modifier=Modifier.fillMaxWidth().padding(top=10.dp).height(3.dp), color=Accent, trackColor=Rule)
                             }
                             (delivery?.error ?: saved.error ?: task.error)?.let { Text(it, Modifier.padding(top=9.dp), color=Accent, fontSize=11.sp, maxLines=3) }
+                            if (task.state in setOf("queued", "running", "paused", "pausing", "cancelling")) {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(top=8.dp),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    when (task.state) {
+                                        "queued", "running" -> {
+                                            TextButton(enabled=!busy, onClick={connection?.let {config -> runAction {
+                                                withContext(Dispatchers.IO) { repository.pauseTask(config, task.id) }
+                                                loadSaved(config)
+                                                notify("已暂停，已合成的片段会保留；点击“继续合成”可从断点接着处理")
+                                            }}}) { Text("暂停", color=Accent) }
+                                        }
+                                        "paused" -> {
+                                            TextButton(enabled=!busy, onClick={connection?.let {config -> runAction {
+                                                withContext(Dispatchers.IO) { repository.resumeTask(config, task.id) }
+                                                loadSaved(config)
+                                                notify("已继续合成，已完成的片段不会重复生成")
+                                            }}}) { Text("继续合成", color=Accent) }
+                                        }
+                                        "pausing" -> Text("正在暂停…", Modifier.padding(horizontal=12.dp), fontSize=12.sp, color=Muted)
+                                        "cancelling" -> Text("正在取消…", Modifier.padding(horizontal=12.dp), fontSize=12.sp, color=Muted)
+                                    }
+                                    if (task.state != "pausing" && task.state != "cancelling") {
+                                        TextButton(enabled=!busy, onClick={connection?.let {config -> runAction {
+                                            withContext(Dispatchers.IO) { repository.cancelTask(config, task.id) }
+                                            loadSaved(config)
+                                            notify("已取消合成任务")
+                                        }}}) { Text("取消", color=Muted) }
+                                    }
+                                }
+                            }
                             if (task.state == "failed") {
                                 TextButton(enabled=!busy,onClick={connection?.let {config -> runAction {
                                     val key=withContext(Dispatchers.IO) {
@@ -422,7 +458,8 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
 
 private val ColorGreen = androidx.compose.ui.graphics.Color(0xFF647C58)
 private fun taskState(state: String) = when(state) {
-    "queued" -> "排队中"; "running" -> "处理中"; "completed" -> "已完成"; "failed" -> "失败"; else -> state
+    "queued" -> "排队中"; "running" -> "处理中"; "pausing" -> "暂停中"; "paused" -> "已暂停"
+    "cancelling" -> "取消中"; "cancelled" -> "已取消"; "completed" -> "已完成"; "failed" -> "失败"; else -> state
 }
 
 @Composable

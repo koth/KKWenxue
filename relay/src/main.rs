@@ -90,6 +90,16 @@ struct FailRequest {
     error: String,
     retryable: Option<bool>,
 }
+#[derive(Debug, Deserialize)]
+struct ActionRequest {
+    action: String,
+}
+#[derive(Debug, Deserialize)]
+struct ActionAckRequest {
+    worker_id: String,
+    lease_token: String,
+    action: String,
+}
 #[derive(Debug, Serialize)]
 struct TaskResponse {
     id: String,
@@ -107,6 +117,8 @@ struct TaskResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     lease_token: Option<String>,
     progress: Value,
+    /// A client-requested operation for the worker's local task.
+    control: String,
     result: Option<ResultInfo>,
     error: Option<String>,
 }
@@ -181,7 +193,8 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             dedupe_key TEXT UNIQUE, priority INTEGER NOT NULL DEFAULT 0,
             max_attempts INTEGER NOT NULL DEFAULT 3, attempts INTEGER NOT NULL DEFAULT 0,
             state TEXT NOT NULL, worker_id TEXT, lease_until INTEGER, lease_token TEXT,
-            progress_json TEXT NOT NULL DEFAULT '{}', result_filename TEXT, result_path TEXT,
+            progress_json TEXT NOT NULL DEFAULT '{}', desired TEXT NOT NULL DEFAULT 'run',
+            result_filename TEXT, result_path TEXT,
             result_sha256 TEXT, result_bytes INTEGER, result_content_type TEXT,
             result_expires_at INTEGER, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
         );
@@ -197,6 +210,18 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     if !has_metadata {
         conn.execute(
             "ALTER TABLE tasks ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
+            [],
+        )?;
+    }
+    let has_desired = conn
+        .prepare("PRAGMA table_info(tasks)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|c| c == "desired");
+    if !has_desired {
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN desired TEXT NOT NULL DEFAULT 'run'",
             [],
         )?;
     }
@@ -251,6 +276,7 @@ fn decode_task(r: &rusqlite::Row<'_>, include_payload: bool) -> rusqlite::Result
         lease_token: None,
         progress: serde_json::from_str(&r.get::<_, String>("progress_json")?)
             .unwrap_or(Value::Null),
+        control: r.get("desired")?,
         result,
         error: r.get("error")?,
     })
@@ -288,7 +314,7 @@ async fn list_tasks(
     let db = state.db.lock().unwrap();
     // Deliberately omit payload_json: chapter text and other large inputs belong in task detail only.
     let mut stmt = db.prepare("SELECT rowid,id,kind,metadata_json,created_at,updated_at,state,attempts,max_attempts,
-        worker_id,lease_until,progress_json,result_filename,result_content_type,result_sha256,result_bytes,
+        worker_id,lease_until,progress_json,desired,result_filename,result_content_type,result_sha256,result_bytes,
         result_expires_at,result_path,result_direct_json,transfer_state,transfer_attempts,transfer_error,error FROM tasks WHERE (? IS NULL OR kind=?) AND (? IS NULL OR state=?)
         AND (? IS NULL OR rowid<?) ORDER BY rowid DESC LIMIT ?").map_err(db_error)?;
     let rows = stmt
@@ -435,9 +461,17 @@ fn try_claim(
     let tx = db.unchecked_transaction().map_err(db_error)?;
     let current = now();
     tx.execute(
-        "UPDATE tasks SET state=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'queued' END,
-         worker_id=NULL,lease_until=NULL,lease_token=NULL,error='worker lease expired',updated_at=?
-         WHERE state='running' AND lease_until<=?",
+        "UPDATE tasks SET
+         state=CASE
+             WHEN desired='pause' THEN 'paused'
+             WHEN desired='cancel' THEN 'cancelled'
+             WHEN attempts>=max_attempts THEN 'failed'
+             ELSE 'queued'
+         END,
+         desired='run',worker_id=NULL,lease_until=NULL,lease_token=NULL,
+         error=CASE WHEN desired IN ('pause','cancel') THEN NULL ELSE 'worker lease expired' END,
+         updated_at=?
+         WHERE state IN ('running','pausing','cancelling') AND lease_until<=?",
         params![current, current],
     )
     .map_err(db_error)?;
@@ -478,7 +512,8 @@ async fn heartbeat(
     let changed = db
         .execute(
             "UPDATE tasks SET lease_until=?,progress_json=coalesce(?,progress_json),updated_at=?
-         WHERE id=? AND state='running' AND worker_id=? AND lease_token=? AND lease_until>?",
+         WHERE id=? AND state IN ('running','pausing','cancelling')
+         AND worker_id=? AND lease_token=? AND lease_until>?",
             params![
                 current + lease_seconds(body.lease_seconds),
                 body.progress.map(|v| v.to_string()),
@@ -503,18 +538,133 @@ async fn fail_task(
 ) -> ApiResult<TaskResponse> {
     auth(&headers, &state)?;
     let db = state.db.lock().unwrap();
-    let changed = db.execute(
-        "UPDATE tasks SET state=CASE WHEN ? AND attempts<max_attempts THEN 'queued' ELSE 'failed' END,
-         worker_id=NULL,lease_until=NULL,lease_token=NULL,error=?,updated_at=?
-         WHERE id=? AND state='running' AND worker_id=? AND lease_token=? AND lease_until>?",
-        params![body.retryable.unwrap_or(true), body.error.chars().take(4000).collect::<String>(), now(),
-                id, body.worker_id, body.lease_token, now()],
-    ).map_err(db_error)?;
+    let changed = db
+        .execute(
+            "UPDATE tasks SET
+         state=CASE
+             WHEN desired='pause' THEN 'paused'
+             WHEN desired='cancel' THEN 'cancelled'
+             WHEN ? AND attempts<max_attempts THEN 'queued'
+             ELSE 'failed'
+         END,
+         desired='run',worker_id=NULL,lease_until=NULL,lease_token=NULL,error=?,updated_at=?
+         WHERE id=? AND state IN ('running','pausing','cancelling')
+         AND worker_id=? AND lease_token=? AND lease_until>?",
+            params![
+                body.retryable.unwrap_or(true),
+                body.error.chars().take(4000).collect::<String>(),
+                now(),
+                id,
+                body.worker_id,
+                body.lease_token,
+                now()
+            ],
+        )
+        .map_err(db_error)?;
     if changed == 0 {
         return Err(ApiError(StatusCode::CONFLICT, "任务租约已失效".into()));
     }
     Ok(Json(summary(row_response(&db, &id)?)))
 }
+
+async fn control_task(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<ActionRequest>,
+) -> ApiResult<TaskResponse> {
+    auth(&headers, &state)?;
+    if !matches!(body.action.as_str(), "pause" | "resume" | "cancel") {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "只支持 pause、resume、cancel".into(),
+        ));
+    }
+    let db = state.db.lock().unwrap();
+    let current: (String, String) = db
+        .query_row("SELECT state,desired FROM tasks WHERE id=?", [&id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()
+        .map_err(db_error)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "任务不存在".into()))?;
+    let (state_name, desired) = current;
+    let (next_state, next_desired, error) = match body.action.as_str() {
+        "pause" => match state_name.as_str() {
+            "queued" => ("paused", "run", None),
+            "running" => ("pausing", "pause", None),
+            "pausing" | "paused" => (state_name.as_str(), desired.as_str(), None),
+            _ => ("", "", Some("任务当前不能暂停")),
+        },
+        "resume" => match state_name.as_str() {
+            "paused" => ("queued", "run", None),
+            "queued" | "running" => (state_name.as_str(), "run", None),
+            _ => ("", "", Some("任务当前不能继续")),
+        },
+        "cancel" => match state_name.as_str() {
+            "queued" | "paused" => ("cancelled", "run", None),
+            "running" | "pausing" => ("cancelling", "cancel", None),
+            "cancelling" | "cancelled" => (state_name.as_str(), desired.as_str(), None),
+            _ => ("", "", Some("任务当前不能取消")),
+        },
+        _ => unreachable!(),
+    };
+    if let Some(message) = error {
+        return Err(ApiError(StatusCode::CONFLICT, message.into()));
+    }
+    db.execute(
+        "UPDATE tasks SET state=?,desired=?,error=CASE WHEN ?='resume' THEN NULL ELSE error END,updated_at=? WHERE id=?",
+        params![next_state, next_desired, body.action, now(), id],
+    )
+    .map_err(db_error)?;
+    Ok(Json(summary(row_response(&db, &id)?)))
+}
+
+/// A worker acknowledges a pause/cancel after applying it to its local queue.
+/// The relay then releases the worker lease so the task can be resumed later.
+async fn acknowledge_control(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<ActionAckRequest>,
+) -> ApiResult<TaskResponse> {
+    auth(&headers, &state)?;
+    if !matches!(body.action.as_str(), "pause" | "cancel") {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "控制确认操作无效".into()));
+    }
+    let db = state.db.lock().unwrap();
+    let requested_state = if body.action == "pause" {
+        "pausing"
+    } else {
+        "cancelling"
+    };
+    let final_state = if body.action == "pause" {
+        "paused"
+    } else {
+        "cancelled"
+    };
+    let changed = db
+        .execute(
+            "UPDATE tasks SET state=?,desired='run',worker_id=NULL,lease_until=NULL,lease_token=NULL,
+             updated_at=? WHERE id=? AND state=? AND desired=? AND worker_id=? AND lease_token=? AND lease_until>?",
+            params![
+                final_state,
+                now(),
+                id,
+                requested_state,
+                body.action,
+                body.worker_id,
+                body.lease_token,
+                now()
+            ],
+        )
+        .map_err(db_error)?;
+    if changed == 0 {
+        return Err(ApiError(StatusCode::CONFLICT, "控制请求已失效".into()));
+    }
+    Ok(Json(summary(row_response(&db, &id)?)))
+}
+
 fn require_owner(
     db: &Connection,
     id: &str,
@@ -874,6 +1024,8 @@ fn router(state: AppState) -> Router {
         .route("/v1/tasks/{id}/status", get(get_task_status))
         .route("/v1/tasks/{id}/heartbeat", post(heartbeat))
         .route("/v1/tasks/{id}/fail", post(fail_task))
+        .route("/v1/tasks/{id}/actions", post(control_task))
+        .route("/v1/tasks/{id}/control/ack", post(acknowledge_control))
         .route("/v1/tasks/{id}/complete", post(complete_task))
         .route("/v1/tasks/{id}/result/request", post(request_transfer))
         .route("/v1/transfers/claim", post(claim_transfer))

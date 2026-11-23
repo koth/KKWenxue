@@ -49,7 +49,7 @@ class LocalTtsModelPack(context: Context) {
 
     /** Prepare from the public model source. A configured server remains a development fallback. */
     fun prepare(connection: RelayConnection? = null): LocalTtsManifest = try {
-        current() ?: prepareFromHuggingFaceMirror()
+        current()?.let { ensureEmbeddedVoices(it) } ?: prepareFromHuggingFaceMirror()
     } catch (error: Exception) {
         if (connection != null) prepareDownloaded(connection) else {
             state.value = LocalTtsPackState.Failed(error.message ?: "本地模型下载失败")
@@ -79,7 +79,7 @@ class LocalTtsModelPack(context: Context) {
         }
         val files = manifest.files.toMutableList()
         val voices = readEmbeddedVoices().toMutableList()
-        for (asset in context.assets.list("voices").orEmpty().filter { it.endsWith(".codes.npy") }) {
+        for (asset in embeddedVoiceAssets()) {
             val existing = voices.firstOrNull { it.codes.substringAfterLast('/') == asset }
             val voice = existing ?: inferredVoice(asset)
             val target = File(destination, "voices/$asset").apply { parentFile?.mkdirs() }
@@ -88,7 +88,9 @@ class LocalTtsModelPack(context: Context) {
             if (existing == null) voices += publishedVoice else voices[voices.indexOf(existing)] = publishedVoice
             files += LocalTtsFile("voice:${publishedVoice.id}", publishedVoice.codes, target.length(), publishedVoice.sha256)
         }
-        require(voices.isNotEmpty()) { "没有可用的预编码声线" }
+        require(voices.isNotEmpty()) {
+            "没有可用的预编码声线（APK voices 资源：${context.assets.list("voices").orEmpty().joinToString()}）"
+        }
         state.value = LocalTtsPackState.Verifying(manifest.revision)
         for (entry in files) {
             val target = File(destination, entry.path)
@@ -99,10 +101,86 @@ class LocalTtsModelPack(context: Context) {
         return publish(manifest.copy(files = files, voices = voices))
     }
 
-    private fun copyAsset(assetPath: String, destination: File) {
-        if (destination.isFile) return
+    /**
+     * Repairs an already-installed model pack after an APK update. Older local
+     * packs may have been published without embedded voices; do not redownload
+     * the 1.1GB model just to add the small default voice code file.
+     */
+    private fun ensureEmbeddedVoices(manifest: LocalTtsManifest): LocalTtsManifest {
+        val assets = embeddedVoiceAssets()
+        if (assets.isEmpty()) return manifest
+
+        val destination = rootFor(manifest)
+        val voices = manifest.voices.toMutableList()
+        val files = manifest.files.toMutableList()
+        var changed = false
+        for (asset in assets) {
+            val assetPath = "voices/$asset"
+            val assetBytes = context.assets.open(assetPath).use { it.readBytes() }
+            val assetSha = sha256(assetBytes)
+            val target = File(destination, assetPath).apply { parentFile?.mkdirs() }
+            if (!target.isFile || target.length() != assetBytes.size.toLong() || sha256(target) != assetSha) {
+                copyAsset(assetPath, target, overwrite = true)
+            }
+
+            val existingVoice = voices.firstOrNull { it.codes.substringAfterLast('/') == asset }
+            val voice = (existingVoice ?: inferredVoice(asset)).copy(
+                codes = assetPath,
+                sha256 = assetSha
+            )
+            if (existingVoice == null) {
+                voices += voice
+                changed = true
+            } else {
+                val index = voices.indexOf(existingVoice)
+                if (existingVoice != voice) {
+                    voices[index] = voice
+                    changed = true
+                }
+            }
+
+            val file = LocalTtsFile("voice:${voice.id}", assetPath, target.length(), assetSha)
+            files.removeAll { it.path == assetPath }
+            files += file
+            if (manifest.files.none { it.path == assetPath && it.bytes == file.bytes && it.sha256 == file.sha256 }) {
+                changed = true
+            }
+        }
+        if (!changed) return manifest
+
+        state.value = LocalTtsPackState.Verifying(manifest.revision)
+        for (entry in files) {
+            val target = File(destination, entry.path)
+            require(target.isFile && target.length() == entry.bytes && sha256(target) == entry.sha256) {
+                "本地模型文件校验失败：${entry.name}"
+            }
+        }
+        return publish(manifest.copy(files = files, voices = voices))
+    }
+
+    /**
+     * Keep the default voice explicit as well as discovering packaged voices.
+     * Some Android/Gradle asset mergers do not reliably expose a generated
+     * directory through list(), although the file itself is readable.
+     */
+    private fun embeddedVoiceAssets(): List<String> {
+        val candidates = (context.assets.list("voices").orEmpty().toList() + DEFAULT_VOICE_ASSET).distinct()
+        return candidates.filter { asset ->
+            asset.endsWith(".codes.npy") && runCatching {
+                context.assets.open("voices/$asset").use { }
+                true
+            }.getOrDefault(false)
+        }
+    }
+
+    private fun copyAsset(assetPath: String, destination: File, overwrite: Boolean = false) {
+        if (!overwrite && destination.isFile) return
         val temporary = File(destination.parentFile, ".${destination.name}.part")
         context.assets.open(assetPath).use { input -> temporary.outputStream().use { input.copyTo(it) } }
+        if (destination.exists() && !destination.delete()) {
+            temporary.delete()
+            error("无法替换预编码声线：$assetPath")
+        }
         require(temporary.renameTo(destination)) { "保存预编码声线失败：$assetPath" }
     }
 
@@ -327,6 +405,7 @@ class LocalTtsModelPack(context: Context) {
     }
 
     companion object {
+        private const val DEFAULT_VOICE_ASSET = "shuoshuren1.codes.npy"
         private const val REMOTE_BASE = "https://hf-mirror.com/Zyphra/ZONOS3-Mini/resolve/main/gguf/"
     }
 }

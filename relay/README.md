@@ -22,6 +22,8 @@
 | POST | `/v1/tasks/claim` | worker 原子领取任务 |
 | GET | `/v1/tasks/{id}` | 查询状态、进度和结果元数据 |
 | GET | `/v1/tasks/{id}/status` | 轻量状态，不含 payload、直连凭据 |
+| POST | `/v1/tasks/{id}/actions` | 暂停、继续或取消任务 |
+| POST | `/v1/tasks/{id}/control/ack` | worker 应用暂停/取消后确认 |
 | POST | `/v1/tasks/{id}/heartbeat` | 续租和更新任意 JSON 进度 |
 | POST | `/v1/tasks/{id}/fail` | 报告失败，按预算重新排队 |
 | POST | `/v1/tasks/{id}/complete` | 只发布完成通知和直连结果元数据，不上传文件 |
@@ -49,6 +51,15 @@
 `priority` 大的先领取，同优先级按提交顺序。`dedupe_key` 可省略；相同键和内容返回原任务，内容、metadata 或调度参数不同返回 409。`max_attempts` 为 1–20，默认 3。
 
 `metadata` 为可选的通用展示信息，最大 8KiB；中转服务只保存和透传，不解释业务字段。任务列表省略 payload 和租约凭据，返回 metadata、状态、进度、结果元数据和创建/更新时间。支持 `kind`、`state`、`limit`（1–100，默认 30）、`before` 游标，响应为 `{"items":[…],"next_cursor":123}`；没有更多任务时游标为 null。GET 单任务或领取时仍包含完整 payload。旧数据库启动时自动补上 metadata 字段。
+
+合成任务支持断点控制：
+
+```json
+POST /v1/tasks/{id}/actions
+{"action":"pause"}
+```
+
+`pause` 会保留已完成的片段，worker 将本地任务置为暂停并确认；`resume` 会重新排队同一个任务，适配器复用已完成音频，只继续未完成片段；`cancel` 则终止任务。任务响应中的 `control` 字段用于 worker 读取待执行的控制请求。
 
 领取：
 

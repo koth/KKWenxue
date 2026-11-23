@@ -1,0 +1,275 @@
+package com.kkwenxue.shanye.tts
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import android.os.PowerManager
+import com.kkwenxue.shanye.MainActivity
+import com.kkwenxue.shanye.R
+import com.kkwenxue.shanye.audio.AudioPlayback
+import com.kkwenxue.shanye.data.AudioLibrary
+import com.kkwenxue.shanye.data.LocalBookRepository
+import com.kkwenxue.shanye.data.OnlineChapterStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Own foreground service for local TTS.
+ *
+ * WorkManager's foreground service is suitable for short background jobs, but
+ * long-running native inference plus AudioTrack playback must live in an
+ * application-owned foreground service so the playback process is not torn
+ * down when the activity is stopped or the display turns off.
+ */
+class LocalTtsSynthesisService : Service() {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var task: kotlinx.coroutines.Job? = null
+    private var runtime: LocalTtsRuntime? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var audioLibrary: AudioLibrary? = null
+    private var currentChapterTitle: String? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopSynthesis()
+                stopSelfResult(startId)
+            }
+            ACTION_START -> {
+                val bookId = intent.getStringExtra(KEY_BOOK_ID)
+                val chapterIndex = intent.getIntExtra(KEY_CHAPTER_INDEX, -1)
+                val voiceId = intent.getStringExtra(KEY_VOICE_ID) ?: LocalTtsRuntime.DEFAULT_VOICE_ID
+                val startOffset = intent.getIntExtra(KEY_START_OFFSET, 0)
+                if (bookId.isNullOrBlank() || chapterIndex < 0) {
+                    stopSelfResult(startId)
+                } else {
+                    startForegroundNow()
+                    task?.cancel()
+                    task = scope.launch { synthesize(bookId, chapterIndex, voiceId, startOffset, startId) }
+                }
+            }
+        }
+        return START_REDELIVER_INTENT
+    }
+
+    private fun startForegroundNow() {
+        createChannel()
+        val notification = notification("正在准备本地语音…")
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        if (wakeLock?.isHeld != true) {
+            wakeLock = getSystemService(PowerManager::class.java)
+                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:local-tts")
+                ?.also { it.acquire() }
+        }
+    }
+
+    private suspend fun synthesize(
+        bookId: String,
+        chapterIndex: Int,
+        voiceId: String,
+        requestedStartOffset: Int,
+        startId: Int
+    ) {
+        AudioPlayback.restore(applicationContext)
+        val localRuntime = LocalTtsRuntime(applicationContext)
+        runtime = localRuntime
+        var session: LocalTtsPlaybackSession? = null
+        try {
+            val book = withContext(Dispatchers.IO) {
+                LocalBookRepository(applicationContext).load().firstOrNull { it.id == bookId }
+                    ?: error("书籍尚未从在线书库导入")
+            }
+            require(chapterIndex in book.chapters.indices) { "章节不在书库中" }
+            audioLibrary = AudioLibrary(applicationContext)
+            val library = audioLibrary ?: error("本地听书库未初始化")
+            val chapterStore = OnlineChapterStore(applicationContext)
+
+            withContext(Dispatchers.IO) { localRuntime.prepare() }
+            val requestedChapter = book.chapters.getOrNull(chapterIndex) ?: error("章节不在书库中")
+            val persistedOffset = library.localTtsResumeOffset(book.id, requestedChapter.id)
+            val firstOffset = when {
+                requestedStartOffset > 0 -> requestedStartOffset
+                persistedOffset != null -> persistedOffset
+                else -> 0
+            }
+            // If the last safe checkpoint is exactly at the end of a chapter,
+            // continue with the next chapter instead of creating an empty
+            // AudioTrack stream.
+            val chapterIsFinished = firstOffset >= requestedChapter.text.length &&
+                requestedChapter.text.isNotBlank()
+            val firstChapterIndex = if (chapterIsFinished && chapterIndex < book.chapters.lastIndex) {
+                chapterIndex + 1
+            } else chapterIndex
+            // There is no next chapter to play. Rebuild/finalize this chapter
+            // from its cached segments so an interruption after the final
+            // sentence cannot leave a permanent live-only checkpoint.
+            val effectiveFirstOffset = if (chapterIsFinished && firstChapterIndex == chapterIndex) 0 else firstOffset
+            for (index in firstChapterIndex until book.chapters.size) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val hydrated = withContext(Dispatchers.IO) {
+                    chapterStore.load(book, index)
+                }
+                val chapter = hydrated.chapters.getOrNull(index) ?: error("章节不在书库中")
+                require(chapter.body.isNotBlank()) { "章节正文未加载：${chapter.title}" }
+                currentChapterTitle = chapter.title
+                updateNotification("正在合成并播放：${chapter.title}")
+                val resumeOffset = if (index == chapterIndex) effectiveFirstOffset else 0
+
+                session = LocalTtsLivePlayback.start(
+                    hydrated.id, chapter.id, index, AudioPlayback.speed
+                ) { currentIndex, offset ->
+                    library.saveLocalPlaybackPosition(hydrated, currentIndex, offset)
+                }
+                library.saveLocalPlaybackPosition(hydrated, index, resumeOffset)
+                val chapterSession = session ?: error("本地语音播放会话未创建")
+                chapterSession.status("正在生成第一句…", LocalTtsLivePhase.PREBUFFERING)
+                val result = withContext(Dispatchers.IO) {
+                    chapterSession.beginSynthesis()
+                    localRuntime.synthesizeChapterStreaming(
+                        hydrated, index, voiceId, startOffset = resumeOffset
+                    ) { segment -> chapterSession.offer(segment) }
+                }
+                withContext(Dispatchers.IO) {
+                    chapterSession.finish(keepActive = index < book.chapters.lastIndex)
+                }
+                val published = library.registerLocalChapter(
+                    hydrated, index, result.voiceKey, result.voiceName,
+                    result.audio, result.durationMs, result.cues,
+                    result.sourceRevision, result.pauseRuleRevision
+                )
+                library.savePlaybackPosition(published, result.durationMs)
+                chapterSession.close()
+                if (index == book.chapters.lastIndex) session = null
+            }
+
+            currentChapterTitle = null
+            updateNotification("本地语音朗读已完成")
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelfResult(startId)
+        } catch (cancelled: CancellationException) {
+            localRuntime.cancel()
+            session?.stop()
+            throw cancelled
+        } catch (error: Exception) {
+            session?.fail(error)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelfResult(startId)
+        } finally {
+            session?.close()
+            currentChapterTitle = null
+            runtime = null
+            audioLibrary?.close()
+            audioLibrary = null
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+            wakeLock = null
+        }
+    }
+
+    private fun updateNotification(text: String) {
+        getSystemService(NotificationManager::class.java).notify(
+            NOTIFICATION_ID,
+            notification(text)
+        )
+    }
+
+    private fun stopSynthesis() {
+        runtime?.cancel()
+        task?.cancel()
+        LocalTtsNative.cancel()
+        LocalTtsLivePlayback.stopActive()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        if (wakeLock?.isHeld == true) wakeLock?.release()
+        wakeLock = null
+    }
+
+    private fun createChannel() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL, "本地语音合成", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+    }
+
+    private fun notification(text: String = "正在合成并播放当前章节"): Notification {
+        val open = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra("open_audio", true),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val stop = PendingIntent.getService(
+            this, 1, Intent(this, LocalTtsSynthesisService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        return Notification.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_audio)
+            .setContentTitle(currentChapterTitle ?: "本地语音合成")
+            .setContentText(text)
+            .setContentIntent(open)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "停止", stop).build())
+            .build()
+    }
+
+    override fun onDestroy() {
+        stopSynthesis()
+        audioLibrary?.close()
+        audioLibrary = null
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    companion object {
+        private const val CHANNEL = "local-tts"
+        private const val NOTIFICATION_ID = 301
+        private const val ACTION_START = "com.kkwenxue.shanye.tts.START"
+        private const val ACTION_STOP = "com.kkwenxue.shanye.tts.STOP"
+        private const val KEY_BOOK_ID = "book_id"
+        private const val KEY_CHAPTER_INDEX = "chapter_index"
+        private const val KEY_VOICE_ID = "voice_id"
+        private const val KEY_START_OFFSET = "start_offset"
+
+        fun start(
+            context: Context,
+            bookId: String,
+            chapterIndex: Int,
+            voiceId: String = LocalTtsRuntime.DEFAULT_VOICE_ID,
+            startOffset: Int = 0
+        ) {
+            val intent = Intent(context, LocalTtsSynthesisService::class.java)
+                .setAction(ACTION_START)
+                .putExtra(KEY_BOOK_ID, bookId)
+                .putExtra(KEY_CHAPTER_INDEX, chapterIndex)
+                .putExtra(KEY_VOICE_ID, voiceId)
+                .putExtra(KEY_START_OFFSET, startOffset.coerceAtLeast(0))
+            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+        }
+
+        fun stop(context: Context) {
+            context.startService(Intent(context, LocalTtsSynthesisService::class.java).setAction(ACTION_STOP))
+        }
+    }
+}

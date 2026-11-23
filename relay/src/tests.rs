@@ -423,6 +423,73 @@ async fn heartbeats_extend_the_requested_lease_and_keep_progress() {
     assert!(result["lease_until"].as_i64().unwrap() >= now() + 899);
     assert!(result.get("lease_token").is_none());
 }
+
+#[tokio::test]
+async fn pause_resume_control_preserves_the_worker_lease_until_acknowledged() {
+    let f = Fixture::new();
+    let id = f.create("tts", 0).await;
+    let task = f.claim("tts").await;
+    let (status, pausing) = f
+        .request(
+            &format!("/v1/tasks/{id}/actions"),
+            Some(json!({"action":"pause"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(pausing["state"], "pausing");
+    assert_eq!(pausing["control"], "pause");
+
+    let (_, heartbeat) = f
+        .request(
+            &format!("/v1/tasks/{id}/heartbeat"),
+            Some(json!({
+                "worker_id":"worker-1",
+                "lease_token":task["lease_token"],
+                "progress":{"done":2}
+            })),
+        )
+        .await;
+    assert_eq!(heartbeat["control"], "pause");
+    let (_, paused) = f
+        .request(
+            &format!("/v1/tasks/{id}/control/ack"),
+            Some(json!({
+                "worker_id":"worker-1",
+                "lease_token":task["lease_token"],
+                "action":"pause"
+            })),
+        )
+        .await;
+    assert_eq!(paused["state"], "paused");
+    assert_eq!(paused["control"], "run");
+
+    let (_, queued) = f
+        .request(
+            &format!("/v1/tasks/{id}/actions"),
+            Some(json!({"action":"resume"})),
+        )
+        .await;
+    assert_eq!(queued["state"], "queued");
+    let resumed = f.claim("tts").await;
+    assert_eq!(resumed["id"], id);
+    assert_eq!(resumed["attempts"], 2);
+}
+
+#[tokio::test]
+async fn queued_task_can_be_cancelled_without_a_worker() {
+    let f = Fixture::new();
+    let id = f.create("tts", 0).await;
+    let (status, cancelled) = f
+        .request(
+            &format!("/v1/tasks/{id}/actions"),
+            Some(json!({"action":"cancel"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cancelled["state"], "cancelled");
+    assert!(f.claim("tts").await.is_null());
+}
+
 #[tokio::test]
 async fn failures_are_bounded_and_nonretryable_failures_stop() {
     let f = Fixture::new();

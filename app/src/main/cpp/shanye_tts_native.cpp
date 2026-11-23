@@ -143,9 +143,13 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeCancel(JNIEnv *, jclass) {
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeRelease(JNIEnv *, jclass) {
+#ifndef SHANYE_ZONOS3_AVAILABLE
+    return;
+#else
     std::lock_guard<std::mutex> lock(g_mutex);
     g_runtime.reset();
     g_cancelled.store(false);
+#endif
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL

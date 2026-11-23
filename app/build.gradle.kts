@@ -11,6 +11,7 @@ val localTtsAssets = layout.buildDirectory.dir("generated/localTtsAssets")
 android {
     namespace = "com.kkwenxue.shanye"
     compileSdk = 35
+    ndkVersion = "27.2.12479018"
     defaultConfig {
         applicationId = "com.kkwenxue.shanye"
         minSdk = 26
@@ -51,6 +52,9 @@ val syncEmbeddedLocalTtsAssets = tasks.register<Sync>("syncEmbeddedLocalTtsAsset
     }
     from(rootProject.file(".workbench/reference-voices/d54c9aec5d26dba1566eeebad09bc24838dec9c485b0ff1c4c3ca9d8ea8dc735/reference.codes.npy")) {
         rename { "shuoshuren2.codes.npy" }
+        into("voices")
+    }
+    from(rootProject.file("sounds/shuoshuren1.codes.npy")) {
         into("voices")
     }
     into(localTtsAssets)

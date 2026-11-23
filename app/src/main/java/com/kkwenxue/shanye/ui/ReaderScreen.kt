@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -33,6 +34,8 @@ import androidx.work.WorkManager
 import com.kkwenxue.shanye.data.*
 import com.kkwenxue.shanye.reader.*
 import com.kkwenxue.shanye.audio.AudioPlayback
+import com.kkwenxue.shanye.tts.LocalTtsLivePhase
+import com.kkwenxue.shanye.tts.LocalTtsLivePlayback
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -87,9 +90,17 @@ fun ReaderScreen(initialBook:Book,store:ReaderStore,audioLibrary:AudioLibrary,au
     var followAudio by remember { mutableStateOf(true) }
     val inPlayer=sheet=="audio" || sheet=="activeAudio"
     val activeAudio=AudioPlayback.current?.takeIf { it.bookId==book.id }
-    val audioChapterIndex=remember(book,activeAudio?.chapterId) { book.chapters.indexOfFirst { it.id==activeAudio?.chapterId } }
-    val audioCue=activeAudio?.cueAt(AudioPlayback.position)
-    val audioOffset=activeAudio?.offsetAt(AudioPlayback.position)
+    val localTts by LocalTtsLivePlayback.state.collectAsState()
+    val liveTtsForBook = localTts.takeIf {
+        it.bookId == book.id &&
+            it.phase in setOf(LocalTtsLivePhase.PREBUFFERING, LocalTtsLivePhase.SYNTHESIZING,
+                LocalTtsLivePhase.PLAYING)
+    }
+    val audioChapterIndex = activeAudio?.let { audio ->
+        book.chapters.indexOfFirst { it.id == audio.chapterId }
+    } ?: liveTtsForBook?.chapterIndex ?: -1
+    val audioCue = activeAudio?.cueAt(AudioPlayback.position) ?: liveTtsForBook?.currentCue
+    val audioOffset = activeAudio?.offsetAt(AudioPlayback.position) ?: liveTtsForBook?.currentCue?.start
     val availableChapters=remember(audioItems,book.id) { audioItems.filter { it.bookId==book.id }.map { it.chapterId }.toSet() }
     val colors=readerColors(store.theme)
     val reader=remember { ReadingView(context) }
@@ -146,8 +157,10 @@ fun ReaderScreen(initialBook:Book,store:ReaderStore,audioLibrary:AudioLibrary,au
     val selectedComment = selection?.let { store.commentFor(book, chapter, it) }
     LaunchedEffect(Unit) { delay(4200); hint=false }
     LaunchedEffect(toast) { if(toast.isNotEmpty()) { delay(1800); toast="" } }
-    LaunchedEffect(audioChapterIndex,audioOffset,followAudio,AudioPlayback.playing,inPlayer) {
-        if(!inPlayer && followAudio && AudioPlayback.playing && audioChapterIndex>=0 && audioOffset!=null) {
+    LaunchedEffect(audioChapterIndex,audioOffset,followAudio,AudioPlayback.playing,inPlayer,
+        localTts.phase,localTts.currentCue?.start,localTts.playedPositionMs) {
+        val livePlaying = liveTtsForBook?.phase == LocalTtsLivePhase.PLAYING
+        if(!inPlayer && followAudio && (AudioPlayback.playing || livePlaying) && audioChapterIndex>=0 && audioOffset!=null) {
             chapter=audioChapterIndex
             jumpOffset=audioOffset
             // Keep the Android reader view in sync immediately. Waiting for the
@@ -184,10 +197,13 @@ fun ReaderScreen(initialBook:Book,store:ReaderStore,audioLibrary:AudioLibrary,au
         }
         AudioPlayerScreen(book,audioLibrary,audioItems,onAudioImported,{ checkpoint ->
             val position=checkpoint?.let { store.positionAfterListening(book,it) }
+                ?: liveTtsForBook?.let { store.resumePosition(book) }
             if(position==null) sheet=null else moveTo(position,fromAudio=true,saveAsReading=false)
         },
             initialChapterIndex=entryChapter,initialTextOffset=entryPage.start,resumeArtifactId=resumeArtifact,onRead={item,offset ->
             item.readingAnchor(offset).positionIn(book)?.let { moveTo(it,fromAudio=true,saveAsReading=true) }
+        }, onLocalProgress={ index, offset ->
+            if (index in book.chapters.indices) store.savePosition(book,index,offset)
         })
         return
     }
@@ -303,6 +319,18 @@ fun ReaderScreen(initialBook:Book,store:ReaderStore,audioLibrary:AudioLibrary,au
                     hint=false
                     AudioPlayback.command(context,"stop")
                 }
+            }
+        }
+        if(liveTtsForBook!=null && activeAudio==null && !controls && selectedSentence==null && sheet==null) {
+            Row(Modifier.align(Alignment.BottomCenter).padding(bottom=46.dp).background(colors.panel,RoundedCornerShape(20.dp)).padding(horizontal=14.dp, vertical=10.dp),
+                verticalAlignment=Alignment.CenterVertically) {
+                Column(Modifier.widthIn(max=260.dp)) {
+                    Text(liveTtsForBook.status.ifBlank { "本地朗读中" }, fontSize=10.sp, color=Accent)
+                    Text(liveTtsForBook.currentText?.trim().takeUnless { it.isNullOrBlank() } ?: "正在生成下一句…",
+                        Modifier.padding(top=3.dp), maxLines=2, overflow=TextOverflow.Ellipsis,
+                        fontFamily=Serif, fontSize=13.sp, color=colors.ink)
+                }
+                IconAction("audio","打开播放器",Accent) { sheet="activeAudio" }
             }
         }
         if(hint && !controls && activeAudio==null) {

@@ -173,6 +173,11 @@ class SynthesisRelay(connection: RelayConnection) {
     }
     fun detail(id: String): JSONObject { requireId(id); return json("/v1/tasks/$id") }
     fun status(id: String): JSONObject { requireId(id); return json("/v1/tasks/$id/status") }
+    fun action(id: String, action: String): RelayTask {
+        requireId(id)
+        require(action in setOf("pause", "resume", "cancel")) { "不支持的任务操作" }
+        return RelayTask.parse(json("/v1/tasks/$id/actions", JSONObject().put("action", action)))
+    }
     fun requestTransfer(id: String): JSONObject { requireId(id); return json("/v1/tasks/$id/result/request", JSONObject()) }
     fun download(id: String, expected: RelayResult, target: File, progress: (Long, Long) -> Unit = { _, _ -> }) {
         requireId(id)

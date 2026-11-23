@@ -1,6 +1,9 @@
 package com.kkwenxue.shanye
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Build
 import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -27,10 +30,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import com.kkwenxue.shanye.tts.LocalTtsModelPack
 import com.kkwenxue.shanye.tts.LocalTtsPackState
+import com.kkwenxue.shanye.tts.LocalTtsRuntime
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
     private val systemBars by lazy { SystemBarsController(window) }
+    private var notificationPermissionRequested = false
     private var audioOpenRequest by mutableIntStateOf(0)
     private var resumeTick by mutableIntStateOf(0)
     private var syncTick by mutableIntStateOf(0)
@@ -50,6 +55,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestNotificationPermission()
         if (intent.getBooleanExtra("open_audio",false)) audioOpenRequest++
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
@@ -118,6 +124,15 @@ class MainActivity : ComponentActivity() {
                     Text("准备本地语音合成…", color = Muted, modifier = Modifier.padding(top = 16.dp))
                 }
                 return@setContent
+            }
+            // Load the native model in the background while the user is on the
+            // bookshelf. The first local synthesis should not block silently
+            // on the 1GB+ model mmap/load step.
+            val localTtsRuntime = remember { LocalTtsRuntime(applicationContext, localTtsPack) }
+            LaunchedEffect(localTtsReady) {
+                withContext(Dispatchers.IO) {
+                    runCatching { localTtsRuntime.prepare() }
+                }
             }
             val store = remember { ReaderStore(applicationContext) }
             val onlineSync = remember { OnlineLibrarySync(applicationContext) }
@@ -233,5 +248,19 @@ class MainActivity : ComponentActivity() {
             }
             }
         }
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33 || notificationPermissionRequested) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        notificationPermissionRequested = true
+        requestPermissions(
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            REQUEST_POST_NOTIFICATIONS
+        )
+    }
+
+    companion object {
+        private const val REQUEST_POST_NOTIFICATIONS = 301
     }
 }

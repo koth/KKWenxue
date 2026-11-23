@@ -3,8 +3,6 @@ package com.kkwenxue.shanye.ui
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -33,7 +31,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kkwenxue.shanye.audio.AudioPlayback
 import com.kkwenxue.shanye.data.*
-import com.kkwenxue.shanye.tts.LocalTtsSynthesisWorker
+import com.kkwenxue.shanye.tts.LocalTtsLivePhase
+import com.kkwenxue.shanye.tts.LocalTtsLivePlayback
+import com.kkwenxue.shanye.tts.LocalTtsSynthesisService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -57,6 +57,7 @@ internal fun AudioPlayerScreen(
     initialChapterIndex: Int? = null, initialTextOffset: Int = 0,
     resumeArtifactId: String? = null,
     onRead: (AudioChapter, Int) -> Unit,
+    onLocalProgress: ((Int, Int) -> Unit)? = null,
     availableBooks: List<Book> = emptyList()
 ) {
     val context = LocalContext.current
@@ -122,30 +123,49 @@ internal fun AudioPlayerScreen(
     var message by remember { mutableStateOf("") }
     var showSynthesis by remember { mutableStateOf(false) }
     var localSynthesizing by remember { mutableStateOf(false) }
-    var localWorkId by remember { mutableStateOf<java.util.UUID?>(null) }
-    LaunchedEffect(localWorkId) {
-        val workId = localWorkId ?: return@LaunchedEffect
-        WorkManager.getInstance(context).getWorkInfoByIdFlow(workId).collect { info ->
-            when (info?.state) {
-                WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> localSynthesizing = true
-                WorkInfo.State.SUCCEEDED -> {
-                    localSynthesizing = false
-                    localWorkId = null
-                    onImported()
-                    message = "本章已完成本地合成"
-                }
-                WorkInfo.State.FAILED -> {
-                    localSynthesizing = false
-                    localWorkId = null
-                    message = info.outputData.getString("error") ?: "本地语音合成失败"
-                }
-                WorkInfo.State.CANCELLED -> {
-                    localSynthesizing = false
-                    localWorkId = null
-                    message = "本地语音合成已取消"
-                }
-                else -> Unit
+    val localLive by LocalTtsLivePlayback.state.collectAsState()
+    val liveBelongsToBook = book != null && localLive.bookId == book.id
+    val localLiveRunning = liveBelongsToBook && localLive.phase in setOf(
+        LocalTtsLivePhase.PREPARING,
+        LocalTtsLivePhase.PREBUFFERING,
+        LocalTtsLivePhase.SYNTHESIZING,
+        LocalTtsLivePhase.PLAYING
+    )
+    val localSynthesisActive = localSynthesizing || localLiveRunning
+    // The foreground service advances the live session to the next chapter
+    // without recreating this screen. Keep showing its current sentence while
+    // it does so; ReaderScreen receives the chapter index through
+    // onLocalProgress and follows the highlighted text there.
+    val liveBelongsToChapter = liveBelongsToBook
+    val liveSentence = localLive.currentText?.trim()?.takeIf {
+        localSynthesisActive && liveBelongsToChapter && it.isNotBlank()
+    }
+    LaunchedEffect(localLive.currentCue?.start, localLive.playedPositionMs, localLive.phase) {
+        val cue = localLive.currentCue
+        if (onLocalProgress != null && liveBelongsToBook && localLive.phase == LocalTtsLivePhase.PLAYING &&
+            cue != null && cue.kind != "title") {
+            val duration = (cue.endMs - cue.startMs).coerceAtLeast(1)
+            val fraction = ((localLive.playedPositionMs - cue.startMs).toFloat() / duration).coerceIn(0f, 1f)
+            val offset = (cue.start + ((cue.end - cue.start) * fraction).toInt()).coerceIn(cue.start, cue.end)
+            onLocalProgress(localLive.chapterIndex, offset)
+        }
+    }
+    LaunchedEffect(localLive.phase) {
+        when (localLive.phase) {
+            LocalTtsLivePhase.COMPLETED -> {
+                localSynthesizing = false
+                onImported()
+                message = "本章已完成本地合成"
             }
+            LocalTtsLivePhase.FAILED -> {
+                localSynthesizing = false
+                message = localLive.error ?: "本地语音合成失败"
+            }
+            LocalTtsLivePhase.STOPPED -> {
+                localSynthesizing = false
+                message = "本地语音朗读已停止"
+            }
+            else -> Unit
         }
     }
     val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -166,9 +186,27 @@ internal fun AudioPlayerScreen(
     fun synthesizeLocally() {
         val targetBook = book ?: return
         val index = initialChapterIndex ?: return
-        if (localSynthesizing) return
+        if (localSynthesisActive) return
         localSynthesizing = true
-        localWorkId = LocalTtsSynthesisWorker.enqueue(context, targetBook.id, index).id
+        // The reader passes the current UTF-16 text offset. This is the
+        // local real-time path: restart from the current sentence, then keep
+        // synthesizing and playing subsequent sentences without rebuilding
+        // the chapter from its beginning.
+        LocalTtsSynthesisService.start(
+            context, targetBook.id, index,
+            startOffset = initialTextOffset.coerceAtLeast(0)
+        )
+    }
+    fun stopSynthesis() {
+        if (book == null) return
+        LocalTtsSynthesisService.stop(context)
+        localSynthesizing = false
+        message = "本地语音朗读已停止"
+    }
+    fun setPlaybackSpeed(value: Float) {
+        AudioPlayback.setSpeed(context, value)
+        LocalTtsLivePlayback.setSpeed(value)
+        chooser = null
     }
     fun start(item: AudioChapter, offset: Int = library.position(item)) {
         followsPlayback = true
@@ -239,7 +277,11 @@ internal fun AudioPlayerScreen(
                     BookCover(displayBook, Modifier.width(artworkHeight * .735f).height(artworkHeight)
                         .shadow(22.dp, RoundedCornerShape(10.dp)).clip(RoundedCornerShape(10.dp)))
                     Spacer(Modifier.weight(1f))
-                    Text(cue?.text?.trim() ?: "准备播放…", Modifier.fillMaxWidth().heightIn(min=54.dp)
+                    if (liveSentence != null) {
+                        Text("正在播 · 当前句", Modifier.fillMaxWidth().padding(horizontal=6.dp),
+                            fontSize=11.sp, color=PlayerAccent, textAlign=TextAlign.Center)
+                    }
+                    Text(liveSentence ?: cue?.text?.trim() ?: "准备播放…", Modifier.fillMaxWidth().heightIn(min=54.dp)
                         .padding(horizontal=6.dp).clickable { readDisplayed(displayItem) },
                         maxLines=2, overflow=TextOverflow.Ellipsis, fontFamily=Serif, fontSize=18.sp,
                         lineHeight=28.sp, color=PlayerWhite.copy(.88f), textAlign=TextAlign.Center)
@@ -303,15 +345,46 @@ internal fun AudioPlayerScreen(
                 Column(Modifier.fillMaxWidth().heightIn(min=440.dp), horizontalAlignment=Alignment.CenterHorizontally,
                     verticalArrangement=Arrangement.Center) {
                     Glyph("audio", PlayerMuted, size=52.dp)
-                    Text(if (localSynthesizing) "正在边合成边播放" else if (chapterEntry) "本章暂无听书内容" else "还没有听书音频", Modifier.padding(top=22.dp), fontSize=23.sp, color=PlayerWhite)
-                    Text(if (localSynthesizing) "已生成的句子会立即播放，后续句子继续合成。" else if (chapterEntry) "先合成当前章节，或导入包含本章的听书包。" else "从已导入的在线书籍中选择章节合成，或导入已有听书包。", Modifier.padding(top=12.dp), fontSize=12.sp,
+                    Text(if (localSynthesisActive) {
+                        if (localLive.phase == LocalTtsLivePhase.PLAYING) "正在边合成边播放" else "正在缓冲本地朗读"
+                    } else if (chapterEntry) "本章暂无听书内容" else "还没有听书音频", Modifier.padding(top=22.dp), fontSize=23.sp, color=PlayerWhite)
+                    Text(if (localSynthesisActive) {
+                        localLive.status.takeIf { liveBelongsToBook && it.isNotBlank() }
+                            ?: "正在准备本地语音，首次加载模型可能需要一点时间…"
+                    } else if (chapterEntry) "先合成当前章节，或导入包含本章的听书包。" else "从已导入的在线书籍中选择章节合成，或导入已有听书包。", Modifier.padding(top=12.dp), fontSize=12.sp,
                         color=PlayerMuted, textAlign=TextAlign.Center)
-                    Button(onClick={if (chapterEntry) synthesizeLocally() else showSynthesis=true}, enabled=!localSynthesizing,
+                    if (localSynthesisActive && liveBelongsToChapter && localLive.currentText != null) {
+                        Text("当前逐句稿", Modifier.padding(top=22.dp), fontSize=12.sp, color=PlayerAccent)
+                        Text(localLive.currentText!!.trim(), Modifier.padding(top=8.dp).padding(horizontal=18.dp),
+                            maxLines=3, overflow=TextOverflow.Ellipsis, fontFamily=Serif, fontSize=17.sp,
+                            lineHeight=26.sp, color=PlayerWhite, textAlign=TextAlign.Center)
+                    }
+                    if (localSynthesisActive && liveBelongsToBook && localLive.totalSegments > 0) {
+                        val fraction = (localLive.playedSegments.toFloat() / localLive.totalSegments).coerceIn(0f, 1f)
+                        Text("合成 ${localLive.generatedSegments}/${localLive.totalSegments} · 播放 ${localLive.playedSegments}/${localLive.totalSegments}",
+                            Modifier.padding(top=14.dp), fontSize=12.sp, color=PlayerMuted)
+                        LinearProgressIndicator(progress={ fraction }, modifier=Modifier.fillMaxWidth().padding(top=8.dp, start=24.dp, end=24.dp),
+                            color=PlayerAccent, trackColor=PlayerWhite.copy(.16f))
+                    }
+                    if (chapterEntry) {
+                        Text("播放语速", Modifier.padding(top=22.dp), fontSize=12.sp, color=PlayerMuted)
+                        Row(Modifier.fillMaxWidth().padding(top=8.dp), horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                            AudioPlayback.supportedSpeeds.forEach { value ->
+                                ChoiceChip(speedLabel(value), AudioPlayback.speed == value, Modifier.weight(1f)) {
+                                    setPlaybackSpeed(value)
+                                }
+                            }
+                        }
+                    }
+                    Button(onClick={
+                        if (localSynthesisActive) stopSynthesis()
+                        else if (chapterEntry) synthesizeLocally() else showSynthesis=true
+                    }, enabled=if (localSynthesisActive) book != null else !localSynthesizing,
                         modifier=Modifier.padding(top=22.dp),
                         colors=ButtonDefaults.buttonColors(containerColor=PlayerAccent, contentColor=PlayerPanel)) {
-                        Text(if (localSynthesizing) "正在本地合成…" else if (chapterEntry) "本地合成当前章" else "去合成 / 从服务器导入")
+                        Text(if (localSynthesisActive) "停止朗读" else if (chapterEntry) "本地实时合成" else "去合成 / 从服务器导入")
                     }
-                    if (chapterEntry) TextButton(onClick={showSynthesis=true}, enabled=!localSynthesizing,
+                    if (chapterEntry) TextButton(onClick={showSynthesis=true}, enabled=!localSynthesisActive,
                         modifier=Modifier.padding(top=8.dp)) { Text("改用服务器合成", color=PlayerAccent) }
                     TextButton(onClick=::importAudio, enabled=!importing, modifier=Modifier.padding(top=22.dp)) {
                         Text(if (importing) "正在导入…" else "导入听书包", color=PlayerAccent)
@@ -340,7 +413,7 @@ internal fun AudioPlayerScreen(
                             Row(Modifier.fillMaxWidth().padding(bottom=12.dp), horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                                 row.forEach { value ->
                                     ChoiceChip(speedLabel(value), AudioPlayback.speed==value, Modifier.weight(1f)) {
-                                        AudioPlayback.setSpeed(context, value); chooser=null
+                                        setPlaybackSpeed(value)
                                     }
                                 }
                                 repeat(4-row.size) { Spacer(Modifier.weight(1f)) }

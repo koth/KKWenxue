@@ -18,7 +18,10 @@ target_link_libraries(shanye_tts_native PRIVATE ${log-lib} ${android-lib})
 # against ggml. A clean checkout still produces a small capability bridge, so the Android
 # project remains buildable before the optional model source bundle is installed.
 set(SHANYE_ZONOS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../tmp/zonos3-mini/ZONOS3-Mini-main/servers/ggml")
-if(EXISTS "${SHANYE_ZONOS_ROOT}/ggml/CMakeLists.txt" AND EXISTS "${SHANYE_ZONOS_ROOT}/src/zonos3.h")
+get_filename_component(SHANYE_ZONOS_ROOT "${SHANYE_ZONOS_ROOT}" REALPATH)
+message(STATUS "ShanYe ZONOS3 source root: ${SHANYE_ZONOS_ROOT}")
+if(IS_DIRECTORY "${SHANYE_ZONOS_ROOT}/ggml" AND EXISTS "${SHANYE_ZONOS_ROOT}/ggml/CMakeLists.txt"
+    AND EXISTS "${SHANYE_ZONOS_ROOT}/src/zonos3.h")
     set(SHANYE_GGML_PATCH "${SHANYE_ZONOS_ROOT}/patches/metal-conv1d-implicit.patch")
     if(EXISTS "${SHANYE_GGML_PATCH}")
         execute_process(COMMAND git -C "${SHANYE_ZONOS_ROOT}/ggml" apply --reverse --check "${SHANYE_GGML_PATCH}"
