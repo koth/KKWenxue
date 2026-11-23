@@ -86,6 +86,45 @@ bool load_codes(const std::string & path, std::vector<int32_t> & out, int & fram
     }
     return true;
 }
+
+// A short title can produce a valid but unrelated waveform because the model
+// was trained mostly on complete sentences. The release server solves this
+// with a pause marker plus a filler sentence. On Android we keep the same
+// conditioning and cut at the long pause before the filler.
+size_t short_text_cut(const std::vector<float> & audio) {
+    constexpr size_t kSampleRate = 44100;
+    constexpr size_t kWindow = kSampleRate / 50; // 20 ms
+    constexpr int kMinimumVoicedWindows = 5;    // 100 ms of speech
+    constexpr int kRequiredSilenceWindows = 8;  // 160 ms pause
+    constexpr float kVoicedRms = 0.012f;
+    constexpr float kSilentRms = 0.006f;
+    if (audio.size() < kWindow * (kMinimumVoicedWindows + kRequiredSilenceWindows)) return 0;
+
+    int voiced_windows = 0;
+    int silent_windows = 0;
+    size_t silence_start = 0;
+    for (size_t offset = 0; offset + kWindow <= audio.size(); offset += kWindow) {
+        double power = 0.0;
+        for (size_t i = offset; i < offset + kWindow; ++i) {
+            const float sample = std::isfinite(audio[i]) ? audio[i] : 0.0f;
+            power += static_cast<double>(sample) * sample;
+        }
+        const float rms = static_cast<float>(std::sqrt(power / static_cast<double>(kWindow)));
+        if (rms >= kVoicedRms) {
+            ++voiced_windows;
+            silent_windows = 0;
+            continue;
+        }
+        if (voiced_windows < kMinimumVoicedWindows || rms > kSilentRms) {
+            silent_windows = 0;
+            continue;
+        }
+        if (silent_windows == 0) silence_start = offset;
+        ++silent_windows;
+        if (silent_windows >= kRequiredSilenceWindows) return silence_start;
+    }
+    return 0;
+}
 #endif
 
 } // namespace
@@ -154,43 +193,86 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeRelease(JNIEnv *, jclass) {
 
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclass, jstring text, jstring codes_path,
-                                                              jint max_frames, jint seed) {
+                                                              jint max_frames, jint seed, jboolean stabilize_short_text) {
 #ifndef SHANYE_ZONOS3_AVAILABLE
-    (void) env; (void) text; (void) codes_path; (void) max_frames; (void) seed;
+    (void) env; (void) text; (void) codes_path; (void) max_frames; (void) seed; (void) stabilize_short_text;
     return nullptr;
 #else
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_runtime || !g_runtime->backbone_ready || !g_runtime->decoder_ready) return nullptr;
+    const std::string requested_text = toString(env, text);
+    if (requested_text.empty()) return nullptr;
     std::vector<int32_t> reference;
     int reference_frames = 0;
     if (!load_codes(toString(env, codes_path), reference, reference_frames)) return nullptr;
-    zonos3_prompt_options options;
-    options.reference_codes = reference.data();
-    options.reference_frames = std::min(reference_frames, zonos3_generation().reference_max_frames);
-    zonos3_prompt prompt;
-    std::string error;
-    if (!zonos3_build_prompt(g_runtime->backbone, toString(env, text), options, prompt, &error)) {
-        __android_log_print(ANDROID_LOG_ERROR, kTag, "prompt failed: %s", error.c_str());
+    const bool stabilize = stabilize_short_text == JNI_TRUE;
+
+    auto generate_audio = [&](const std::string & synthesis_text, const zonos3_sampling & sampling,
+                              std::vector<float> & audio) -> bool {
+        zonos3_prompt_options options;
+        options.reference_codes = reference.data();
+        options.reference_frames = std::min(reference_frames, zonos3_generation().reference_max_frames);
+        zonos3_prompt prompt;
+        std::string error;
+        if (!zonos3_build_prompt(g_runtime->backbone, synthesis_text, options, prompt, &error)) {
+            __android_log_print(ANDROID_LOG_ERROR, kTag, "prompt failed: %s", error.c_str());
+            return false;
+        }
+        std::vector<int32_t> generated;
+        int eos_frame = -1;
+        const int budget = std::max(1, std::min(static_cast<int>(max_frames),
+                                                 static_cast<int>(g_runtime->backbone.hp.n_ctx_train) - prompt.n_rows));
+        const int frames = zonos3_generate(g_runtime->backbone, prompt, budget, sampling, 1.0f, generated, eos_frame,
+                                           true, nullptr, {}, nullptr);
+        if (frames <= 0 || g_cancelled.load()) return false;
+        std::vector<int32_t> codes = zonos3_prefill_codes(g_runtime->backbone, prompt);
+        codes.insert(codes.end(), generated.begin(), generated.end());
+        if (!zac_decode(g_runtime->decoder, codes.data(), static_cast<int>(codes.size() / 10), 10, eos_frame, audio)) {
+            return false;
+        }
+        const size_t drop = std::min(audio.size(), static_cast<size_t>(prompt.prefill_frames) *
+                                                       zac_samples_per_frame(g_runtime->decoder));
+        audio.erase(audio.begin(), audio.begin() + drop);
+        const float gain = zac_output_gain(g_runtime->decoder, -1.0);
+        for (float & sample : audio) sample *= gain;
+        zonos3_soft_limit(audio.data(), audio.size());
+        return !audio.empty();
+    };
+
+    if (stabilize) {
+        // U+E004 is the release registry's 0.5-second pause marker. The
+        // Chinese filler provides sentence-shaped context for short titles.
+        const std::string short_text = requested_text + "\xEE\x80\x84小鸟飞过了安静的小河。";
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            zonos3_sampling sampling;
+            sampling.seed = static_cast<uint32_t>(seed) + static_cast<uint32_t>(attempt * 1009);
+            sampling.greedy = true;
+            std::vector<float> audio;
+            if (!generate_audio(short_text, sampling, audio)) {
+                if (g_cancelled.load()) return nullptr;
+                continue;
+            }
+            const size_t cut = short_text_cut(audio);
+            if (cut > 0) {
+                audio.resize(cut);
+                return pcm16(env, audio);
+            }
+        }
+
+        // Do not allow the filler to leak into the book if the model pack
+        // lacks pause rows or a clean silence boundary was not emitted.
+        zonos3_sampling fallback;
+        fallback.seed = static_cast<uint32_t>(seed);
+        fallback.greedy = true;
+        std::vector<float> audio;
+        if (generate_audio(requested_text, fallback, audio)) return pcm16(env, audio);
         return nullptr;
     }
+
     zonos3_sampling sampling;
     sampling.seed = static_cast<uint32_t>(seed);
-    std::vector<int32_t> generated;
-    int eos_frame = -1;
-    const int budget = std::max(1, std::min(static_cast<int>(max_frames),
-                                             static_cast<int>(g_runtime->backbone.hp.n_ctx_train) - prompt.n_rows));
-    const int frames = zonos3_generate(g_runtime->backbone, prompt, budget, sampling, 1.0f, generated, eos_frame,
-                                       true, nullptr, {}, nullptr);
-    if (frames <= 0 || g_cancelled.load()) return nullptr;
-    std::vector<int32_t> codes = zonos3_prefill_codes(g_runtime->backbone, prompt);
-    codes.insert(codes.end(), generated.begin(), generated.end());
     std::vector<float> audio;
-    if (!zac_decode(g_runtime->decoder, codes.data(), static_cast<int>(codes.size() / 10), 10, eos_frame, audio)) return nullptr;
-    const size_t drop = std::min(audio.size(), static_cast<size_t>(prompt.prefill_frames) * zac_samples_per_frame(g_runtime->decoder));
-    audio.erase(audio.begin(), audio.begin() + drop);
-    const float gain = zac_output_gain(g_runtime->decoder, -1.0);
-    for (float & sample : audio) sample *= gain;
-    zonos3_soft_limit(audio.data(), audio.size());
+    if (!generate_audio(requested_text, sampling, audio)) return nullptr;
     return pcm16(env, audio);
 #endif
 }

@@ -19,7 +19,8 @@ import com.kkwenxue.shanye.data.RelayConnection
 
 private fun localTtsSha256(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
     .joinToString("") { "%02x".format(it) }
-private const val LOCAL_TTS_PAUSE_RULE_REVISION = "punctuation-pauses-v2-${TtsTextNormalizer.REVISION}"
+private const val LOCAL_TTS_PAUSE_RULE_REVISION = "punctuation-pauses-v3-${TtsTextNormalizer.REVISION}"
+private const val LOCAL_TTS_SYNTHESIS_POLICY_REVISION = "short-text-stabilization-v1"
 
 data class LocalTtsSegmentKey(
     val bookId: String,
@@ -114,7 +115,13 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
     }
 
     @Synchronized
-    fun synthesizeSegment(key: LocalTtsSegmentKey, sourceStart: Int, sourceEnd: Int, maxFrames: Int = 300): LocalTtsSegment {
+    fun synthesizeSegment(
+        key: LocalTtsSegmentKey,
+        sourceStart: Int,
+        sourceEnd: Int,
+        maxFrames: Int = 300,
+        stabilizeShortText: Boolean = false
+    ): LocalTtsSegment {
         val manifest = modelPack.current() ?: error("本地模型尚未准备")
         val voice = manifest.voices.firstOrNull { it.id == key.voiceId || it.speaker == key.voiceId }
             ?: error("本地模型没有声线：${key.voiceId}")
@@ -130,7 +137,13 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         repeat(3) { attempt ->
             if (pcm != null || cancelled.get()) return@repeat
             pcm = runCatching {
-                LocalTtsNative.synthesize(key.text, codes.absolutePath, maxFrames, UUID.randomUUID().hashCode())
+                LocalTtsNative.synthesize(
+                    key.text,
+                    codes.absolutePath,
+                    maxFrames,
+                    UUID.randomUUID().hashCode(),
+                    stabilizeShortText
+                )
                     ?: error("native 返回空音频")
             }.onFailure { lastError = it }.getOrNull()
             if (pcm == null && attempt < 2) Thread.yield()
@@ -174,6 +187,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         val cues = mutableListOf<AudioCue>()
         var positionMs = 0
         var previousTtsText: String? = null
+        var previousPieceIndex: Int? = null
         val resumeOffset = startOffset.coerceIn(0, chapter.text.length)
         var streamingStarted = resumeOffset <= 0
         var streamOriginMs = 0
@@ -184,7 +198,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
             if (ttsText.isBlank() || !TtsTextNormalizer.containsSpokenContent(ttsText)) continue
             val shouldStream = resumeOffset <= 0 || (piece.index >= 0 && piece.end > resumeOffset)
             previousTtsText?.let { previous ->
-                val pauseMs = pauseFor(previous)
+                val pauseMs = if (previousPieceIndex == -1) TITLE_PAUSE_MS else pauseFor(previous)
                 if (pauseMs > 0) {
                     val silence = ByteArray(pauseMs * SAMPLE_RATE / 1000 * 2)
                     pcm.write(silence)
@@ -197,8 +211,23 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
                     positionMs += pauseMs
                 }
             }
-            val key = LocalTtsSegmentKey(book.id, chapter.id, sourceRevision, piece.index, ttsText, voice.id, manifest.revision, manifest.engineRevision)
-            val segment = synthesizeSegment(key, piece.start, piece.end)
+            val stabilizeShortText = piece.index < 0 || ttsText.length <= SHORT_TEXT_CHAR_LIMIT
+            val key = LocalTtsSegmentKey(
+                book.id,
+                chapter.id,
+                sourceRevision,
+                piece.index,
+                ttsText,
+                voice.id,
+                manifest.revision,
+                "${manifest.engineRevision}:$LOCAL_TTS_SYNTHESIS_POLICY_REVISION"
+            )
+            val segment = synthesizeSegment(
+                key,
+                piece.start,
+                piece.end,
+                stabilizeShortText = stabilizeShortText
+            )
             val bytes = segment.path.readBytes()
             require(bytes.size > 44 && bytes.copyOfRange(0, 4).contentEquals("RIFF".toByteArray())) { "本地片段 WAV 无效" }
             val payload = bytes.copyOfRange(44, bytes.size)
@@ -225,6 +254,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
             }
             positionMs = endMs
             previousTtsText = ttsText
+            previousPieceIndex = piece.index
         }
         val chapterId = localTtsSha256("chapter:${book.id}:${chapter.id}:$sourceRevision:${voice.id}:${manifest.revision}")
         val output = File(root, "$chapterId.wav")
@@ -309,9 +339,11 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
     companion object {
         const val SAMPLE_RATE = 44100
         const val DEFAULT_VOICE_ID = "clone-upload-53677481cc5fa643ef6413ff"
-        const val PAUSE_RULE_REVISION = "punctuation-pauses-v2-tts-text-normalization-v1"
+        const val PAUSE_RULE_REVISION = "punctuation-pauses-v3-tts-text-normalization-v1"
         private const val MIN_FREE_BYTES = 128L * 1024 * 1024
         private const val MIN_SOFT_PIECE_CHARS = 48
         private const val MAX_PIECE_CHARS = 96
+        private const val SHORT_TEXT_CHAR_LIMIT = 24
+        private const val TITLE_PAUSE_MS = 700
     }
 }
