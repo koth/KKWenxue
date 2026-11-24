@@ -31,6 +31,7 @@ class LocalTtsStreamPlayer(
     private var closed = false
     private var failure: Throwable? = null
     private var generatedSpeechSegments = 0
+    private var queuedSpeechSegments = 0
     private var prebufferReady = false
     private var speed = initialSpeed.coerceIn(0.5f, 2f)
 
@@ -43,15 +44,17 @@ class LocalTtsStreamPlayer(
             // Before the initial five speech segments are available, do not let
             // pause chunks consume the queue cap and block the producer from
             // submitting the fifth sentence. Once the prebuffer is satisfied,
-            // the normal bounded-queue back pressure applies.
+            // keep a larger speech queue so uneven sentence lengths do not
+            // immediately catch up with synthesis.
             while (!closed && failure == null &&
-                queue.size >= MAX_QUEUE_SEGMENTS &&
+                queuedSpeechSegments >= MAX_BUFFERED_SPEECH_SEGMENTS &&
                 prebufferReady) lock.wait()
             ensureOpen()
             queue.addLast(queued)
             queuedSamples += queued.samples
-            if (segment.cue?.kind != null && segment.cue.kind != "title") {
+            if (isSpeech(segment)) {
                 generatedSpeechSegments++
+                queuedSpeechSegments++
                 if (generatedSpeechSegments >= LOCAL_TTS_PREBUFFER_SENTENCES) {
                     prebufferReady = true
                 }
@@ -142,6 +145,7 @@ class LocalTtsStreamPlayer(
                         } else {
                             item = queue.removeFirst()
                             queuedSamples -= item!!.samples
+                            if (isSpeech(item!!.segment)) queuedSpeechSegments--
                             positionMs = (playedSamples * 1000L / LocalTtsRuntime.SAMPLE_RATE)
                                 .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                             if (!started) {
@@ -207,7 +211,13 @@ class LocalTtsStreamPlayer(
     private fun closeLocked() {
         closed = true
         producerFinished = true
+        queue.clear()
+        queuedSamples = 0
+        queuedSpeechSegments = 0
     }
+
+    private fun isSpeech(segment: LocalTtsStreamSegment): Boolean =
+        segment.cue?.kind != null && segment.cue.kind != "title"
 
     private fun createTrack(initialSpeed: Float): AudioTrack {
         val format = AudioFormat.Builder()
@@ -239,7 +249,7 @@ class LocalTtsStreamPlayer(
     }
 
     companion object {
-        private const val MAX_QUEUE_SEGMENTS = LOCAL_TTS_PREBUFFER_SENTENCES + 3
+        private const val MAX_BUFFERED_SPEECH_SEGMENTS = 20
         private const val PREBUFFER_MS = 350
         private const val FINISH_TIMEOUT_MS = 30_000L
         private val PREBUFFER_SAMPLES = PREBUFFER_MS * LocalTtsRuntime.SAMPLE_RATE / 1000L

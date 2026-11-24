@@ -48,6 +48,7 @@ private fun exportSpeedLabel(speed: Float) = "${String.format(java.util.Locale.R
 
 @Composable
 fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioLibrary, onImported: () -> Unit, onClose: () -> Unit,
+                    onOpenLocal: () -> Unit = {},
                     availableBooks: List<Book> = emptyList()) {
     val context = LocalContext.current
     val activity = LocalActivity.current
@@ -64,13 +65,13 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
         ?: shelfBooks.firstOrNull()?.id.orEmpty()
     val selectedBook = shelfBooks.firstOrNull { it.id == activeBookId }
     if (selectedBook == null) {
-        OverlaySystemBars(SystemBarsMode.SYNTHESIS)
+        OverlaySystemBars(SystemBarsMode.PLAYER)
         BackHandler(onBack = onClose)
-        Box(Modifier.fillMaxSize().background(Paper).systemBarsPadding(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().background(WorkbenchPanel).systemBarsPadding(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
-                Text("还没有可合成的书", fontFamily = Serif, fontSize = 22.sp, color = Ink)
-                Text("请先从在线书库导入一本书。", Modifier.padding(top = 10.dp), color = Muted, fontSize = 13.sp)
-                TextButton(onClick = onClose, modifier = Modifier.padding(top = 12.dp)) { Text("返回书架", color = Accent) }
+                Text("还没有可合成的书", fontFamily = Serif, fontSize = 22.sp, color = WorkbenchWhite)
+                Text("请先从在线书库导入一本书。", Modifier.padding(top = 10.dp), color = WorkbenchMuted, fontSize = 13.sp)
+                TextButton(onClick = onClose, modifier = Modifier.padding(top = 12.dp)) { Text("返回书架", color = WorkbenchAccent) }
             }
         }
         return
@@ -147,42 +148,54 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
         val config = connection ?: return@LaunchedEffect
         SynthesisRepository.changes.collect { loadSaved(config) }
     }
-    OverlaySystemBars(SystemBarsMode.SYNTHESIS)
+    OverlaySystemBars(SystemBarsMode.PLAYER)
     BackHandler { if (settingsOpen) settingsOpen = false else onClose() }
 
-    Box(Modifier.fillMaxSize().background(Paper).systemBarsPadding()) {
+    Box(Modifier.fillMaxSize().background(WorkbenchPanel).systemBarsPadding()) {
         Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().height(60.dp).padding(horizontal=12.dp), verticalAlignment=Alignment.CenterVertically) {
-                IconAction("back", "返回听书", onClick=onClose)
-                Text("合成与导入", Modifier.weight(1f), fontFamily=Serif, fontSize=22.sp, color=Ink)
-                TextButton(enabled=!busy, onClick={ settingsOpen = true }) { Text("服务器", color=Accent) }
+            AudioWorkbenchHeader(
+                title = selectedBook.title,
+                subtitle = "服务器合成 · 选择章节、音色并管理任务",
+                mode = AudioWorkbenchMode.SERVER,
+                onModeSelected = { mode ->
+                    when (mode) {
+                        AudioWorkbenchMode.PLAYBACK -> onClose()
+                        AudioWorkbenchMode.LOCAL_REALTIME -> onOpenLocal()
+                        AudioWorkbenchMode.SERVER -> Unit
+                    }
+                },
+                onClose = onClose
+            ) {
+                TextButton(enabled=!busy, onClick={ settingsOpen = true }) {
+                    Text("设置", fontSize = 11.sp, color = WorkbenchMuted)
+                }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal=24.dp), horizontalArrangement=Arrangement.spacedBy(24.dp)) {
                 listOf("派发合成", "服务器任务").forEachIndexed { index, title ->
                     Column(Modifier.clickable { tab = index }.padding(top=12.dp), horizontalAlignment=Alignment.CenterHorizontally) {
-                        Text(title, color=if (tab == index) Ink else Muted, fontWeight=if (tab == index) FontWeight.SemiBold else FontWeight.Normal, fontSize=16.sp)
-                        Box(Modifier.padding(top=12.dp).width(28.dp).height(2.dp).background(if (tab == index) Accent else Paper))
+                        Text(title, color=if (tab == index) WorkbenchWhite else WorkbenchMuted, fontWeight=if (tab == index) FontWeight.SemiBold else FontWeight.Normal, fontSize=16.sp)
+                        Box(Modifier.padding(top=12.dp).width(28.dp).height(2.dp).background(if (tab == index) WorkbenchAccent else WorkbenchPanel))
                     }
                 }
                 Spacer(Modifier.weight(1f))
-                if (refreshing) CircularProgressIndicator(Modifier.padding(top=12.dp).size(16.dp), strokeWidth=2.dp, color=Accent)
+                if (refreshing) CircularProgressIndicator(Modifier.padding(top=12.dp).size(16.dp), strokeWidth=2.dp, color=WorkbenchAccent)
             }
-            HorizontalDivider(color=Rule)
+            HorizontalDivider(color=WorkbenchWhite.copy(.12f))
             if (connection == null && initialized) {
-                TextButton(onClick={settingsOpen=true}, modifier=Modifier.padding(horizontal=16.dp)) { Text("先连接任务服务器", color=Accent) }
+                TextButton(onClick={settingsOpen=true}, modifier=Modifier.padding(horizontal=16.dp)) { Text("先连接任务服务器", color=WorkbenchAccent) }
             }
             if (tab == 0) {
                 LazyColumn(Modifier.weight(1f), contentPadding=PaddingValues(24.dp), verticalArrangement=Arrangement.spacedBy(18.dp)) {
                     item {
-                        Text("把下一段故事，变成声音。", fontFamily=Serif, fontSize=23.sp, color=Ink)
-                        Text("只上传选中的章节。合成完成后自动下载并导入，退出此页仍会继续。", Modifier.padding(top=8.dp), fontSize=12.sp, lineHeight=20.sp, color=Muted)
+                        Text("把下一段故事，变成声音。", fontFamily=Serif, fontSize=23.sp, color=WorkbenchWhite)
+                        Text("只上传选中的章节。合成完成后自动下载并导入，退出此页仍会继续。", Modifier.padding(top=8.dp), fontSize=12.sp, lineHeight=20.sp, color=WorkbenchMuted)
                     }
                     item {
-                        Text("选择书籍", fontSize=12.sp, color=Muted)
+                        Text("选择书籍", fontSize=12.sp, color=WorkbenchMuted)
                         Box(Modifier.padding(top=8.dp)) {
                             OutlinedButton(onClick={bookMenu=true}, enabled=!busy, modifier=Modifier.fillMaxWidth(), shape=RoundedCornerShape(12.dp)) {
-                                Text(selectedBook.title, Modifier.weight(1f).padding(vertical=8.dp), color=Ink)
-                                Glyph("next", Muted, size=16.dp)
+                                Text(selectedBook.title, Modifier.weight(1f).padding(vertical=8.dp), color=WorkbenchWhite)
+                                Glyph("next", WorkbenchMuted, size=16.dp)
                             }
                             DropdownMenu(expanded=bookMenu, onDismissRequest={bookMenu=false}) {
                                 shelfBooks.forEach { item -> DropdownMenuItem(text={Text(item.title)}, onClick={selectedBookId=item.id; bookMenu=false}) }
@@ -194,41 +207,41 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                             label={Text("章号 / 范围")}, placeholder={Text("984,986-988")}, singleLine=true,
                             shape=RoundedCornerShape(12.dp), keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Ascii))
                         Row(Modifier.fillMaxWidth(), verticalAlignment=Alignment.CenterVertically) {
-                            Text("每批最多 100 章", Modifier.weight(1f), color=Muted, fontSize=11.sp)
+                            Text("每批最多 100 章", Modifier.weight(1f), color=WorkbenchMuted, fontSize=11.sp)
                             TextButton(enabled=!busy, onClick={
                                 runCatching { SynthesisPayload.resolve(selectedBook, expression) }.onSuccess {
                                     selectedIndices=it; parsedExpression=expression
                                 }.onFailure { error -> scope.launch { snackbar.showSnackbar(error.message ?: "章号无效") } }
-                            }) { Text("解析章节", color=Accent) }
+                            }) { Text("解析章节", color=WorkbenchAccent) }
                         }
                     }
                     if (selectedIndices.isNotEmpty() && expression == parsedExpression) {
-                        item { Text("已匹配 ${selectedIndices.size} 章", fontWeight=FontWeight.Medium, fontSize=13.sp, color=Ink) }
+                        item { Text("已匹配 ${selectedIndices.size} 章", fontWeight=FontWeight.Medium, fontSize=13.sp, color=WorkbenchWhite) }
                         items(selectedIndices, key={selectedBook.chapters[it].id}) { index ->
-                            Row(Modifier.fillMaxWidth().background(Ink.copy(.035f), RoundedCornerShape(10.dp)).padding(12.dp), verticalAlignment=Alignment.CenterVertically) {
-                                Glyph("check", Accent, size=17.dp)
-                                Text(selectedBook.chapters[index].title, Modifier.padding(start=10.dp).weight(1f), fontSize=13.sp, color=Ink)
-                                Text("${selectedBook.chapters[index].text.length} 字", fontSize=10.sp, color=Muted)
+                            Row(Modifier.fillMaxWidth().background(WorkbenchWhite.copy(.06f), RoundedCornerShape(10.dp)).padding(12.dp), verticalAlignment=Alignment.CenterVertically) {
+                                Glyph("check", WorkbenchAccent, size=17.dp)
+                                Text(selectedBook.chapters[index].title, Modifier.padding(start=10.dp).weight(1f), fontSize=13.sp, color=WorkbenchWhite)
+                                Text("${selectedBook.chapters[index].text.length} 字", fontSize=10.sp, color=WorkbenchMuted)
                             }
                         }
                     }
                     item {
-                        Text("朗读音色", color=Muted, fontSize=12.sp)
+                        Text("朗读音色", color=WorkbenchMuted, fontSize=12.sp)
                         Box(Modifier.padding(top=8.dp)) {
                             OutlinedButton(onClick={voiceMenu=true}, enabled=!busy, modifier=Modifier.fillMaxWidth(), shape=RoundedCornerShape(12.dp)) {
-                                Text(SynthesisVoices.firstOrNull { it.id == voiceId }?.name ?: "请选择音色", Modifier.weight(1f).padding(vertical=8.dp), color=Ink, maxLines=1, overflow=TextOverflow.Ellipsis)
-                                Glyph("next", Muted, size=16.dp)
+                                Text(SynthesisVoices.firstOrNull { it.id == voiceId }?.name ?: "请选择音色", Modifier.weight(1f).padding(vertical=8.dp), color=WorkbenchWhite, maxLines=1, overflow=TextOverflow.Ellipsis)
+                                Glyph("next", WorkbenchMuted, size=16.dp)
                             }
                             DropdownMenu(expanded=voiceMenu, onDismissRequest={voiceMenu=false}) {
-                                DropdownMenuItem(onClick={}, enabled=false, text={Text("ZONOS3 音色", color=Muted, fontSize=11.sp)})
+                                DropdownMenuItem(onClick={}, enabled=false, text={Text("ZONOS3 音色", color=WorkbenchMuted, fontSize=11.sp)})
                                 SynthesisVoices.forEach { voice -> DropdownMenuItem(text={Text(voice.name)}, onClick={voiceId=voice.id; voiceMenu=false}) }
                             }
                         }
-                        Text("成品语速", Modifier.padding(top=16.dp), color=Muted, fontSize=12.sp)
+                        Text("成品语速", Modifier.padding(top=16.dp), color=WorkbenchMuted, fontSize=12.sp)
                         Box(Modifier.padding(top=8.dp)) {
                             OutlinedButton(onClick={speedMenu=true}, enabled=!busy, modifier=Modifier.fillMaxWidth(), shape=RoundedCornerShape(12.dp)) {
-                                Text(exportSpeedLabel(exportSpeed), Modifier.weight(1f).padding(vertical=8.dp), color=Ink)
-                                Glyph("next", Muted, size=16.dp)
+                                Text(exportSpeedLabel(exportSpeed), Modifier.weight(1f).padding(vertical=8.dp), color=WorkbenchWhite)
+                                Glyph("next", WorkbenchMuted, size=16.dp)
                             }
                             DropdownMenu(expanded=speedMenu, onDismissRequest={speedMenu=false}) {
                                 ExportSpeeds.forEach { value ->
@@ -236,7 +249,7 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                 }
                             }
                         }
-                        Text("自然停顿 · 统一音量", Modifier.padding(top=10.dp), color=Muted, fontSize=11.sp)
+                        Text("自然停顿 · 统一音量", Modifier.padding(top=10.dp), color=WorkbenchMuted, fontSize=11.sp)
                     }
                     item {
                         Button(enabled=!busy && connection != null && expression.isNotBlank() && SynthesisVoices.any { it.id == voiceId },
@@ -258,7 +271,7 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                     notify("已派发 ${indices.size} 章，完成后将自动下载并导入")
                                 }
                             }) {
-                            if (busy) CircularProgressIndicator(Modifier.size(18.dp).padding(end=5.dp), strokeWidth=2.dp, color=Paper)
+                            if (busy) CircularProgressIndicator(Modifier.size(18.dp).padding(end=5.dp), strokeWidth=2.dp, color=WorkbenchPanel)
                             Text(if (busy) "正在派发…" else "派发合成任务")
                         }
                     }
@@ -281,18 +294,18 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                     item {
                         Row(Modifier.fillMaxWidth(), verticalAlignment=Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text("服务器任务", fontFamily=Serif, fontSize=22.sp, color=Ink)
-                                Text("优先局域网下载，无法直连时才申请中转", Modifier.padding(top=5.dp), fontSize=11.sp, color=Muted)
+                                Text("服务器任务", fontFamily=Serif, fontSize=22.sp, color=WorkbenchWhite)
+                                Text("优先局域网下载，无法直连时才申请中转", Modifier.padding(top=5.dp), fontSize=11.sp, color=WorkbenchMuted)
                             }
-                            TextButton(enabled=!busy && !refreshing && connection != null, onClick={connection?.let {scope.launch {refresh(it)}}}) { Text("刷新", color=Accent) }
+                            TextButton(enabled=!busy && !refreshing && connection != null, onClick={connection?.let {scope.launch {refresh(it)}}}) { Text("刷新", color=WorkbenchAccent) }
                         }
-                        networkError?.let { Text(it, Modifier.padding(top=12.dp), color=Accent, fontSize=12.sp, lineHeight=19.sp) }
+                        networkError?.let { Text(it, Modifier.padding(top=12.dp), color=WorkbenchAccent, fontSize=12.sp, lineHeight=19.sp) }
                         if (localTaskBooks.isNotEmpty()) {
-                            Text("按书籍筛选", Modifier.padding(top=18.dp), fontSize=12.sp, color=Muted)
+                            Text("按书籍筛选", Modifier.padding(top=18.dp), fontSize=12.sp, color=WorkbenchMuted)
                             Box(Modifier.padding(top=8.dp)) {
                                 OutlinedButton(onClick={ taskBookMenu = true }, enabled=!busy, modifier=Modifier.fillMaxWidth(), shape=RoundedCornerShape(12.dp)) {
-                                    Text(localTaskBooks.firstOrNull { it.id == activeTaskBookFilter }?.title ?: "全部本地书籍", Modifier.weight(1f).padding(vertical=8.dp), color=Ink, maxLines=1, overflow=TextOverflow.Ellipsis)
-                                    Glyph("next", Muted, size=16.dp)
+                                    Text(localTaskBooks.firstOrNull { it.id == activeTaskBookFilter }?.title ?: "全部本地书籍", Modifier.weight(1f).padding(vertical=8.dp), color=WorkbenchWhite, maxLines=1, overflow=TextOverflow.Ellipsis)
+                                    Glyph("next", WorkbenchMuted, size=16.dp)
                                 }
                                 DropdownMenu(expanded=taskBookMenu, onDismissRequest={taskBookMenu=false}) {
                                     DropdownMenuItem(text={Text("全部本地书籍")}, onClick={taskBookFilterId=""; taskBookMenu=false})
@@ -307,19 +320,19 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                         visiblePending.any { it.bookId == localBook.id } || visibleTasks.any { it.task.bookId == localBook.id }
                     }.forEach { localBook ->
                         item(key="task-book:${localBook.id}") {
-                            Text(localBook.title, Modifier.padding(top=4.dp), fontFamily=Serif, fontSize=19.sp, color=Ink)
+                            Text(localBook.title, Modifier.padding(top=4.dp), fontFamily=Serif, fontSize=19.sp, color=WorkbenchWhite)
                         }
                         val bookPending = visiblePending.filter { it.bookId == localBook.id }
                         items(bookPending, key={"pending:${it.key}"}) { item ->
-                            Column(Modifier.fillMaxWidth().border(1.dp, Rule, RoundedCornerShape(14.dp)).padding(16.dp)) {
-                                Text(item.title, fontSize=15.sp, color=Ink)
-                                Text("派发状态待确认", Modifier.padding(top=8.dp), fontSize=12.sp, color=Accent)
-                                Text("使用原任务核对，不会因重试重复创建。", Modifier.padding(top=6.dp), fontSize=11.sp, color=Muted)
-                                item.error?.let { Text(it, Modifier.padding(top=6.dp), fontSize=11.sp, color=Muted, maxLines=2) }
+                            Column(Modifier.fillMaxWidth().border(1.dp, WorkbenchWhite.copy(.12f), RoundedCornerShape(14.dp)).padding(16.dp)) {
+                                Text(item.title, fontSize=15.sp, color=WorkbenchWhite)
+                                Text("派发状态待确认", Modifier.padding(top=8.dp), fontSize=12.sp, color=WorkbenchAccent)
+                                Text("使用原任务核对，不会因重试重复创建。", Modifier.padding(top=6.dp), fontSize=11.sp, color=WorkbenchMuted)
+                                item.error?.let { Text(it, Modifier.padding(top=6.dp), fontSize=11.sp, color=WorkbenchMuted, maxLines=2) }
                                 TextButton(enabled=!busy, onClick={connection?.let {config -> runAction {
                                     try { withContext(Dispatchers.IO) { repository.publish(config, item.key) } }
                                     finally { loadSaved(config) }
-                                }}}) {Text("核对派发", color=Accent)}
+                                }}}) {Text("核对派发", color=WorkbenchAccent)}
                             }
                         }
                         val bookTasks = visibleTasks.filter { it.task.bookId == localBook.id }
@@ -337,17 +350,17 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                             task.state == "completed" && expired -> "结果已过期"
                             else -> taskState(task.state)
                         }
-                        Column(Modifier.fillMaxWidth().background(Ink.copy(.025f), RoundedCornerShape(14.dp)).border(1.dp, Rule, RoundedCornerShape(14.dp)).padding(16.dp)) {
+                        Column(Modifier.fillMaxWidth().background(WorkbenchWhite.copy(.055f), RoundedCornerShape(14.dp)).border(1.dp, WorkbenchWhite.copy(.12f), RoundedCornerShape(14.dp)).padding(16.dp)) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment=Alignment.CenterVertically) {
-                                Text(task.title, Modifier.weight(1f), fontSize=15.sp, color=Ink, fontWeight=FontWeight.Medium, maxLines=2, overflow=TextOverflow.Ellipsis)
-                                Text(label, Modifier.padding(start=12.dp), fontSize=11.sp, color=if(saved.importedAt>0) ColorGreen else Accent)
+                                Text(task.title, Modifier.weight(1f), fontSize=15.sp, color=WorkbenchWhite, fontWeight=FontWeight.Medium, maxLines=2, overflow=TextOverflow.Ellipsis)
+                                Text(label, Modifier.padding(start=12.dp), fontSize=11.sp, color=if(saved.importedAt>0) ColorGreen else WorkbenchAccent)
                             }
-                            if (task.voice.isNotBlank()) Text(task.voice, Modifier.padding(top=8.dp), fontSize=11.sp, color=Muted)
+                            if (task.voice.isNotBlank()) Text(task.voice, Modifier.padding(top=8.dp), fontSize=11.sp, color=WorkbenchMuted)
                             if (delivery != null && saved.importedAt == 0L) {
-                                Text(delivery.phase,Modifier.padding(top=9.dp),fontSize=12.sp,color=Accent)
+                                Text(delivery.phase,Modifier.padding(top=9.dp),fontSize=12.sp,color=WorkbenchAccent)
                                 if (delivery.total > 0 && task.state == "completed") {
-                                    Text("${delivery.received * 100 / delivery.total}%",Modifier.padding(top=6.dp),fontSize=11.sp,color=Muted)
-                                    LinearProgressIndicator(progress={(delivery.received.toFloat()/delivery.total).coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth().padding(top=6.dp),color=Accent,trackColor=Rule)
+                                    Text("${delivery.received * 100 / delivery.total}%",Modifier.padding(top=6.dp),fontSize=11.sp,color=WorkbenchMuted)
+                                    LinearProgressIndicator(progress={(delivery.received.toFloat()/delivery.total).coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth().padding(top=6.dp),color=WorkbenchAccent,trackColor=WorkbenchWhite.copy(.12f))
                                 }
                             }
                             if (task.state == "completed" && !expired && saved.importedAt == 0L) Text(when(task.result?.relayState) {
@@ -356,8 +369,8 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                 "ready" -> "合成已完成 · 中转包可用，仍优先直连"
                                 "failed" -> "合成已完成 · 中转上传失败，可重试导入"
                                 else -> "合成已完成 · 文件保留在合成服务器，尚未上传中转"
-                            }, Modifier.padding(top=8.dp), fontSize=11.sp, color=Muted)
-                            Text("${task.id.take(8)} · ${if (task.createdAt>0) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(task.createdAt*1000)) else "服务器任务"}", Modifier.padding(top=7.dp), fontSize=10.sp, color=Muted)
+                            }, Modifier.padding(top=8.dp), fontSize=11.sp, color=WorkbenchMuted)
+                            Text("${task.id.take(8)} · ${if (task.createdAt>0) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(task.createdAt*1000)) else "服务器任务"}", Modifier.padding(top=7.dp), fontSize=10.sp, color=WorkbenchMuted)
                             if (task.state in setOf("running", "pausing", "paused", "cancelling")) {
                                 val counts=task.progress.optJSONObject("counts")
                                 val total=counts?.optInt("total") ?: 0
@@ -371,10 +384,10 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                     task.progress.optString("phase") == "synthesis" ->
                                         if (task.progress.optBoolean("retrying")) "重试失败片段" else "合成进度"
                                     else -> "等待 worker 处理"
-                                }) + if (total>0) " · $completed / $total 段" else "", Modifier.padding(top=12.dp), fontSize=12.sp, color=Muted)
-                                if (total>0) LinearProgressIndicator(progress={completed.toFloat()/total}, modifier=Modifier.fillMaxWidth().padding(top=10.dp).height(3.dp), color=Accent, trackColor=Rule)
+                                }) + if (total>0) " · $completed / $total 段" else "", Modifier.padding(top=12.dp), fontSize=12.sp, color=WorkbenchMuted)
+                                if (total>0) LinearProgressIndicator(progress={completed.toFloat()/total}, modifier=Modifier.fillMaxWidth().padding(top=10.dp).height(3.dp), color=WorkbenchAccent, trackColor=WorkbenchWhite.copy(.12f))
                             }
-                            (delivery?.error ?: saved.error ?: task.error)?.let { Text(it, Modifier.padding(top=9.dp), color=Accent, fontSize=11.sp, maxLines=3) }
+                            (delivery?.error ?: saved.error ?: task.error)?.let { Text(it, Modifier.padding(top=9.dp), color=WorkbenchAccent, fontSize=11.sp, maxLines=3) }
                             if (task.state in setOf("queued", "running", "paused", "pausing", "cancelling")) {
                                 Row(
                                     Modifier.fillMaxWidth().padding(top=8.dp),
@@ -387,24 +400,24 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                                 withContext(Dispatchers.IO) { repository.pauseTask(config, task.id) }
                                                 loadSaved(config)
                                                 notify("已暂停，已合成的片段会保留；点击“继续合成”可从断点接着处理")
-                                            }}}) { Text("暂停", color=Accent) }
+                                        }}}) { Text("暂停", color=WorkbenchAccent) }
                                         }
                                         "paused" -> {
                                             TextButton(enabled=!busy, onClick={connection?.let {config -> runAction {
                                                 withContext(Dispatchers.IO) { repository.resumeTask(config, task.id) }
                                                 loadSaved(config)
                                                 notify("已继续合成，已完成的片段不会重复生成")
-                                            }}}) { Text("继续合成", color=Accent) }
+                                        }}}) { Text("继续合成", color=WorkbenchAccent) }
                                         }
-                                        "pausing" -> Text("正在暂停…", Modifier.padding(horizontal=12.dp), fontSize=12.sp, color=Muted)
-                                        "cancelling" -> Text("正在取消…", Modifier.padding(horizontal=12.dp), fontSize=12.sp, color=Muted)
+                                        "pausing" -> Text("正在暂停…", Modifier.padding(horizontal=12.dp), fontSize=12.sp, color=WorkbenchMuted)
+                                        "cancelling" -> Text("正在取消…", Modifier.padding(horizontal=12.dp), fontSize=12.sp, color=WorkbenchMuted)
                                     }
                                     if (task.state != "pausing" && task.state != "cancelling") {
                                         TextButton(enabled=!busy, onClick={connection?.let {config -> runAction {
                                             withContext(Dispatchers.IO) { repository.cancelTask(config, task.id) }
                                             loadSaved(config)
                                             notify("已取消合成任务")
-                                        }}}) { Text("取消", color=Muted) }
+                                    }}}) { Text("取消", color=WorkbenchMuted) }
                                     }
                                 }
                             }
@@ -416,31 +429,31 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                                     try {withContext(Dispatchers.IO) {repository.publish(config,key)}}
                                     finally {loadSaved(config)}
                                     notify("已重试失败片段，成功音频会复用；完成后自动导入")
-                                }}}) {Text("重试失败片段",color=Accent)}
+                                }}}) {Text("重试失败片段",color=WorkbenchAccent)}
                             }
                             if (task.state == "completed" && saved.importedAt == 0L && !expired && (delivery == null || delivery.state == "blocked")) {
                                 TextButton(enabled=!busy && hasLocalBook, onClick={connection?.let {config -> runAction {
                                     withContext(Dispatchers.IO) { SynthesisDownloads.retry(context,config,task.id) }
                                     loadSaved(config)
                                     notify("已加入后台下载，完成后会自动导入")
-                                }}}) { Glyph("download", if(hasLocalBook) Accent else Muted, size=16.dp); Text(if(hasLocalBook) (if(delivery==null) "下载并导入" else "重试自动导入") else "请先导入对应小说", Modifier.padding(start=6.dp), color=if(hasLocalBook) Accent else Muted) }
+                                }}}) { Glyph("download", if(hasLocalBook) WorkbenchAccent else WorkbenchMuted, size=16.dp); Text(if(hasLocalBook) (if(delivery==null) "下载并导入" else "重试自动导入") else "请先导入对应小说", Modifier.padding(start=6.dp), color=if(hasLocalBook) WorkbenchAccent else WorkbenchMuted) }
                             }
                         }
                         }
                     }
-                    if (visibleTasks.isEmpty() && visiblePending.isEmpty()) item { Text(if (localTaskBooks.isEmpty()) "本地书架中还没有可显示的合成任务。" else "当前筛选下还没有合成任务。", Modifier.padding(vertical=24.dp), color=Muted, fontSize=13.sp, lineHeight=22.sp) }
+                    if (visibleTasks.isEmpty() && visiblePending.isEmpty()) item { Text(if (localTaskBooks.isEmpty()) "本地书架中还没有可显示的合成任务。" else "当前筛选下还没有合成任务。", Modifier.padding(vertical=24.dp), color=WorkbenchMuted, fontSize=13.sp, lineHeight=22.sp) }
                     if (cursor != null) item {
-                        OutlinedButton(enabled=!busy && !refreshing, onClick={connection?.let {config -> scope.launch {refresh(config,cursor)}}}, modifier=Modifier.fillMaxWidth()) {Text("加载更早的任务", color=Accent)}
+                        OutlinedButton(enabled=!busy && !refreshing, onClick={connection?.let {config -> scope.launch {refresh(config,cursor)}}}, modifier=Modifier.fillMaxWidth()) {Text("加载更早的任务", color=WorkbenchAccent)}
                     }
                     item {
-                        HorizontalDivider(color=Rule)
-                        Text("通过任务 ID 查找", Modifier.padding(top=18.dp, bottom=9.dp), fontSize=13.sp, color=Ink)
+                        HorizontalDivider(color=WorkbenchWhite.copy(.12f))
+                        Text("通过任务 ID 查找", Modifier.padding(top=18.dp, bottom=9.dp), fontSize=13.sp, color=WorkbenchWhite)
                         OutlinedTextField(lookupId, {lookupId=it}, Modifier.fillMaxWidth(), enabled=!busy, singleLine=true,
                             placeholder={Text("粘贴服务器任务 ID", fontSize=12.sp)}, shape=RoundedCornerShape(12.dp))
                         TextButton(enabled=!busy && lookupId.isNotBlank() && connection != null, onClick={connection?.let {config -> runAction {
                             withContext(Dispatchers.IO) { repository.lookup(config, lookupId.trim()) }
                             loadSaved(config); lookupId=""
-                        }}}) {Text("查找任务", color=Accent)}
+                        }}}) {Text("查找任务", color=WorkbenchAccent)}
                     }
                 }
             }
@@ -489,19 +502,31 @@ private fun RelaySettingsDialog(current: RelayConnection?, repository: Synthesis
             }
         }
     }
-    AlertDialog(onDismissRequest={if(!testing) onDismiss()}, title={Text("任务服务器", fontFamily=Serif)},
+    AlertDialog(onDismissRequest={if(!testing) onDismiss()}, title={Text("任务服务器", fontFamily=Serif, color=WorkbenchWhite)},
         text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
-            Text("连接通用任务中转服务", fontSize=12.sp, color=Muted)
+            Text("连接通用任务中转服务", fontSize=12.sp, color=WorkbenchMuted)
             OutlinedTextField(endpoint, {endpoint=it}, Modifier.fillMaxWidth(), enabled=!testing, label={Text("服务器地址")}, singleLine=true,
-                keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Uri))
+                keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Uri),
+                colors=OutlinedTextFieldDefaults.colors(
+                    focusedTextColor=WorkbenchWhite, unfocusedTextColor=WorkbenchWhite,
+                    focusedBorderColor=WorkbenchAccent, unfocusedBorderColor=WorkbenchMuted,
+                    focusedLabelColor=WorkbenchAccent, unfocusedLabelColor=WorkbenchMuted,
+                    cursorColor=WorkbenchAccent
+                ))
             OutlinedTextField(token, {token=it}, Modifier.fillMaxWidth(), enabled=!testing, label={Text("接入凭据")}, singleLine=true,
-                visualTransformation=PasswordVisualTransformation(), keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password))
-            Text("凭据仅保存在本机。IP 联调使用 HTTP，域名部署可改用 HTTPS。", fontSize=11.sp, lineHeight=18.sp, color=Muted)
-            Text("山页 ${BuildConfig.VERSION_NAME}",fontSize=10.sp,color=Muted)
+                visualTransformation=PasswordVisualTransformation(), keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),
+                colors=OutlinedTextFieldDefaults.colors(
+                    focusedTextColor=WorkbenchWhite, unfocusedTextColor=WorkbenchWhite,
+                    focusedBorderColor=WorkbenchAccent, unfocusedBorderColor=WorkbenchMuted,
+                    focusedLabelColor=WorkbenchAccent, unfocusedLabelColor=WorkbenchMuted,
+                    cursorColor=WorkbenchAccent
+                ))
+            Text("凭据仅保存在本机。IP 联调使用 HTTP，域名部署可改用 HTTPS。", fontSize=11.sp, lineHeight=18.sp, color=WorkbenchMuted)
+            Text("山页 ${BuildConfig.VERSION_NAME}",fontSize=10.sp,color=WorkbenchMuted)
             TextButton(enabled=!testing, onClick={importConnection.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))}) {
-                Text("导入连接配置文件", color=Accent)
+                Text("导入连接配置文件", color=WorkbenchAccent)
             }
-            error?.let {Text(it, color=Accent, fontSize=12.sp)}
+            error?.let {Text(it, color=WorkbenchAccent, fontSize=12.sp)}
         }},
         confirmButton={TextButton(enabled=!testing, onClick={
             testing=true; error=null
@@ -514,6 +539,6 @@ private fun RelaySettingsDialog(current: RelayConnection?, repository: Synthesis
                 } catch (failure: Exception) {error=failure.message ?: "无法连接服务器"}
                 finally {testing=false}
             }
-        }) {Text(if(testing) "连接中…" else "连接并保存", color=Accent)}},
-        dismissButton={TextButton(enabled=!testing, onClick=onDismiss) {Text("稍后", color=Muted)}}, containerColor=Paper)
+        }) {Text(if(testing) "连接中…" else "连接并保存", color=WorkbenchAccent)}},
+        dismissButton={TextButton(enabled=!testing, onClick=onDismiss) {Text("稍后", color=WorkbenchMuted)}}, containerColor=WorkbenchPanel)
 }

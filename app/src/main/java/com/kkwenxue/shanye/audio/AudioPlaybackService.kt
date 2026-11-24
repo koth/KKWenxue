@@ -68,11 +68,7 @@ class AudioPlaybackService : Service() {
     private var player: MediaPlayer? = null
     private lateinit var session: MediaSession
     private lateinit var library: AudioLibrary
-    private lateinit var audio: AudioManager
-    private lateinit var focus: AudioFocusRequest
     private val handler = Handler(Looper.getMainLooper())
-    private var resumeAfterFocus = false
-    private var focusDucked = false
     private var playWhenReady = true
     private var savedAt = 0L
     private var lastSavedPosition: Int? = null
@@ -106,33 +102,6 @@ class AudioPlaybackService : Service() {
         AudioPlayback.restore(this)
         library = AudioLibrary(this)
         AudioPlayback.checkpointWriter = { refreshPosition(); save() }
-        audio = getSystemService(AudioManager::class.java)
-        focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(attributes()).setWillPauseWhenDucked(false)
-            .setOnAudioFocusChangeListener { change ->
-                when (change) {
-                    AudioManager.AUDIOFOCUS_GAIN -> {
-                        if (focusDucked) {
-                            focusDucked = false
-                            setPlayerVolume(1f)
-                            publish()
-                        }
-                        resumeAfterFocus = false
-                    }
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
-                    AudioManager.AUDIOFOCUS_LOSS -> {
-                        // Keep a narrated book running when another app starts audio. Lowering
-                        // our volume lets the other source be heard without losing the reading
-                        // position or requiring a second manual play action.
-                        if (AudioPlayback.playing) {
-                            focusDucked = true
-                            setPlayerVolume(.18f)
-                            publish()
-                        }
-                    }
-                }
-            }.build()
         session = MediaSession(this, "山页听书").apply {
             setCallback(object : MediaSession.Callback() {
                 override fun onPlay() = resume()
@@ -194,7 +163,9 @@ class AudioPlaybackService : Service() {
             media.setDataSource(item.file.path)
             media.setOnPreparedListener {
                 AudioPlayback.preparing = false
-                setPlayerVolume(if (focusDucked) .18f else 1f)
+                // This player intentionally does not request audio focus. Keep its own
+                // output at full application volume so another app can mix alongside it.
+                setPlayerVolume(1f)
                 applySpeed(AudioPlayback.speed)
                 if (AudioPlayback.position > 0) seek(AudioPlayback.position, persist = false)
                 if (playWhenReady) resume() else publish()
@@ -238,7 +209,6 @@ class AudioPlaybackService : Service() {
             }
         }
         playWhenReady = false
-        audio.abandonAudioFocusRequest(focus)
         publish()
         stopForeground(STOP_FOREGROUND_DETACH)
     }
@@ -246,32 +216,23 @@ class AudioPlaybackService : Service() {
     private fun resume() {
         playWhenReady = true
         if (AudioPlayback.preparing || player == null) return
-        if (audio.requestAudioFocus(focus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            AudioPlayback.error = "暂时无法取得音频播放权限，请稍后重试"
-            publish()
-            stopForeground(STOP_FOREGROUND_DETACH)
-            return
-        }
         if (AudioPlayback.position >= (AudioPlayback.current?.durationMs ?: 0)) seek(0)
         player?.start()
         AudioPlayback.playing = true
         // Checkpoint the new chapter as soon as it starts, before the next ticker save.
         save()
         AudioPlayback.error = null
-        resumeAfterFocus = false
         startForeground(NOTIFICATION, notification())
         publish()
     }
 
-    private fun pause(abandon: Boolean = true) {
+    private fun pause() {
         playWhenReady = false
-        resumeAfterFocus = false
         if (!AudioPlayback.preparing && player != null) {
             player?.pause()
             refreshPosition()
         }
         AudioPlayback.playing = false
-        if (abandon) audio.abandonAudioFocusRequest(focus)
         save()
         publish()
         stopForeground(STOP_FOREGROUND_DETACH)
@@ -389,7 +350,6 @@ class AudioPlaybackService : Service() {
         handler.removeCallbacks(ticker)
         unregisterReceiver(noisy)
         player?.release()
-        audio.abandonAudioFocusRequest(focus)
         session.release()
         library.close()
         AudioPlayback.playing = false

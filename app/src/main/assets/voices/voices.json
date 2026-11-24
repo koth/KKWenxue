@@ -3,12 +3,8 @@
     {
       "speaker": "clone:linchuan-zonos3-v1",
       "name": "林川",
-      "codes_path": "voices/LinChuan.codes.npy"
-    },
-    {
-      "speaker": "zonos:haoran",
-      "name": "Haoran",
-      "codes_path": "voices/Haoran.codes.npy"
+      "codes_path": "voices/LinChuan.codes.npy",
+      "reference_text": "林川推开那扇老旧的木门时，山谷里还笼着一层薄雾。远处的河水缓缓流过，偶尔传来几声鸟鸣。他站在门前，没有立刻往前走。"
     }
   ]
 }

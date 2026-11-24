@@ -5,7 +5,9 @@ import android.app.ActivityManager
 import android.os.Build
 import android.os.PowerManager
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -20,7 +22,14 @@ import com.kkwenxue.shanye.data.RelayConnection
 private fun localTtsSha256(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
     .joinToString("") { "%02x".format(it) }
 private const val LOCAL_TTS_PAUSE_RULE_REVISION = "punctuation-pauses-v3-${TtsTextNormalizer.REVISION}"
-private const val LOCAL_TTS_SYNTHESIS_POLICY_REVISION = "short-text-stabilization-v1"
+private const val LOCAL_TTS_SYNTHESIS_POLICY_REVISION = "short-text-stabilization-v2"
+
+private fun localTtsWavHeader(pcmBytes: Int, sampleRate: Int): ByteArray =
+    ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+        .put("RIFF".toByteArray()).putInt(36 + pcmBytes).put("WAVE".toByteArray())
+        .put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(sampleRate)
+        .putInt(sampleRate * 2).putShort(2).putShort(16).put("data".toByteArray()).putInt(pcmBytes)
+        .array()
 
 data class LocalTtsSegmentKey(
     val bookId: String,
@@ -135,6 +144,9 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         cancelled.set(false)
         state.value = LocalTtsRuntimeState.Generating(key.chapterId, key.segmentIndex)
         val codes = modelPack.file(manifest, voice.codes)
+        require(codes.isFile && codes.length() > 0) {
+            "本地声线编码文件不存在：${voice.name}（${voice.codes}）"
+        }
         var pcm: ByteArray? = null
         var lastError: Throwable? = null
         repeat(3) { attempt ->
@@ -186,7 +198,6 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         val pieces = mutableListOf<Piece>()
         pieces += Piece(-1, 0, 0, chapter.title)
         pieces += sentencePieces(chapter.text)
-        val pcm = java.io.ByteArrayOutputStream()
         val cues = mutableListOf<AudioCue>()
         var positionMs = 0
         var previousTtsText: String? = null
@@ -194,75 +205,92 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         val resumeOffset = startOffset.coerceIn(0, chapter.text.length)
         var streamingStarted = resumeOffset <= 0
         var streamOriginMs = 0
-        for ((piecePosition, piece) in pieces.withIndex()) {
-            waitUntilRunnable()
-            if (cancelled.get()) throw java.util.concurrent.CancellationException("本地语音合成已取消")
-            val ttsText = TtsTextNormalizer.normalize(piece.text)
-            if (ttsText.isBlank() || !TtsTextNormalizer.containsSpokenContent(ttsText)) continue
-            val shouldStream = resumeOffset <= 0 || (piece.index >= 0 && piece.end > resumeOffset)
-            previousTtsText?.let { previous ->
-                val pauseMs = if (previousPieceIndex == -1) TITLE_PAUSE_MS else pauseFor(previous)
-                if (pauseMs > 0) {
-                    val silence = ByteArray(pauseMs * SAMPLE_RATE / 1000 * 2)
-                    pcm.write(silence)
-                    // Do not replay the pause that belongs to text before the
-                    // resume point. It is part of the complete chapter file,
-                    // but the live stream starts at the first resumed cue.
-                    if (shouldStream && streamingStarted) {
-                        onSegment(LocalTtsStreamSegment(null, silence, isPause = true, totalSegments = pieces.size))
-                    }
-                    positionMs += pauseMs
-                }
-            }
-            val stabilizeShortText = piece.index < 0 || ttsText.length <= SHORT_TEXT_CHAR_LIMIT
-            val key = LocalTtsSegmentKey(
-                book.id,
-                chapter.id,
-                sourceRevision,
-                piece.index,
-                ttsText,
-                voice.id,
-                manifest.revision,
-                "${manifest.engineRevision}:$LOCAL_TTS_SYNTHESIS_POLICY_REVISION"
-            )
-            val segment = synthesizeSegment(
-                key,
-                piece.start,
-                piece.end,
-                stabilizeShortText = stabilizeShortText
-            )
-            val bytes = segment.path.readBytes()
-            require(bytes.size > 44 && bytes.copyOfRange(0, 4).contentEquals("RIFF".toByteArray())) { "本地片段 WAV 无效" }
-            val payload = bytes.copyOfRange(44, bytes.size)
-            pcm.write(payload)
-            val endMs = positionMs + segment.samples * 1000 / SAMPLE_RATE
-            val kind = if (piece.index < 0) "title" else "body"
-            val cue = AudioCue(positionMs, endMs, if (kind == "title") 0 else piece.start,
-                if (kind == "title") 0 else piece.end, piece.text, kind)
-            cues += cue
-            // When resuming, the complete chapter still keeps its original
-            // cue timeline, but the live player starts at the first sentence
-            // after the checkpoint. Rebase emitted cues to that live stream so
-            // sentence highlighting and progress remain aligned.
-            if (shouldStream) {
-                if (!streamingStarted) {
-                    streamingStarted = true
-                    streamOriginMs = cue.startMs
-                }
-                val liveCue = cue.copy(
-                    startMs = (cue.startMs - streamOriginMs).coerceAtLeast(0),
-                    endMs = (cue.endMs - streamOriginMs).coerceAtLeast(1)
-                )
-                onSegment(LocalTtsStreamSegment(liveCue, payload, segmentIndex = piecePosition, totalSegments = pieces.size))
-            }
-            positionMs = endMs
-            previousTtsText = ttsText
-            previousPieceIndex = piece.index
-        }
         val chapterId = localTtsSha256("chapter:${book.id}:${chapter.id}:$sourceRevision:${voice.id}:${manifest.revision}")
         val output = File(root, "$chapterId.wav")
-        writeWav(output, pcm.toByteArray(), SAMPLE_RATE)
-        return LocalTtsChapterResult(output, positionMs, cues, voice.id, voice.name, sourceRevision, LOCAL_TTS_PAUSE_RULE_REVISION)
+        val temporary = File(root, ".${chapterId}.${UUID.randomUUID()}.part")
+        val wav = WavStreamWriter(temporary, SAMPLE_RATE)
+        try {
+            for ((piecePosition, piece) in pieces.withIndex()) {
+                waitUntilRunnable()
+                if (cancelled.get()) throw java.util.concurrent.CancellationException("本地语音合成已取消")
+                val ttsText = TtsTextNormalizer.normalize(piece.text)
+                if (ttsText.isBlank() || !TtsTextNormalizer.containsSpokenContent(ttsText)) continue
+                val shouldStream = resumeOffset <= 0 || (piece.index >= 0 && piece.end > resumeOffset)
+                previousTtsText?.let { previous ->
+                    val pauseMs = if (previousPieceIndex == -1) TITLE_PAUSE_MS else pauseFor(previous)
+                    if (pauseMs > 0) {
+                        val silence = ByteArray(pauseMs * SAMPLE_RATE / 1000 * 2)
+                        wav.write(silence)
+                        // Do not replay the pause that belongs to text before the
+                        // resume point. It is part of the complete chapter file,
+                        // but the live stream starts at the first resumed cue.
+                        if (shouldStream && streamingStarted) {
+                            onSegment(LocalTtsStreamSegment(null, silence, isPause = true, totalSegments = pieces.size))
+                        }
+                        positionMs += pauseMs
+                    }
+                }
+                // The short-text workaround runs several native generations with a
+                // filler sentence. Applying it to a long chapter title makes the
+                // very first segment appear hung and can multiply startup latency.
+                // Keep it for genuinely short speech, but synthesize longer titles
+                // directly so playback can start promptly.
+                // Keep the first body sentence on the normal one-pass path. The
+                // filler-based short-text path is useful for tiny titles, but on
+                // a resumed chapter it can make the current sentence require
+                // several full native generations before any PCM is available.
+                val stabilizeShortText = piece.index < 0 &&
+                    ttsText.count { it.isLetterOrDigit() || it.code > 0x7f } <= SHORT_TITLE_CHAR_LIMIT
+                val key = LocalTtsSegmentKey(
+                    book.id,
+                    chapter.id,
+                    sourceRevision,
+                    piece.index,
+                    ttsText,
+                    voice.id,
+                    manifest.revision,
+                    "${manifest.engineRevision}:$LOCAL_TTS_SYNTHESIS_POLICY_REVISION"
+                )
+                val segment = synthesizeSegment(
+                    key,
+                    piece.start,
+                    piece.end,
+                    stabilizeShortText = stabilizeShortText
+                )
+                val payload = readWavPayload(segment.path)
+                wav.write(payload)
+                val endMs = positionMs + segment.samples * 1000 / SAMPLE_RATE
+                val kind = if (piece.index < 0) "title" else "body"
+                val cue = AudioCue(positionMs, endMs, if (kind == "title") 0 else piece.start,
+                    if (kind == "title") 0 else piece.end, piece.text, kind)
+                cues += cue
+                // When resuming, the complete chapter still keeps its original
+                // cue timeline, but the live player starts at the first sentence
+                // after the checkpoint. Rebase emitted cues to that live stream so
+                // sentence highlighting and progress remain aligned.
+                if (shouldStream) {
+                    if (!streamingStarted) {
+                        streamingStarted = true
+                        streamOriginMs = cue.startMs
+                    }
+                    val liveCue = cue.copy(
+                        startMs = (cue.startMs - streamOriginMs).coerceAtLeast(0),
+                        endMs = (cue.endMs - streamOriginMs).coerceAtLeast(1)
+                    )
+                    onSegment(LocalTtsStreamSegment(liveCue, payload, segmentIndex = piecePosition, totalSegments = pieces.size))
+                }
+                positionMs = endMs
+                previousTtsText = ttsText
+                previousPieceIndex = piece.index
+            }
+            wav.finish()
+            if (output.exists() && !output.delete()) error("无法替换本地章节音频")
+            require(temporary.renameTo(output)) { "发布本地章节音频失败" }
+            return LocalTtsChapterResult(output, positionMs, cues, voice.id, voice.name, sourceRevision, LOCAL_TTS_PAUSE_RULE_REVISION)
+        } catch (error: Throwable) {
+            wav.abort()
+            throw error
+        }
     }
 
     fun removeSegment(key: LocalTtsSegmentKey) { File(root, "${key.id()}.wav").delete() }
@@ -270,14 +298,38 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
     private fun writeWav(file: File, pcm: ByteArray, sampleRate: Int) {
         file.parentFile?.mkdirs()
         FileOutputStream(file).use { output ->
-            val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
-            header.put("RIFF".toByteArray()).putInt(36 + pcm.size).put("WAVE".toByteArray())
-                .put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(sampleRate)
-                .putInt(sampleRate * 2).putShort(2).putShort(16).put("data".toByteArray()).putInt(pcm.size)
-            output.write(header.array())
+            output.write(localTtsWavHeader(pcm.size, sampleRate))
             output.write(pcm)
             output.fd.sync()
         }
+    }
+
+    private fun readWavPayload(file: File): ByteArray {
+        require(isValidWav(file)) { "本地片段 WAV 无效" }
+        require(file.length() - 44L <= Int.MAX_VALUE.toLong()) { "本地片段 WAV 过大" }
+        val payloadSize = (file.length() - 44L).toInt()
+        require(payloadSize > 0) { "本地片段 WAV 没有音频数据" }
+        val payload = ByteArray(payloadSize)
+        FileInputStream(file).use { input ->
+            var headerRemaining = 44
+            while (headerRemaining > 0) {
+                val count = input.skip(headerRemaining.toLong()).toInt()
+                if (count > 0) {
+                    headerRemaining -= count
+                } else if (input.read() >= 0) {
+                    headerRemaining--
+                } else {
+                    error("本地片段 WAV 头部不完整")
+                }
+            }
+            var offset = 0
+            while (offset < payload.size) {
+                val count = input.read(payload, offset, payload.size - offset)
+                if (count < 0) error("本地片段 WAV 数据不完整")
+                offset += count
+            }
+        }
+        return payload
     }
 
     private fun wavSamples(file: File): Int = ((file.length() - 44).coerceAtLeast(0) / 2L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
@@ -299,6 +351,36 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
             !header.copyOfRange(36, 40).contentEquals("data".toByteArray())) return false
         val payload = ByteBuffer.wrap(header, 40, 4).order(ByteOrder.LITTLE_ENDIAN).int
         return payload > 0 && payload % 2 == 0 && 44L + payload == file.length()
+    }
+
+    private class WavStreamWriter(private val file: File, private val sampleRate: Int) {
+        private var output: FileOutputStream? = FileOutputStream(file).also { it.write(ByteArray(44)) }
+        private var payloadBytes = 0L
+
+        fun write(pcm: ByteArray) {
+            require(pcm.size % 2 == 0) { "PCM 数据长度必须为偶数" }
+            output?.write(pcm) ?: error("WAV 输出已关闭")
+            payloadBytes += pcm.size
+        }
+
+        fun finish() {
+            val current = output ?: error("WAV 输出已关闭")
+            require(payloadBytes in 2..Int.MAX_VALUE.toLong()) { "章节音频过大或为空" }
+            current.fd.sync()
+            current.close()
+            output = null
+            RandomAccessFile(file, "rw").use { raf ->
+                raf.seek(0)
+                raf.write(localTtsWavHeader(payloadBytes.toInt(), sampleRate))
+                raf.fd.sync()
+            }
+        }
+
+        fun abort() {
+            output?.runCatching { close() }
+            output = null
+            file.delete()
+        }
     }
 
     private fun waitUntilRunnable() {
@@ -331,31 +413,57 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         var start = 0
         var index = 0
         while (start < text.length) {
-            var offset = start
-            var boundary = -1
-            while (offset < text.length) {
-                val character = text[offset]
-                val length = offset + 1 - start
-                val hardBoundary = length >= MAX_PIECE_CHARS
-                val softBoundary = length >= MIN_SOFT_PIECE_CHARS &&
-                    character in "，,、；;：:\n"
-                if (character in "。！？!?…") {
-                    var end = offset + 1
-                    while (end < text.length && text[end] in "。！？!?…”’」』》〉）)]}】〕》\"'") end++
-                    boundary = end
-                    break
-                }
-                if (hardBoundary || softBoundary) {
-                    boundary = offset + 1
-                    break
-                }
-                offset++
+            val hardEnd = findHardBoundary(text, start)
+            val remaining = text.length - start
+            // Keep ordinary short sentences intact. Long sentences are split
+            // around a comma/semicolon near the target size, rather than at
+            // the first punctuation after the minimum size.
+            val boundary = when {
+                remaining <= MAX_PIECE_CHARS -> text.length
+                hardEnd != null && hardEnd - start <= MAX_PIECE_CHARS -> hardEnd
+                else -> chooseLongPieceBoundary(text, start, hardEnd ?: text.length)
             }
-            if (boundary < 0) boundary = text.length
             if (boundary > start) result += Piece(index++, start, boundary, text.substring(start, boundary))
             start = boundary
         }
         return result.ifEmpty { listOf(Piece(0, 0, text.length, text)) }
+    }
+
+    private fun findHardBoundary(text: String, start: Int): Int? {
+        for (offset in start until text.length) {
+            if (text[offset] in HARD_BOUNDARIES) {
+                return includeClosingPunctuation(text, offset + 1)
+            }
+        }
+        return null
+    }
+
+    private fun chooseLongPieceBoundary(text: String, start: Int, sentenceEnd: Int): Int {
+        val maxEnd = minOf(text.length, start + MAX_PIECE_CHARS, sentenceEnd)
+        val minEnd = minOf(text.length, start + MIN_SOFT_PIECE_CHARS)
+        val target = minOf(text.length, start + TARGET_PIECE_CHARS, sentenceEnd)
+        var best: Int? = null
+        var bestDistance = Int.MAX_VALUE
+        for (offset in minEnd until maxEnd) {
+            if (text[offset] !in SOFT_BOUNDARIES) continue
+            val candidate = includeClosingPunctuation(text, offset + 1)
+            if (candidate > maxEnd) continue
+            // Avoid making a tiny tail when a slightly earlier split gives a
+            // more balanced pair of chunks.
+            if (sentenceEnd - candidate in 1 until MIN_SOFT_PIECE_CHARS) continue
+            val distance = kotlin.math.abs(candidate - target)
+            if (distance < bestDistance) {
+                best = candidate
+                bestDistance = distance
+            }
+        }
+        return best ?: minOf(text.length, start + TARGET_PIECE_CHARS, sentenceEnd)
+    }
+
+    private fun includeClosingPunctuation(text: String, initialEnd: Int): Int {
+        var end = initialEnd
+        while (end < text.length && text[end] in CLOSING_PUNCTUATION) end++
+        return end
     }
 
     companion object {
@@ -363,9 +471,14 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         const val DEFAULT_VOICE_ID = "clone-linchuan-zonos3-v1"
         const val PAUSE_RULE_REVISION = "punctuation-pauses-v3-tts-text-normalization-v1"
         private const val MIN_FREE_BYTES = 128L * 1024 * 1024
-        private const val MIN_SOFT_PIECE_CHARS = 48
-        private const val MAX_PIECE_CHARS = 96
+        private const val TARGET_PIECE_CHARS = 64
+        private const val MIN_SOFT_PIECE_CHARS = 36
+        private const val MAX_PIECE_CHARS = 88
         private const val SHORT_TEXT_CHAR_LIMIT = 24
+        private const val SHORT_TITLE_CHAR_LIMIT = 12
         private const val TITLE_PAUSE_MS = 700
+        private const val HARD_BOUNDARIES = "。！？!?…"
+        private const val SOFT_BOUNDARIES = "，,、；;：:\n"
+        private const val CLOSING_PUNCTUATION = "。！？!?…”’」』》〉）)]}】〕》\"'"
     }
 }

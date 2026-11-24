@@ -5,7 +5,9 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -34,15 +36,21 @@ std::string toString(JNIEnv * env, jstring value) {
 }
 
 jbyteArray pcm16(JNIEnv * env, const std::vector<float> & audio) {
-    std::vector<int16_t> out(audio.size());
+    if (audio.size() > static_cast<size_t>(std::numeric_limits<jsize>::max()) / sizeof(int16_t)) return nullptr;
+    const jsize bytes = static_cast<jsize>(audio.size() * sizeof(int16_t));
+    jbyteArray result = env->NewByteArray(bytes);
+    if (!result) return nullptr;
+    jbyte * out = env->GetByteArrayElements(result, nullptr);
+    if (!out) {
+        env->DeleteLocalRef(result);
+        return nullptr;
+    }
     for (size_t i = 0; i < audio.size(); ++i) {
         const float value = std::isfinite(audio[i]) ? std::clamp(audio[i], -1.0f, 1.0f) : 0.0f;
-        out[i] = static_cast<int16_t>(std::lrint(value * 32767.0f));
+        const int16_t sample = static_cast<int16_t>(std::lrint(value * 32767.0f));
+        std::memcpy(out + i * sizeof(int16_t), &sample, sizeof(sample));
     }
-    jbyteArray result = env->NewByteArray(static_cast<jsize>(out.size() * sizeof(int16_t)));
-    if (!result) return nullptr;
-    env->SetByteArrayRegion(result, 0, static_cast<jsize>(out.size() * sizeof(int16_t)),
-                            reinterpret_cast<const jbyte *>(out.data()));
+    env->ReleaseByteArrayElements(result, out, 0);
     return result;
 }
 
@@ -54,6 +62,9 @@ struct Runtime {
     bool decoder_ready = false;
     std::string backbone_path;
     std::string decoder_path;
+    std::string reference_codes_path;
+    std::vector<int32_t> reference_codes;
+    int reference_frames = 0;
 
     ~Runtime() {
         if (decoder_ready) zac_free(decoder);
@@ -64,9 +75,16 @@ std::unique_ptr<Runtime> g_runtime;
 
 bool load_codes(const std::string & path, std::vector<int32_t> & out, int & frames) {
     std::ifstream input(path, std::ios::binary | std::ios::ate);
-    if (!input) return false;
+    if (!input) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "voice code file open failed: %s", path.c_str());
+        return false;
+    }
     const auto length = input.tellg();
-    if (length <= 0 || length > 64 * 1024 * 1024) return false;
+    if (length <= 0 || length > 64 * 1024 * 1024) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "voice code file has invalid size: %s (%lld)",
+                            path.c_str(), static_cast<long long>(length));
+        return false;
+    }
     std::vector<uint8_t> bytes(static_cast<size_t>(length));
     input.seekg(0);
     input.read(reinterpret_cast<char *>(bytes.data()), length);
@@ -84,6 +102,24 @@ bool load_codes(const std::string & path, std::vector<int32_t> & out, int & fram
         if (!std::isfinite(value) || value < 0 || value >= 4096 || std::floor(value) != value) return false;
         out[i] = static_cast<int32_t>(value);
     }
+    return true;
+}
+
+bool ensure_reference_codes(Runtime & runtime, const std::string & path) {
+    if (runtime.reference_codes_path == path && !runtime.reference_codes.empty() && runtime.reference_frames > 0) {
+        return true;
+    }
+    std::vector<int32_t> codes;
+    int frames = 0;
+    if (!load_codes(path, codes, frames)) {
+        runtime.reference_codes.clear();
+        runtime.reference_codes_path.clear();
+        runtime.reference_frames = 0;
+        return false;
+    }
+    runtime.reference_codes = std::move(codes);
+    runtime.reference_codes_path = path;
+    runtime.reference_frames = frames;
     return true;
 }
 
@@ -155,8 +191,17 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeLoad(JNIEnv * env, jclass, jst
     std::lock_guard<std::mutex> lock(g_mutex);
     const std::string backbone_path = toString(env, backbone);
     const std::string decoder_path = toString(env, decoder);
-    if (backbone_path.empty() || decoder_path.empty()) return JNI_FALSE;
+    __android_log_print(ANDROID_LOG_INFO, kTag, "loading model backbone=%s decoder=%s threads=%d",
+                        backbone_path.c_str(), decoder_path.c_str(), static_cast<int>(threads));
+    if (backbone_path.empty() || decoder_path.empty()) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "model path is empty");
+        return JNI_FALSE;
+    }
     if (g_runtime && g_runtime->backbone_path == backbone_path && g_runtime->decoder_path == decoder_path) return JNI_TRUE;
+    // Loading a new pack while the old one is still resident can briefly
+    // require both ~1.1 GB model sets. Release the old pack first so model
+    // upgrades do not create a transient OOM peak.
+    g_runtime.reset();
     g_cancelled.store(false);
     if (threads > 0) {
         std::string value = std::to_string(static_cast<int>(threads));
@@ -164,13 +209,20 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeLoad(JNIEnv * env, jclass, jst
         setenv("ZAC_THREADS", value.c_str(), 1);
     }
     auto next = std::make_unique<Runtime>();
-    if (!zonos3_model_load(next->backbone, backbone_path.c_str(), false)) return JNI_FALSE;
+    if (!zonos3_model_load(next->backbone, backbone_path.c_str(), false)) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "backbone load failed: %s", backbone_path.c_str());
+        return JNI_FALSE;
+    }
     next->backbone_ready = true;
-    if (!zac_load(next->decoder, decoder_path.c_str(), false)) return JNI_FALSE;
+    if (!zac_load(next->decoder, decoder_path.c_str(), false)) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "ZAC decoder load failed: %s", decoder_path.c_str());
+        return JNI_FALSE;
+    }
     next->decoder_ready = true;
     next->backbone_path = backbone_path;
     next->decoder_path = decoder_path;
     g_runtime = std::move(next);
+    __android_log_print(ANDROID_LOG_INFO, kTag, "model loaded successfully");
     return JNI_TRUE;
 #endif
 }
@@ -199,12 +251,22 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
     return nullptr;
 #else
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_runtime || !g_runtime->backbone_ready || !g_runtime->decoder_ready) return nullptr;
+    if (!g_runtime || !g_runtime->backbone_ready || !g_runtime->decoder_ready) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "synthesis requested before model load");
+        return nullptr;
+    }
     const std::string requested_text = toString(env, text);
-    if (requested_text.empty()) return nullptr;
-    std::vector<int32_t> reference;
-    int reference_frames = 0;
-    if (!load_codes(toString(env, codes_path), reference, reference_frames)) return nullptr;
+    const std::string reference_path = toString(env, codes_path);
+    if (requested_text.empty() || reference_path.empty()) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "synthesis input is empty");
+        return nullptr;
+    }
+    if (!ensure_reference_codes(*g_runtime, reference_path)) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "reference voice load failed: %s", reference_path.c_str());
+        return nullptr;
+    }
+    const std::vector<int32_t> & reference = g_runtime->reference_codes;
+    const int reference_frames = g_runtime->reference_frames;
     const bool stabilize = stabilize_short_text == JNI_TRUE;
 
     auto generate_audio = [&](const std::string & synthesis_text, const zonos3_sampling & sampling,
@@ -223,11 +285,21 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
         const int budget = std::max(1, std::min(static_cast<int>(max_frames),
                                                  static_cast<int>(g_runtime->backbone.hp.n_ctx_train) - prompt.n_rows));
         const int frames = zonos3_generate(g_runtime->backbone, prompt, budget, sampling, 1.0f, generated, eos_frame,
-                                           true, nullptr, {}, nullptr);
-        if (frames <= 0 || g_cancelled.load()) return false;
+                                           true, nullptr,
+                                           [](int, const int32_t *, int) {
+                                               return !g_cancelled.load();
+                                           },
+                                           nullptr);
+        if (frames <= 0 || g_cancelled.load()) {
+            __android_log_print(ANDROID_LOG_ERROR, kTag, "generation failed: frames=%d eos=%d text_bytes=%zu",
+                                frames, eos_frame, synthesis_text.size());
+            return false;
+        }
         std::vector<int32_t> codes = zonos3_prefill_codes(g_runtime->backbone, prompt);
         codes.insert(codes.end(), generated.begin(), generated.end());
         if (!zac_decode(g_runtime->decoder, codes.data(), static_cast<int>(codes.size() / 10), 10, eos_frame, audio)) {
+            __android_log_print(ANDROID_LOG_ERROR, kTag, "ZAC decode failed: code_frames=%zu eos=%d",
+                                codes.size() / 10, eos_frame);
             return false;
         }
         const size_t drop = std::min(audio.size(), static_cast<size_t>(prompt.prefill_frames) *
@@ -236,7 +308,11 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
         const float gain = zac_output_gain(g_runtime->decoder, -1.0);
         for (float & sample : audio) sample *= gain;
         zonos3_soft_limit(audio.data(), audio.size());
-        return !audio.empty();
+        if (audio.empty()) {
+            __android_log_print(ANDROID_LOG_ERROR, kTag, "ZAC produced empty audio");
+            return false;
+        }
+        return true;
     };
 
     if (stabilize) {

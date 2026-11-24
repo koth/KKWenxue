@@ -44,10 +44,10 @@ import java.util.Locale
 fun audioTime(ms: Int): String = "%02d:%02d".format(ms.coerceAtLeast(0) / 60000, ms.coerceAtLeast(0) / 1000 % 60)
 private fun speedLabel(speed: Float) = String.format(Locale.ROOT, "%.2f", speed).trimEnd('0').trimEnd('.') + "×"
 private enum class PlayerChooser { SPEED, TIMER, CHAPTERS, VOICES }
-private val PlayerWhite = Color(0xFFF7EEEA)
-private val PlayerMuted = PlayerWhite.copy(alpha=.62f)
-private val PlayerAccent = Color(0xFFFFC1AA)
-private val PlayerPanel = Color(0xFF382529)
+private val PlayerWhite = WorkbenchWhite
+private val PlayerMuted = WorkbenchMuted
+private val PlayerAccent = WorkbenchAccent
+private val PlayerPanel = WorkbenchPanel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -122,9 +122,12 @@ internal fun AudioPlayerScreen(
     var importing by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var showSynthesis by remember { mutableStateOf(false) }
+    var workbenchMode by remember(book?.id, requestedChapter?.id) {
+        mutableStateOf(if (displayItem != null) AudioWorkbenchMode.PLAYBACK else AudioWorkbenchMode.LOCAL_REALTIME)
+    }
     var localSynthesizing by remember { mutableStateOf(false) }
     val localLive by LocalTtsLivePlayback.state.collectAsState()
-    val liveBelongsToBook = book != null && localLive.bookId == book.id
+    val liveBelongsToBook = displayBook != null && localLive.bookId == displayBook.id
     val localLiveRunning = liveBelongsToBook && localLive.phase in setOf(
         LocalTtsLivePhase.PREPARING,
         LocalTtsLivePhase.PREBUFFERING,
@@ -183,9 +186,20 @@ internal fun AudioPlayerScreen(
         }
     }
     fun importAudio() = importFile.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+    val localBook = displayBook ?: book
+    val localChapterIndex = localLive.chapterIndex.takeIf { liveBelongsToBook && it in (localBook?.chapters?.indices ?: IntRange.EMPTY) }
+        ?: initialChapterIndex
+        ?: displayItem?.chapterIndex
+        ?: 0
+    val localChapterEntry = localBook != null && localChapterIndex in localBook.chapters.indices
+    val localStartOffset = if (book == null && displayItem != null) {
+        displayItem.offsetAt(position) ?: 0
+    } else {
+        initialTextOffset
+    }
     fun synthesizeLocally() {
-        val targetBook = book ?: return
-        val index = initialChapterIndex ?: return
+        val targetBook = localBook ?: return
+        val index = localChapterIndex.takeIf { it in targetBook.chapters.indices } ?: return
         if (localSynthesisActive) return
         localSynthesizing = true
         // The reader passes the current UTF-16 text offset. This is the
@@ -194,11 +208,11 @@ internal fun AudioPlayerScreen(
         // the chapter from its beginning.
         LocalTtsSynthesisService.start(
             context, targetBook.id, index,
-            startOffset = initialTextOffset.coerceAtLeast(0)
+            startOffset = localStartOffset.coerceAtLeast(0)
         )
     }
     fun stopSynthesis() {
-        if (book == null) return
+        if (localBook == null) return
         LocalTtsSynthesisService.stop(context)
         localSynthesizing = false
         message = "本地语音朗读已停止"
@@ -235,8 +249,21 @@ internal fun AudioPlayerScreen(
         onRead(item, item.offsetAt(time) ?: 0)
     }
     if (showSynthesis) {
-        SynthesisScreen(displayBook ?: book, displayItem?.chapterIndex ?: initialChapterIndex,
-            library, onImported, { showSynthesis=false }, availableBooks=shelfBooks)
+        SynthesisScreen(
+            displayBook ?: book,
+            displayItem?.chapterIndex ?: initialChapterIndex,
+            library,
+            onImported,
+            onClose = {
+                showSynthesis = false
+                workbenchMode = if (displayItem != null) AudioWorkbenchMode.PLAYBACK else AudioWorkbenchMode.LOCAL_REALTIME
+            },
+            onOpenLocal = {
+                showSynthesis = false
+                workbenchMode = AudioWorkbenchMode.LOCAL_REALTIME
+            },
+            availableBooks = shelfBooks
+        )
         return
     }
     LaunchedEffect(Unit) { AudioPlayback.restore(context) }
@@ -256,22 +283,33 @@ internal fun AudioPlayerScreen(
         val artworkArea = (maxHeight - 440.dp).coerceAtLeast(248.dp)
         val artworkHeight = (artworkArea - 82.dp).coerceIn(144.dp, 260.dp)
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal=24.dp)) {
-            Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment=Alignment.CenterVertically) {
-                PlayerIcon("collapse", "收起播放器", onClick=::closePlayer)
-                Spacer(Modifier.weight(1f))
-                TextButton(enabled=!importing, onClick={showSynthesis=true}) {
-                    Text("合成与导入", fontSize=12.sp, color=PlayerAccent)
-                }
-                TextButton(enabled=!importing, onClick=::importAudio) {
-                    Text(if (importing) "导入中…" else "导入听书包", fontSize=12.sp, color=PlayerMuted)
+            AudioWorkbenchHeader(
+                title = displayBook?.title ?: "听书工作台",
+                subtitle = displayItem?.title ?: requestedChapter?.title ?: "选择一种朗读方式开始",
+                mode = workbenchMode,
+                onModeSelected = { selected ->
+                    when (selected) {
+                        AudioWorkbenchMode.PLAYBACK -> {
+                            showSynthesis = false
+                            workbenchMode = AudioWorkbenchMode.PLAYBACK
+                        }
+                        AudioWorkbenchMode.LOCAL_REALTIME -> {
+                            showSynthesis = false
+                            workbenchMode = AudioWorkbenchMode.LOCAL_REALTIME
+                        }
+                        AudioWorkbenchMode.SERVER -> if (!importing) {
+                            workbenchMode = AudioWorkbenchMode.SERVER
+                            showSynthesis = true
+                        }
+                    }
+                },
+                onClose = ::closePlayer
+            ) {
+                TextButton(enabled = !importing, onClick = ::importAudio) {
+                    Text(if (importing) "导入中…" else "导入", fontSize = 11.sp, color = PlayerMuted)
                 }
             }
-            Column(Modifier.fillMaxWidth().padding(top=14.dp, bottom=4.dp)) {
-                Text(displayItem?.title ?: requestedChapter?.title ?: "听书", fontSize=23.sp, fontWeight=FontWeight.Medium,
-                    color=PlayerWhite, maxLines=2, overflow=TextOverflow.Ellipsis)
-                Text(displayBook?.title ?: "本地有声书", Modifier.padding(top=7.dp), fontSize=14.sp, color=PlayerMuted)
-            }
-            if (displayItem != null && displayBook != null) {
+            if (workbenchMode == AudioWorkbenchMode.PLAYBACK && displayItem != null && displayBook != null) {
                 Column(Modifier.fillMaxWidth().height(artworkArea), horizontalAlignment=Alignment.CenterHorizontally) {
                     Spacer(Modifier.weight(1f))
                     BookCover(displayBook, Modifier.width(artworkHeight * .735f).height(artworkHeight)
@@ -341,33 +379,65 @@ internal fun AudioPlayerScreen(
                         Text("定位原文", fontSize=13.sp, color=PlayerWhite)
                     }
                 }
-            } else {
-                Column(Modifier.fillMaxWidth().heightIn(min=440.dp), horizontalAlignment=Alignment.CenterHorizontally,
-                    verticalArrangement=Arrangement.Center) {
-                    Glyph("audio", PlayerMuted, size=52.dp)
-                    Text(if (localSynthesisActive) {
-                        if (localLive.phase == LocalTtsLivePhase.PLAYING) "正在边合成边播放" else "正在缓冲本地朗读"
-                    } else if (chapterEntry) "本章暂无听书内容" else "还没有听书音频", Modifier.padding(top=22.dp), fontSize=23.sp, color=PlayerWhite)
-                    Text(if (localSynthesisActive) {
-                        localLive.status.takeIf { liveBelongsToBook && it.isNotBlank() }
-                            ?: "正在准备本地语音，首次加载模型可能需要一点时间…"
-                    } else if (chapterEntry) "先合成当前章节，或导入包含本章的听书包。" else "从已导入的在线书籍中选择章节合成，或导入已有听书包。", Modifier.padding(top=12.dp), fontSize=12.sp,
-                        color=PlayerMuted, textAlign=TextAlign.Center)
+            } else if (workbenchMode == AudioWorkbenchMode.LOCAL_REALTIME) {
+                Column(Modifier.fillMaxWidth().heightIn(min=440.dp), horizontalAlignment=Alignment.CenterHorizontally) {
+                    displayBook?.let {
+                        BookCover(
+                            it,
+                            Modifier.padding(top=18.dp).width(artworkHeight * .54f).height(artworkHeight * .74f)
+                                .shadow(18.dp, RoundedCornerShape(10.dp)).clip(RoundedCornerShape(10.dp))
+                        )
+                    }
+                    Text(
+                        if (localSynthesisActive) {
+                            if (localLive.phase == LocalTtsLivePhase.PLAYING) "正在边合成边播放" else "正在缓冲本地朗读"
+                        } else if (localChapterEntry) "本章暂无听书内容" else "还没有可朗读的章节",
+                        Modifier.padding(top=22.dp),
+                        fontSize=22.sp,
+                        color=PlayerWhite
+                    )
+                    Text(
+                        if (localSynthesisActive) {
+                            localLive.status.takeIf { liveBelongsToBook && it.isNotBlank() }
+                                ?: "正在准备本地语音，首次加载模型可能需要一点时间…"
+                        } else if (localChapterEntry) "从当前句开始本地实时合成，前 5 句缓冲后开始播放。"
+                        else "请先打开一本书，再选择本地实时或服务器合成。",
+                        Modifier.padding(top=10.dp).padding(horizontal=20.dp),
+                        fontSize=12.sp,
+                        color=PlayerMuted,
+                        textAlign=TextAlign.Center
+                    )
                     if (localSynthesisActive && liveBelongsToChapter && localLive.currentText != null) {
-                        Text("当前逐句稿", Modifier.padding(top=22.dp), fontSize=12.sp, color=PlayerAccent)
-                        Text(localLive.currentText!!.trim(), Modifier.padding(top=8.dp).padding(horizontal=18.dp),
-                            maxLines=3, overflow=TextOverflow.Ellipsis, fontFamily=Serif, fontSize=17.sp,
-                            lineHeight=26.sp, color=PlayerWhite, textAlign=TextAlign.Center)
+                        Text("当前逐句稿", Modifier.padding(top=20.dp), fontSize=12.sp, color=PlayerAccent)
+                        Text(
+                            localLive.currentText!!.trim(),
+                            Modifier.padding(top=8.dp).padding(horizontal=18.dp),
+                            maxLines=3,
+                            overflow=TextOverflow.Ellipsis,
+                            fontFamily=Serif,
+                            fontSize=17.sp,
+                            lineHeight=26.sp,
+                            color=PlayerWhite,
+                            textAlign=TextAlign.Center
+                        )
                     }
                     if (localSynthesisActive && liveBelongsToBook && localLive.totalSegments > 0) {
                         val fraction = (localLive.playedSegments.toFloat() / localLive.totalSegments).coerceIn(0f, 1f)
-                        Text("合成 ${localLive.generatedSegments}/${localLive.totalSegments} · 播放 ${localLive.playedSegments}/${localLive.totalSegments}",
-                            Modifier.padding(top=14.dp), fontSize=12.sp, color=PlayerMuted)
-                        LinearProgressIndicator(progress={ fraction }, modifier=Modifier.fillMaxWidth().padding(top=8.dp, start=24.dp, end=24.dp),
-                            color=PlayerAccent, trackColor=PlayerWhite.copy(.16f))
+                        Text(
+                            "合成 ${localLive.generatedSegments}/${localLive.totalSegments} · 播放 ${localLive.playedSegments}/${localLive.totalSegments}",
+                            Modifier.padding(top=14.dp),
+                            fontSize=12.sp,
+                            color=PlayerMuted
+                        )
+                        LinearProgressIndicator(
+                            progress = { fraction },
+                            modifier = Modifier.fillMaxWidth().padding(top=8.dp, start=24.dp, end=24.dp),
+                            color = PlayerAccent,
+                            trackColor = PlayerWhite.copy(.16f)
+                        )
                     }
-                    if (chapterEntry) {
-                        Text("播放语速", Modifier.padding(top=22.dp), fontSize=12.sp, color=PlayerMuted)
+                    if (localChapterEntry) {
+                        Text("播放语速", Modifier.padding(top=20.dp), fontSize=12.sp, color=PlayerMuted)
                         Row(Modifier.fillMaxWidth().padding(top=8.dp), horizontalArrangement=Arrangement.spacedBy(6.dp)) {
                             AudioPlayback.supportedSpeeds.forEach { value ->
                                 ChoiceChip(speedLabel(value), AudioPlayback.speed == value, Modifier.weight(1f)) {
@@ -376,18 +446,45 @@ internal fun AudioPlayerScreen(
                             }
                         }
                     }
-                    Button(onClick={
-                        if (localSynthesisActive) stopSynthesis()
-                        else if (chapterEntry) synthesizeLocally() else showSynthesis=true
-                    }, enabled=if (localSynthesisActive) book != null else !localSynthesizing,
-                        modifier=Modifier.padding(top=22.dp),
-                        colors=ButtonDefaults.buttonColors(containerColor=PlayerAccent, contentColor=PlayerPanel)) {
-                        Text(if (localSynthesisActive) "停止朗读" else if (chapterEntry) "本地实时合成" else "去合成 / 从服务器导入")
+                    Button(
+                        onClick = {
+                            if (localSynthesisActive) stopSynthesis()
+                            else if (localChapterEntry) synthesizeLocally() else showSynthesis = true
+                        },
+                        enabled = if (localSynthesisActive) localBook != null else !localSynthesizing,
+                        modifier = Modifier.padding(top = 22.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PlayerAccent, contentColor = PlayerPanel)
+                    ) {
+                        Text(if (localSynthesisActive) "停止朗读" else if (localChapterEntry) "本地实时合成" else "去选择书籍")
                     }
-                    if (chapterEntry) TextButton(onClick={showSynthesis=true}, enabled=!localSynthesisActive,
-                        modifier=Modifier.padding(top=8.dp)) { Text("改用服务器合成", color=PlayerAccent) }
-                    TextButton(onClick=::importAudio, enabled=!importing, modifier=Modifier.padding(top=22.dp)) {
-                        Text(if (importing) "正在导入…" else "导入听书包", color=PlayerAccent)
+                    if (localChapterEntry) {
+                        TextButton(
+                            onClick = { showSynthesis = true },
+                            enabled = !localSynthesisActive,
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) { Text("改用服务器合成", color = PlayerAccent) }
+                    }
+                    TextButton(onClick = ::importAudio, enabled = !importing, modifier = Modifier.padding(top = 14.dp)) {
+                        Text(if (importing) "正在导入…" else "导入听书包", color = PlayerAccent)
+                    }
+                }
+            } else {
+                Column(
+                    Modifier.fillMaxWidth().heightIn(min = 440.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Glyph("audio", PlayerMuted, size = 52.dp)
+                    Text("还没有可播放的音频", Modifier.padding(top = 22.dp), fontSize = 23.sp, color = PlayerWhite)
+                    Text(
+                        "可以切换到本地实时或服务器合成。",
+                        Modifier.padding(top = 12.dp),
+                        fontSize = 12.sp,
+                        color = PlayerMuted,
+                        textAlign = TextAlign.Center
+                    )
+                    TextButton(onClick = ::importAudio, enabled = !importing, modifier = Modifier.padding(top = 22.dp)) {
+                        Text(if (importing) "正在导入…" else "导入听书包", color = PlayerAccent)
                     }
                 }
             }

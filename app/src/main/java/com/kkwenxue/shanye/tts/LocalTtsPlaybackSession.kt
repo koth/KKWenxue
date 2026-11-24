@@ -143,10 +143,10 @@ class LocalTtsPlaybackSession internal constructor(
         }
     }, initialSpeed)
 
-    fun beginSynthesis() {
+    fun beginSynthesis(message: String = "正在生成第一句…") {
         synchronized(this) {
             check(!stopped.get()) { "本地语音朗读已停止" }
-            liveState = liveState.copy(phase = LocalTtsLivePhase.PREBUFFERING, status = "正在生成第一句…")
+            liveState = liveState.copy(phase = LocalTtsLivePhase.PREBUFFERING, status = message)
             owner.publish(this, liveState)
         }
     }

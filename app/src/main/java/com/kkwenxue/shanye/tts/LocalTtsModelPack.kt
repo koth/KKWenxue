@@ -265,10 +265,19 @@ class LocalTtsModelPack(context: Context) {
                 val speaker = voice.optString("speaker")
                 val id = voiceId(speaker)
                 val codes = voice.optString("codes_path").substringAfterLast('/')
-                if (codes.isNotBlank()) add(LocalTtsVoice(id, speaker, voice.optString("name", id), "voices/$codes", ""))
+                // Do not publish stale registry entries whose code file is not
+                // actually embedded in this APK. Otherwise the default voice
+                // can resolve successfully, then fail later in native code
+                // with an unhelpful empty-audio result.
+                if (codes.isNotBlank() && assetExists("voices/$codes")) {
+                    add(LocalTtsVoice(id, speaker, voice.optString("name", id), "voices/$codes", ""))
+                }
             }
         } } ?: emptyList()
     }.getOrDefault(emptyList())
+
+    private fun assetExists(path: String): Boolean =
+        runCatching { context.assets.open(path).use { } }.isSuccess
 
     private fun inferredVoice(asset: String): LocalTtsVoice {
         val stem = asset.removeSuffix(".codes.npy")

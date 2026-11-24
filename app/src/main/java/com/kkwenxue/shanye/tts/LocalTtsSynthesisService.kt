@@ -188,9 +188,10 @@ class LocalTtsSynthesisService : Service() {
                 }
                 library.saveLocalPlaybackPosition(hydrated, index, resumeOffset)
                 val chapterSession = session ?: error("本地语音播放会话未创建")
-                chapterSession.status("正在生成第一句…", LocalTtsLivePhase.PREBUFFERING)
+                val firstSegmentStatus = if (resumeOffset > 0) "正在合成当前句…" else "正在合成章节标题…"
+                chapterSession.status(firstSegmentStatus, LocalTtsLivePhase.PREBUFFERING)
                 val result = withContext(Dispatchers.IO) {
-                    chapterSession.beginSynthesis()
+                    chapterSession.beginSynthesis(firstSegmentStatus)
                     localRuntime.synthesizeChapterStreaming(
                         hydrated, index, voiceId, startOffset = resumeOffset
                     ) { segment -> chapterSession.offer(segment) }
@@ -225,6 +226,11 @@ class LocalTtsSynthesisService : Service() {
         } finally {
             session?.close()
             currentChapterTitle = null
+            // The native backbone and decoder are roughly 1.1 GB together.
+            // Do not leave them resident after a foreground synthesis job
+            // finishes or fails; otherwise the next screen can trigger a
+            // system memory warning even though playback has ended.
+            localRuntime.release()
             runtime = null
             audioLibrary?.close()
             audioLibrary = null
