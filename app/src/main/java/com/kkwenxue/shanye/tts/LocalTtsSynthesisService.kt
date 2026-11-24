@@ -339,7 +339,13 @@ class LocalTtsSynthesisService : Service() {
 
         fun stop(context: Context) {
             LocalTtsJobStore.clear(context)
-            context.startService(Intent(context, LocalTtsSynthesisService::class.java).setAction(ACTION_STOP))
+            val intent = Intent(context, LocalTtsSynthesisService::class.java).setAction(ACTION_STOP)
+            context.startService(intent)
+            // Also request destruction of a service that is blocked inside a
+            // native call. onDestroy() repeats the cancellation and releases
+            // AudioTrack/wake-lock resources even if the action delivery is
+            // delayed by the system.
+            context.stopService(intent)
         }
     }
 }
