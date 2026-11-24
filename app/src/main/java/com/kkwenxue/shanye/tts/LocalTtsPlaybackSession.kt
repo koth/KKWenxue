@@ -168,7 +168,9 @@ class LocalTtsPlaybackSession internal constructor(
         synchronized(this) {
             if (stopped.get()) throw CancellationException("本地语音朗读已停止")
             val generatedMs = segment.pcm.size / 2 * 1000 / LocalTtsRuntime.SAMPLE_RATE
-            val isSpeech = segment.cue?.kind != null && segment.cue.kind != "title"
+            // The chapter title is the first playable segment and participates
+            // in the initial 4–5 segment buffer. Silence chunks do not count.
+            val isSpeech = segment.cue != null
             val bufferedSpeechSegments = liveState.bufferedSpeechSegments + if (isSpeech) 1 else 0
             liveState = liveState.copy(
                 phase = if (liveState.generatedSegments == 0) LocalTtsLivePhase.PREBUFFERING

@@ -205,7 +205,15 @@ fun SynthesisScreen(book: Book?, initialChapterIndex: Int?, audioLibrary: AudioL
                     item {
                         OutlinedTextField(expression, { expression=it }, Modifier.fillMaxWidth(), enabled=!busy,
                             label={Text("章号 / 范围")}, placeholder={Text("984,986-988")}, singleLine=true,
-                            shape=RoundedCornerShape(12.dp), keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Ascii))
+                            shape=RoundedCornerShape(12.dp), keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Ascii),
+                            colors=OutlinedTextFieldDefaults.colors(
+                                focusedTextColor=WorkbenchWhite, unfocusedTextColor=WorkbenchWhite,
+                                disabledTextColor=WorkbenchMuted,
+                                focusedBorderColor=WorkbenchAccent, unfocusedBorderColor=WorkbenchMuted,
+                                focusedLabelColor=WorkbenchAccent, unfocusedLabelColor=WorkbenchWhite,
+                                focusedPlaceholderColor=WorkbenchMuted, unfocusedPlaceholderColor=WorkbenchMuted,
+                                cursorColor=WorkbenchAccent
+                            ))
                         Row(Modifier.fillMaxWidth(), verticalAlignment=Alignment.CenterVertically) {
                             Text("每批最多 100 章", Modifier.weight(1f), color=WorkbenchMuted, fontSize=11.sp)
                             TextButton(enabled=!busy, onClick={

@@ -209,13 +209,71 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         val output = File(root, "$chapterId.wav")
         val temporary = File(root, ".${chapterId}.${UUID.randomUUID()}.part")
         val wav = WavStreamWriter(temporary, SAMPLE_RATE)
+        // On resume, stream the unread suffix before rebuilding the already
+        // read prefix. Otherwise a long prefix delays the first audible cue.
+        val streamedPieceIndexes = mutableSetOf<Int>()
         try {
+            if (resumeOffset > 0) {
+                val firstResumedPiece = pieces.indexOfFirst { piece ->
+                    piece.index >= 0 && piece.end > resumeOffset
+                }
+                if (firstResumedPiece >= 0) {
+                    var livePositionMs = 0
+                    var previousStreamText: String? = null
+                    for (piecePosition in firstResumedPiece until pieces.size) {
+                        waitUntilRunnable()
+                        if (cancelled.get()) throw java.util.concurrent.CancellationException("本地语音合成已取消")
+                        val piece = pieces[piecePosition]
+                        val ttsText = TtsTextNormalizer.normalize(piece.text)
+                        if (ttsText.isBlank() || !TtsTextNormalizer.containsSpokenContent(ttsText)) continue
+                        previousStreamText?.let { previous ->
+                            val pauseMs = pauseFor(previous)
+                            if (pauseMs > 0) {
+                                val silence = ByteArray(pauseMs * SAMPLE_RATE / 1000 * 2)
+                                onSegment(LocalTtsStreamSegment(null, silence, isPause = true, totalSegments = pieces.size))
+                                livePositionMs += pauseMs
+                            }
+                        }
+                        val key = LocalTtsSegmentKey(
+                            book.id,
+                            chapter.id,
+                            sourceRevision,
+                            piece.index,
+                            ttsText,
+                            voice.id,
+                            manifest.revision,
+                            "${manifest.engineRevision}:$LOCAL_TTS_SYNTHESIS_POLICY_REVISION"
+                        )
+                        val segment = synthesizeSegment(key, piece.start, piece.end)
+                        val payload = readWavPayload(segment.path)
+                        val endMs = livePositionMs + segment.samples * 1000 / SAMPLE_RATE
+                        val liveCue = AudioCue(
+                            livePositionMs,
+                            endMs,
+                            piece.start,
+                            piece.end,
+                            piece.text,
+                            "body"
+                        )
+                        onSegment(LocalTtsStreamSegment(
+                            liveCue,
+                            payload,
+                            segmentIndex = piecePosition,
+                            totalSegments = pieces.size
+                        ))
+                        streamedPieceIndexes += piecePosition
+                        livePositionMs = endMs
+                        previousStreamText = ttsText
+                    }
+                }
+            }
             for ((piecePosition, piece) in pieces.withIndex()) {
                 waitUntilRunnable()
                 if (cancelled.get()) throw java.util.concurrent.CancellationException("本地语音合成已取消")
                 val ttsText = TtsTextNormalizer.normalize(piece.text)
                 if (ttsText.isBlank() || !TtsTextNormalizer.containsSpokenContent(ttsText)) continue
                 val shouldStream = resumeOffset <= 0 || (piece.index >= 0 && piece.end > resumeOffset)
+                val alreadyStreamed = streamedPieceIndexes.contains(piecePosition)
                 previousTtsText?.let { previous ->
                     val pauseMs = if (previousPieceIndex == -1) TITLE_PAUSE_MS else pauseFor(previous)
                     if (pauseMs > 0) {
@@ -224,7 +282,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
                         // Do not replay the pause that belongs to text before the
                         // resume point. It is part of the complete chapter file,
                         // but the live stream starts at the first resumed cue.
-                        if (shouldStream && streamingStarted) {
+                        if (shouldStream && streamingStarted && !alreadyStreamed) {
                             onSegment(LocalTtsStreamSegment(null, silence, isPause = true, totalSegments = pieces.size))
                         }
                         positionMs += pauseMs
@@ -268,7 +326,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
                 // cue timeline, but the live player starts at the first sentence
                 // after the checkpoint. Rebase emitted cues to that live stream so
                 // sentence highlighting and progress remain aligned.
-                if (shouldStream) {
+                if (shouldStream && !alreadyStreamed) {
                     if (!streamingStarted) {
                         streamingStarted = true
                         streamOriginMs = cue.startMs

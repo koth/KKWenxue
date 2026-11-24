@@ -216,8 +216,8 @@ class LocalTtsStreamPlayer(
         queuedSpeechSegments = 0
     }
 
-    private fun isSpeech(segment: LocalTtsStreamSegment): Boolean =
-        segment.cue?.kind != null && segment.cue.kind != "title"
+    /** Count title and body cues as playable speech, while excluding silence. */
+    private fun isSpeech(segment: LocalTtsStreamSegment): Boolean = segment.cue != null
 
     private fun createTrack(initialSpeed: Float): AudioTrack {
         val format = AudioFormat.Builder()
