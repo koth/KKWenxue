@@ -53,7 +53,7 @@ class ChapterNarrationTests(unittest.TestCase):
         self.assertEqual(chapter['title'], title['original_text'])
         self.assertEqual(0, title['start_ms'])
         self.assertGreater(title['end_ms'], 0)
-        self.assertEqual(title['end_ms'] + 350, manifest['cues'][0]['start_ms'])
+        self.assertEqual(title['end_ms'] + 700, manifest['cues'][0]['start_ms'])
         shift = manifest['cues'][0]['start_ms'] - old_manifest['cues'][0]['start_ms']
         self.assertEqual(len(old_manifest['cues']), len(manifest['cues']))
         for old_cue, cue in zip(old_manifest['cues'], manifest['cues']):

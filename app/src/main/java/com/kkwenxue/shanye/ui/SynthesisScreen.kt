@@ -37,8 +37,6 @@ import java.util.Date
 private data class SynthesisVoice(val id: String, val name: String, val custom: Boolean = false)
 
 private val NarratorVoices = listOf(
-    SynthesisVoice("clone-upload-53677481cc5fa643ef6413ff", "说书人一 · 克隆音色", custom = true),
-    SynthesisVoice("clone-upload-8b3a4bdcb1e3db46b0f78b89", "说书人二 · 克隆音色", custom = true),
     SynthesisVoice("clone-linchuan-zonos3-v1", "林川 · 克隆音色", custom = true),
     SynthesisVoice("zonos3-haoran-v1", "Haoran · 中文男声")
 )

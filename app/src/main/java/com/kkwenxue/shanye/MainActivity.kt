@@ -31,6 +31,7 @@ import kotlinx.coroutines.Job
 import com.kkwenxue.shanye.tts.LocalTtsModelPack
 import com.kkwenxue.shanye.tts.LocalTtsPackState
 import com.kkwenxue.shanye.tts.LocalTtsRuntime
+import com.kkwenxue.shanye.tts.LocalTtsSynthesisService
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
@@ -133,6 +134,9 @@ class MainActivity : ComponentActivity() {
                 withContext(Dispatchers.IO) {
                     runCatching { localTtsRuntime.prepare() }
                 }
+            }
+            LaunchedEffect(localTtsReady) {
+                if (localTtsReady) LocalTtsSynthesisService.resumePending(applicationContext)
             }
             val store = remember { ReaderStore(applicationContext) }
             val onlineSync = remember { OnlineLibrarySync(applicationContext) }

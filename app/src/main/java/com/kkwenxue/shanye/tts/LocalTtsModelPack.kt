@@ -48,12 +48,39 @@ class LocalTtsModelPack(context: Context) {
     }
 
     /** Prepare from the public model source. A configured server remains a development fallback. */
-    fun prepare(connection: RelayConnection? = null): LocalTtsManifest = try {
-        current()?.let { ensureEmbeddedVoices(it) } ?: prepareFromHuggingFaceMirror()
-    } catch (error: Exception) {
-        if (connection != null) prepareDownloaded(connection) else {
-            state.value = LocalTtsPackState.Failed(error.message ?: "本地模型下载失败")
-            throw error
+    fun prepare(connection: RelayConnection? = null): LocalTtsManifest {
+        val cached = current()
+        return try {
+            if (cached == null) {
+                prepareFromHuggingFaceMirror()
+            } else {
+                val repaired = ensureEmbeddedVoices(cached)
+                state.value = LocalTtsPackState.Verifying(repaired.revision)
+                validateFiles(repaired)
+                state.value = LocalTtsPackState.Ready(repaired)
+                repaired
+            }
+        } catch (error: Exception) {
+            // A download can be killed after writing a file but before the
+            // manifest is published. Remove that invalid ready marker before
+            // retrying, otherwise every later launch keeps mmap-ing the same
+            // truncated or corrupted GGUF file.
+            if (cached != null) {
+                rootFor(cached).deleteRecursively()
+                currentFile.delete()
+                state.value = LocalTtsPackState.Missing
+            }
+            if (connection != null) {
+                runCatching { prepareDownloaded(connection) }.getOrElse {
+                    state.value = LocalTtsPackState.Failed(it.message ?: "本地模型下载失败")
+                    throw it
+                }
+            } else {
+                runCatching { prepareFromHuggingFaceMirror() }.getOrElse {
+                    state.value = LocalTtsPackState.Failed(it.message ?: error.message ?: "本地模型下载失败")
+                    throw it
+                }
+            }
         }
     }
 
@@ -385,8 +412,22 @@ class LocalTtsModelPack(context: Context) {
 
     private fun readReady(): LocalTtsPackState.Ready? = runCatching {
         val value = JSONObject(currentFile.readText()).getJSONObject("manifest")
-        LocalTtsPackState.Ready(parse(value.toString())).takeIf { it.manifest.files.all { entry -> file(it.manifest, entry.path).isFile } }
+        LocalTtsPackState.Ready(parse(value.toString())).takeIf { ready ->
+            ready.manifest.files.all { entry ->
+                val target = file(ready.manifest, entry.path)
+                target.isFile && target.length() == entry.bytes
+            }
+        }
     }.getOrNull()
+
+    private fun validateFiles(manifest: LocalTtsManifest) {
+        for (entry in manifest.files) {
+            val target = file(manifest, entry.path)
+            require(target.isFile && target.length() == entry.bytes && sha256(target) == entry.sha256) {
+                "本地模型文件校验失败：${entry.name}"
+            }
+        }
+    }
 
     private fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -405,7 +446,7 @@ class LocalTtsModelPack(context: Context) {
     }
 
     companion object {
-        private const val DEFAULT_VOICE_ASSET = "shuoshuren1.codes.npy"
+        private const val DEFAULT_VOICE_ASSET = "LinChuan.codes.npy"
         private const val REMOTE_BASE = "https://hf-mirror.com/Zyphra/ZONOS3-Mini/resolve/main/gguf/"
     }
 }

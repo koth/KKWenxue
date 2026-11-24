@@ -25,6 +25,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 /**
  * Own foreground service for local TTS.
@@ -45,6 +46,10 @@ class LocalTtsSynthesisService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                // An explicit stop is a user decision. Keep generated
+                // segments for a later manual retry, but do not auto-resume
+                // this request on the next app launch.
+                LocalTtsJobStore.clear(applicationContext)
                 stopSynthesis()
                 stopSelfResult(startId)
             }
@@ -56,9 +61,35 @@ class LocalTtsSynthesisService : Service() {
                 if (bookId.isNullOrBlank() || chapterIndex < 0) {
                     stopSelfResult(startId)
                 } else {
+                    val jobId = intent.getStringExtra(KEY_JOB_ID) ?: UUID.randomUUID().toString()
+                    val jobKey = jobId
+                    if (activeJobKey == jobKey && task?.isActive == true) return START_REDELIVER_INTENT
+                    // START_REDELIVER_INTENT contains the original request,
+                    // while the durable record may already have advanced to a
+                    // later chapter. Keep the latest checkpoint instead of
+                    // overwriting it with stale intent extras.
+                    val stored = LocalTtsJobStore.load(applicationContext)
+                        ?.takeIf { it.id == jobId && it.bookId == bookId && it.voiceId == voiceId }
+                    val effectiveJob = stored ?: LocalTtsPendingJob(
+                        jobId, bookId, chapterIndex, voiceId, startOffset.coerceAtLeast(0)
+                    )
+                    LocalTtsJobStore.save(
+                        applicationContext,
+                        effectiveJob
+                    )
                     startForegroundNow()
                     task?.cancel()
-                    task = scope.launch { synthesize(bookId, chapterIndex, voiceId, startOffset, startId) }
+                    activeJobKey = jobKey
+                    task = scope.launch {
+                        synthesize(
+                            effectiveJob.bookId,
+                            effectiveJob.chapterIndex,
+                            effectiveJob.voiceId,
+                            effectiveJob.startOffset,
+                            startId,
+                            jobId
+                        )
+                    }
                 }
             }
         }
@@ -85,7 +116,8 @@ class LocalTtsSynthesisService : Service() {
         chapterIndex: Int,
         voiceId: String,
         requestedStartOffset: Int,
-        startId: Int
+        startId: Int,
+        jobId: String
     ) {
         AudioPlayback.restore(applicationContext)
         val localRuntime = LocalTtsRuntime(applicationContext)
@@ -100,15 +132,24 @@ class LocalTtsSynthesisService : Service() {
             audioLibrary = AudioLibrary(applicationContext)
             val library = audioLibrary ?: error("本地听书库未初始化")
             val chapterStore = OnlineChapterStore(applicationContext)
+            val requestedChapter = book.chapters.getOrNull(chapterIndex) ?: error("章节不在书库中")
+
+            // Publish a live session before loading the native model. Model
+            // mmap or chapter recovery can take a while, and the player must
+            // show that work instead of falling back to an empty chapter page.
+            session = LocalTtsLivePlayback.start(
+                book.id, requestedChapter.id, chapterIndex, AudioPlayback.speed
+            ) { currentIndex, offset ->
+                library.saveLocalPlaybackPosition(book, currentIndex, offset)
+            }
+            session?.status("正在加载本地语音模型…", LocalTtsLivePhase.PREPARING)
 
             withContext(Dispatchers.IO) { localRuntime.prepare() }
-            val requestedChapter = book.chapters.getOrNull(chapterIndex) ?: error("章节不在书库中")
             val persistedOffset = library.localTtsResumeOffset(book.id, requestedChapter.id)
-            val firstOffset = when {
-                requestedStartOffset > 0 -> requestedStartOffset
-                persistedOffset != null -> persistedOffset
-                else -> 0
-            }
+            // The reader entry point can only provide the beginning of the
+            // visible page. A live checkpoint may be farther into that page,
+            // so never move a recovered synthesis job backwards.
+            val firstOffset = maxOf(requestedStartOffset, persistedOffset ?: 0)
             // If the last safe checkpoint is exactly at the end of a chapter,
             // continue with the next chapter instead of creating an empty
             // AudioTrack stream.
@@ -131,6 +172,14 @@ class LocalTtsSynthesisService : Service() {
                 currentChapterTitle = chapter.title
                 updateNotification("正在合成并播放：${chapter.title}")
                 val resumeOffset = if (index == chapterIndex) effectiveFirstOffset else 0
+                // Advance the durable request before starting this chapter.
+                // If the process dies later, recovery starts here and uses the
+                // chapter's own live checkpoint instead of replaying earlier
+                // chapters that have already been published.
+                LocalTtsJobStore.save(
+                    applicationContext,
+                    LocalTtsPendingJob(jobId, bookId, index, voiceId, resumeOffset)
+                )
 
                 session = LocalTtsLivePlayback.start(
                     hydrated.id, chapter.id, index, AudioPlayback.speed
@@ -161,6 +210,7 @@ class LocalTtsSynthesisService : Service() {
 
             currentChapterTitle = null
             updateNotification("本地语音朗读已完成")
+            LocalTtsJobStore.clearIfIdMatches(applicationContext, jobId)
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelfResult(startId)
         } catch (cancelled: CancellationException) {
@@ -168,6 +218,7 @@ class LocalTtsSynthesisService : Service() {
             session?.stop()
             throw cancelled
         } catch (error: Exception) {
+            LocalTtsJobStore.saveError(applicationContext, error.message ?: "本地语音合成失败")
             session?.fail(error)
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelfResult(startId)
@@ -179,6 +230,7 @@ class LocalTtsSynthesisService : Service() {
             audioLibrary = null
             if (wakeLock?.isHeld == true) wakeLock?.release()
             wakeLock = null
+            if (activeJobKey == jobId) activeJobKey = null
         }
     }
 
@@ -234,6 +286,7 @@ class LocalTtsSynthesisService : Service() {
 
     override fun onDestroy() {
         stopSynthesis()
+        activeJobKey = null
         audioLibrary?.close()
         audioLibrary = null
         scope.cancel()
@@ -243,6 +296,7 @@ class LocalTtsSynthesisService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        @Volatile private var activeJobKey: String? = null
         private const val CHANNEL = "local-tts"
         private const val NOTIFICATION_ID = 301
         private const val ACTION_START = "com.kkwenxue.shanye.tts.START"
@@ -251,13 +305,15 @@ class LocalTtsSynthesisService : Service() {
         private const val KEY_CHAPTER_INDEX = "chapter_index"
         private const val KEY_VOICE_ID = "voice_id"
         private const val KEY_START_OFFSET = "start_offset"
+        private const val KEY_JOB_ID = "job_id"
 
         fun start(
             context: Context,
             bookId: String,
             chapterIndex: Int,
             voiceId: String = LocalTtsRuntime.DEFAULT_VOICE_ID,
-            startOffset: Int = 0
+            startOffset: Int = 0,
+            jobId: String = UUID.randomUUID().toString()
         ) {
             val intent = Intent(context, LocalTtsSynthesisService::class.java)
                 .setAction(ACTION_START)
@@ -265,10 +321,24 @@ class LocalTtsSynthesisService : Service() {
                 .putExtra(KEY_CHAPTER_INDEX, chapterIndex)
                 .putExtra(KEY_VOICE_ID, voiceId)
                 .putExtra(KEY_START_OFFSET, startOffset.coerceAtLeast(0))
+                .putExtra(KEY_JOB_ID, jobId)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
         }
 
+        /** Re-deliver the last unfinished request after the app process returns. */
+        fun resumePending(context: Context, bookId: String? = null, chapterIndex: Int? = null) {
+            LocalTtsJobStore.load(context)
+                ?.takeIf { bookId == null || (it.bookId == bookId && (chapterIndex == null || it.chapterIndex == chapterIndex)) }
+                ?.let { job ->
+                start(context, job.bookId, job.chapterIndex, job.voiceId, job.startOffset, job.id)
+            }
+        }
+
+        fun hasPending(context: Context, bookId: String, chapterIndex: Int): Boolean =
+            LocalTtsJobStore.load(context)?.let { it.bookId == bookId && it.chapterIndex == chapterIndex } == true
+
         fun stop(context: Context) {
+            LocalTtsJobStore.clear(context)
             context.startService(Intent(context, LocalTtsSynthesisService::class.java).setAction(ACTION_STOP))
         }
     }

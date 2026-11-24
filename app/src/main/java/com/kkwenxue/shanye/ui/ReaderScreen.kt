@@ -185,8 +185,11 @@ fun ReaderScreen(initialBook:Book,store:ReaderStore,audioLibrary:AudioLibrary,au
     }
     if (inPlayer) {
         val entryChapter = remember(sheet) { chapter.takeIf { sheet=="audio" } }
-        val entryPage = remember { info }
-        val resumeArtifact = remember(entryChapter) {
+        // ReadingView updates `info` after it renders the persisted reading
+        // position. Capturing the initial default page here always sent local
+        // TTS back to offset zero after reopening a history entry.
+        val entryPage = info
+        val resumeArtifact = remember(entryChapter, entryPage) {
             entryChapter?.let { index ->
                 store.listeningPosition(book)?.takeIf {
                     val anchor=it.anchor

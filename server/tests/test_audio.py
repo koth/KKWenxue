@@ -14,8 +14,8 @@ class LoudnessTests(unittest.TestCase):
         title={**self.clip('heading'), 'kind':'chapter_title'}
         body=self.clip('body')
         result=render([title,body],self.root/'title.m4a',1,180,'title','book',natural_title_pause=True)
-        self.assertEqual(150,result['cues'][0]['start_ms']-result['title_cues'][0]['end_ms'])
-        self.assertEqual(4150,result['duration_ms'])
+        self.assertEqual(500,result['cues'][0]['start_ms']-result['title_cues'][0]['end_ms'])
+        self.assertEqual(4500,result['duration_ms'])
 
     def test_title_gap_can_remove_excess_quiet_without_shortening_speech(self):
         title={**self.clip('heading'), 'kind':'chapter_title'}
@@ -26,7 +26,7 @@ class LoudnessTests(unittest.TestCase):
             write_flac(clip['path'],samples)
         result=render([title,body],self.root/'title-trim.m4a',1,180,'title','book',natural_title_pause=True)
         self.assertEqual(result['title_cues'][0]['end_ms'],result['cues'][0]['start_ms'])
-        self.assertEqual(4750,result['duration_ms'])
+        self.assertEqual(5100,result['duration_ms'])
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

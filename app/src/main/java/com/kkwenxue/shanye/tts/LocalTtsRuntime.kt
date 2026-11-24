@@ -126,9 +126,12 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         val voice = manifest.voices.firstOrNull { it.id == key.voiceId || it.speaker == key.voiceId }
             ?: error("本地模型没有声线：${key.voiceId}")
         val output = File(root, "${key.id()}.wav")
-        if (output.isFile && output.length() > 44) {
+        if (isValidWav(output)) {
             return LocalTtsSegment(key.id(), output, SAMPLE_RATE, wavSamples(output), sourceStart, sourceEnd, key.text)
         }
+        // A process kill can leave a truncated file after the temporary file
+        // was published. It must never be treated as a completed segment.
+        if (output.exists()) output.delete()
         cancelled.set(false)
         state.value = LocalTtsRuntimeState.Generating(key.chapterId, key.segmentIndex)
         val codes = modelPack.file(manifest, voice.codes)
@@ -279,6 +282,25 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
 
     private fun wavSamples(file: File): Int = ((file.length() - 44).coerceAtLeast(0) / 2L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
 
+    private fun isValidWav(file: File): Boolean {
+        if (!file.isFile || file.length() <= 44) return false
+        val header = ByteArray(44)
+        file.inputStream().use { input ->
+            var offset = 0
+            while (offset < header.size) {
+                val count = input.read(header, offset, header.size - offset)
+                if (count < 0) return false
+                offset += count
+            }
+        }
+        if (!header.copyOfRange(0, 4).contentEquals("RIFF".toByteArray()) ||
+            !header.copyOfRange(8, 12).contentEquals("WAVE".toByteArray()) ||
+            !header.copyOfRange(12, 16).contentEquals("fmt ".toByteArray()) ||
+            !header.copyOfRange(36, 40).contentEquals("data".toByteArray())) return false
+        val payload = ByteBuffer.wrap(header, 40, 4).order(ByteOrder.LITTLE_ENDIAN).int
+        return payload > 0 && payload % 2 == 0 && 44L + payload == file.length()
+    }
+
     private fun waitUntilRunnable() {
         val manager = context.getSystemService(ActivityManager::class.java)
         val power = context.getSystemService(PowerManager::class.java)
@@ -338,7 +360,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
 
     companion object {
         const val SAMPLE_RATE = 44100
-        const val DEFAULT_VOICE_ID = "clone-upload-53677481cc5fa643ef6413ff"
+        const val DEFAULT_VOICE_ID = "clone-linchuan-zonos3-v1"
         const val PAUSE_RULE_REVISION = "punctuation-pauses-v3-tts-text-normalization-v1"
         private const val MIN_FREE_BYTES = 128L * 1024 * 1024
         private const val MIN_SOFT_PIECE_CHARS = 48

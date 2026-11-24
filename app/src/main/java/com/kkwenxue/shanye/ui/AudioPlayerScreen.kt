@@ -33,6 +33,7 @@ import com.kkwenxue.shanye.audio.AudioPlayback
 import com.kkwenxue.shanye.data.*
 import com.kkwenxue.shanye.tts.LocalTtsLivePhase
 import com.kkwenxue.shanye.tts.LocalTtsLivePlayback
+import com.kkwenxue.shanye.tts.LocalTtsJobStore
 import com.kkwenxue.shanye.tts.LocalTtsSynthesisService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -131,6 +132,16 @@ internal fun AudioPlayerScreen(
         LocalTtsLivePhase.SYNTHESIZING,
         LocalTtsLivePhase.PLAYING
     )
+    LaunchedEffect(book?.id, requestedChapter?.id, initialChapterIndex) {
+        val targetBook = book
+        val targetIndex = initialChapterIndex
+        LocalTtsJobStore.error(context)?.let { message = it }
+        if (targetBook != null && targetIndex != null &&
+            LocalTtsSynthesisService.hasPending(context, targetBook.id, targetIndex)) {
+            localSynthesizing = true
+            LocalTtsSynthesisService.resumePending(context, targetBook.id, targetIndex)
+        }
+    }
     val localSynthesisActive = localSynthesizing || localLiveRunning
     // The foreground service advances the live session to the next chapter
     // without recreating this screen. Keep showing its current sentence while

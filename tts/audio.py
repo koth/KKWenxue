@@ -253,7 +253,7 @@ def render(
                     after_heading = (clips[index-1].get("kind") == "chapter_title"
                                      and clip.get("kind") != "chapter_title")
                     if after_heading and natural_title_pause:
-                        target_gap=round(max(350,pause_ms)*rate/1000)
+                        target_gap=round(max(700,pause_ms)*rate/1000)
                         head=quiet_edge(samples,rate)
                         excess=max(0,previous_tail+head-target_gap)
                         trim_head=min(head,excess)

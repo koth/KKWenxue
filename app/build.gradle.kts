@@ -4,8 +4,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 val signReleaseForLocalInstall = providers.gradleProperty("signReleaseForLocalInstall").orNull == "true"
-val localTtsVoiceDir = providers.gradleProperty("shanyeZonosVoiceDir")
-    .orElse(layout.projectDirectory.dir("../tmp/zonos3-publish/voices").asFile.absolutePath)
+val localTtsVoiceDir = providers.gradleProperty("shanyeZonosVoiceDir").orNull
+    ?.let(::file)
+    ?: rootProject.file("tmp/zonos3-publish/voices")
 val localTtsAssets = layout.buildDirectory.dir("generated/localTtsAssets")
 
 android {
@@ -41,20 +42,10 @@ val syncEmbeddedLocalTtsAssets = tasks.register<Sync>("syncEmbeddedLocalTtsAsset
     group = "distribution"
     description = "Copy ZONOS3 weights and pre-encoded voices into the release APK assets."
     from(localTtsVoiceDir) {
-        include("*.codes.npy", "voices.json")
-        into("voices")
-    }
-    // The two current Chinese narrator presets are kept in the local encoder cache
-    // until the server voice directory is exported for release builds.
-    from(rootProject.file(".workbench/reference-voices/23915d12ec06c1fca031203a127696efddbf52264a245c54d45e6d2582eca5c0/reference.codes.npy")) {
-        rename { "shuoshuren1.codes.npy" }
-        into("voices")
-    }
-    from(rootProject.file(".workbench/reference-voices/d54c9aec5d26dba1566eeebad09bc24838dec9c485b0ff1c4c3ca9d8ea8dc735/reference.codes.npy")) {
-        rename { "shuoshuren2.codes.npy" }
-        into("voices")
-    }
-    from(rootProject.file("sounds/shuoshuren1.codes.npy")) {
+        // Keep the checked-in manifest as the single asset entry point. The
+        // release voice directory may also contain a server manifest, which
+        // would collide with app/src/main/assets/voices/voices.json.
+        include("*.codes.npy")
         into("voices")
     }
     into(localTtsAssets)
