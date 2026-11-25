@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Dp
 import com.kkwenxue.shanye.audio.AudioPlayback
 import com.kkwenxue.shanye.data.*
 import com.kkwenxue.shanye.tts.LocalTtsLivePhase
@@ -217,6 +218,13 @@ internal fun AudioPlayerScreen(
         localSynthesizing = false
         message = "本地语音朗读已停止"
     }
+    fun synthesizeLocalChapter(index: Int) {
+        val targetBook = localBook ?: return
+        if (index !in targetBook.chapters.indices) return
+        if (localSynthesisActive) LocalTtsSynthesisService.stop(context)
+        localSynthesizing = true
+        LocalTtsSynthesisService.start(context, targetBook.id, index, startOffset = 0)
+    }
     fun setPlaybackSpeed(value: Float) {
         AudioPlayback.setSpeed(context, value)
         LocalTtsLivePlayback.setSpeed(value)
@@ -379,93 +387,88 @@ internal fun AudioPlayerScreen(
                         Text("定位原文", fontSize=13.sp, color=PlayerWhite)
                     }
                 }
-            } else if (workbenchMode == AudioWorkbenchMode.LOCAL_REALTIME) {
-                Column(Modifier.fillMaxWidth().heightIn(min=440.dp), horizontalAlignment=Alignment.CenterHorizontally) {
-                    displayBook?.let {
-                        BookCover(
-                            it,
-                            Modifier.padding(top=18.dp).width(artworkHeight * .54f).height(artworkHeight * .74f)
-                                .shadow(18.dp, RoundedCornerShape(10.dp)).clip(RoundedCornerShape(10.dp))
-                        )
-                    }
-                    Text(
-                        if (localSynthesisActive) {
-                            if (localLive.phase == LocalTtsLivePhase.PLAYING) "正在边合成边播放" else "正在缓冲本地朗读"
-                        } else if (localChapterEntry) "本章暂无听书内容" else "还没有可朗读的章节",
-                        Modifier.padding(top=22.dp),
-                        fontSize=22.sp,
-                        color=PlayerWhite
-                    )
+            } else if (workbenchMode == AudioWorkbenchMode.LOCAL_REALTIME && localBook != null) {
+                val localChapters = localBook.chapters
+                val localPrevious = localChapters.getOrNull(localChapterIndex - 1)
+                val localNext = localChapters.getOrNull(localChapterIndex + 1)
+                val localTotalSegments = localLive.totalSegments.coerceAtLeast(1)
+                val localPlayedSegments = localLive.playedSegments.coerceIn(0, localTotalSegments)
+                UnifiedPlayerSurface(
+                    book = localBook,
+                    artworkArea = artworkArea,
+                    artworkHeight = artworkHeight,
+                    currentText = localLive.currentText ?: localBook.chapters.getOrNull(localChapterIndex)?.title,
+                    currentLabel = if (localSynthesisActive) "正在播 · 当前句" else "本地实时朗读",
+                    position = localPlayedSegments,
+                    duration = localTotalSegments,
+                    positionLabel = if (localPlayedSegments > 0) "第${localPlayedSegments}句" else "准备中",
+                    durationLabel = if (localLive.totalSegments > 0) "共${localLive.totalSegments}句" else "等待分句",
+                    sliderEnabled = false,
+                    preparing = false,
+                    isPlaying = localSynthesisActive,
+                    timerLabel = timerLabel(),
+                    timerSelected = AudioPlayback.timerMode != 0,
+                    speed = AudioPlayback.speed,
+                    chaptersLabel = "目录 · ${localChapters.size}",
+                    fourthActionIcon = "download",
+                    fourthActionLabel = if (importing) "导入中…" else "导入",
+                    fourthActionEnabled = !importing,
+                    previousEnabled = localPrevious != null,
+                    nextEnabled = localNext != null,
+                    voiceLabel = "本地音色 · 林川",
+                    voiceEnabled = false,
+                    onTimer = { chooser = PlayerChooser.TIMER },
+                    onSpeed = { chooser = PlayerChooser.SPEED },
+                    onChapters = { chooser = PlayerChooser.CHAPTERS },
+                    onFourthAction = ::importAudio,
+                    onPrevious = { if (localPrevious != null) synthesizeLocalChapter(localChapterIndex - 1) },
+                    onNext = { if (localNext != null) synthesizeLocalChapter(localChapterIndex + 1) },
+                    onPlayPause = {
+                        if (localSynthesisActive) stopSynthesis()
+                        else if (localChapterEntry) synthesizeLocally() else showSynthesis = true
+                    },
+                    onSeek = {},
+                    onVoice = {},
+                    onRead = null
+                )
+                Column(
+                    Modifier.fillMaxWidth().padding(bottom = 18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     Text(
                         if (localSynthesisActive) {
                             localLive.status.takeIf { liveBelongsToBook && it.isNotBlank() }
                                 ?: "正在准备本地语音，首次加载模型可能需要一点时间…"
-                        } else if (localChapterEntry) "从当前句开始本地实时合成，前 5 句缓冲后开始播放。"
-                        else "请先打开一本书，再选择本地实时或服务器合成。",
-                        Modifier.padding(top=10.dp).padding(horizontal=20.dp),
-                        fontSize=12.sp,
-                        color=PlayerMuted,
-                        textAlign=TextAlign.Center
+                        } else if (localChapterEntry) {
+                            "点击播放后从当前句开始合成，前 5 句缓冲后开始播放。"
+                        } else {
+                            "请先打开一本书，再选择本地实时或服务器合成。"
+                        },
+                        Modifier.padding(horizontal = 20.dp),
+                        fontSize = 12.sp,
+                        color = PlayerMuted,
+                        textAlign = TextAlign.Center
                     )
-                    if (localSynthesisActive && liveBelongsToChapter && localLive.currentText != null) {
-                        Text("当前逐句稿", Modifier.padding(top=20.dp), fontSize=12.sp, color=PlayerAccent)
-                        Text(
-                            localLive.currentText!!.trim(),
-                            Modifier.padding(top=8.dp).padding(horizontal=18.dp),
-                            maxLines=3,
-                            overflow=TextOverflow.Ellipsis,
-                            fontFamily=Serif,
-                            fontSize=17.sp,
-                            lineHeight=26.sp,
-                            color=PlayerWhite,
-                            textAlign=TextAlign.Center
-                        )
-                    }
                     if (localSynthesisActive && liveBelongsToBook && localLive.totalSegments > 0) {
                         val fraction = (localLive.playedSegments.toFloat() / localLive.totalSegments).coerceIn(0f, 1f)
                         Text(
-                            "合成 ${localLive.generatedSegments}/${localLive.totalSegments} · 播放 ${localLive.playedSegments}/${localLive.totalSegments}",
-                            Modifier.padding(top=14.dp),
-                            fontSize=12.sp,
-                            color=PlayerMuted
+                            "当前第${localLive.playedSegments.coerceAtLeast(1)}句 / 共${localLive.totalSegments}句 · 已生成${localLive.generatedSegments}句",
+                            Modifier.padding(top = 14.dp),
+                            fontSize = 12.sp,
+                            color = PlayerMuted
                         )
                         LinearProgressIndicator(
                             progress = { fraction },
-                            modifier = Modifier.fillMaxWidth().padding(top=8.dp, start=24.dp, end=24.dp),
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp, start = 24.dp, end = 24.dp),
                             color = PlayerAccent,
                             trackColor = PlayerWhite.copy(.16f)
                         )
                     }
-                    if (localChapterEntry) {
-                        Text("播放语速", Modifier.padding(top=20.dp), fontSize=12.sp, color=PlayerMuted)
-                        Row(Modifier.fillMaxWidth().padding(top=8.dp), horizontalArrangement=Arrangement.spacedBy(6.dp)) {
-                            AudioPlayback.supportedSpeeds.forEach { value ->
-                                ChoiceChip(speedLabel(value), AudioPlayback.speed == value, Modifier.weight(1f)) {
-                                    setPlaybackSpeed(value)
-                                }
-                            }
-                        }
-                    }
-                    Button(
-                        onClick = {
-                            if (localSynthesisActive) stopSynthesis()
-                            else if (localChapterEntry) synthesizeLocally() else showSynthesis = true
-                        },
-                        enabled = if (localSynthesisActive) localBook != null else !localSynthesizing,
-                        modifier = Modifier.padding(top = 22.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = PlayerAccent, contentColor = PlayerPanel)
-                    ) {
-                        Text(if (localSynthesisActive) "停止朗读" else if (localChapterEntry) "本地实时合成" else "去选择书籍")
-                    }
-                    if (localChapterEntry) {
-                        TextButton(
+                    if (!localSynthesisActive && !localChapterEntry) {
+                        Button(
                             onClick = { showSynthesis = true },
-                            enabled = !localSynthesisActive,
-                            modifier = Modifier.padding(top = 8.dp)
-                        ) { Text("改用服务器合成", color = PlayerAccent) }
-                    }
-                    TextButton(onClick = ::importAudio, enabled = !importing, modifier = Modifier.padding(top = 14.dp)) {
-                        Text(if (importing) "正在导入…" else "导入听书包", color = PlayerAccent)
+                            colors = ButtonDefaults.buttonColors(containerColor = PlayerAccent, contentColor = PlayerPanel)
+                        ) { Text("去选择书籍") }
                     }
                 }
             } else {
@@ -549,26 +552,66 @@ internal fun AudioPlayerScreen(
                         }
                     }
                     PlayerChooser.CHAPTERS, PlayerChooser.VOICES -> {
-                        val versions = chooser == PlayerChooser.VOICES
-                        val entries = if (versions) visible.filter { it.chapterId==displayItem?.chapterId } else chapters
-                        val selectedIndex=entries.indexOfFirst { it.id==displayItem?.id }.coerceAtLeast(0)
-                        val listState=rememberLazyListState(initialFirstVisibleItemIndex=selectedIndex)
-                        if (versions) Text("仅显示本机已导入的当前章节音频版本", Modifier.padding(bottom=12.dp), fontSize=12.sp, color=PlayerMuted)
-                        LazyColumn(Modifier.heightIn(max=440.dp).padding(bottom=16.dp), state=listState) {
-                            items(entries, key={ it.id }) { item ->
-                                val selected=item.id==displayItem?.id
-                                Row(Modifier.fillMaxWidth().clickable {
-                                    start(item, if (versions) item.positionFor(displayItem?.anchorAt(position) ?: 0) else library.position(item))
-                                    chooser=null
-                                }.padding(vertical=17.dp), verticalAlignment=Alignment.CenterVertically) {
-                                    Glyph(if (selected) "audio" else "play", if (selected) PlayerAccent else PlayerMuted, size=20.dp)
-                                    Column(Modifier.weight(1f).padding(start=14.dp)) {
-                                        Text(if (versions) item.voice else item.title, fontSize=16.sp, color=if (selected) PlayerAccent else PlayerWhite)
-                                        Text(if (versions) "${audioTime(item.durationMs)} · ${item.id.take(8)}" else "${item.voice} · ${audioTime(item.durationMs)}",
-                                            Modifier.padding(top=5.dp), fontSize=11.sp, color=PlayerMuted)
+                        if (chooser == PlayerChooser.CHAPTERS &&
+                            workbenchMode == AudioWorkbenchMode.LOCAL_REALTIME &&
+                            localBook != null
+                        ) {
+                            val selectedIndex = localChapterIndex.coerceIn(0, localBook.chapters.lastIndex.coerceAtLeast(0))
+                            val listState = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex)
+                            Text("选择章节后从该章开头开始本地实时朗读", Modifier.padding(bottom=12.dp), fontSize=12.sp, color=PlayerMuted)
+                            LazyColumn(Modifier.heightIn(max=440.dp).padding(bottom=16.dp), state=listState) {
+                                items(localBook.chapters, key={ it.id }) { chapterItem ->
+                                    val index = localBook.chapters.indexOf(chapterItem)
+                                    val selected = index == localChapterIndex
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable {
+                                            synthesizeLocalChapter(index)
+                                            chooser = null
+                                        }.padding(vertical=17.dp),
+                                        verticalAlignment=Alignment.CenterVertically
+                                    ) {
+                                        Glyph(if (selected) "audio" else "play", if (selected) PlayerAccent else PlayerMuted, size=20.dp)
+                                        Column(Modifier.weight(1f).padding(start=14.dp)) {
+                                            Text(
+                                                "第${index + 1}章  ${chapterItem.title}",
+                                                fontSize=16.sp,
+                                                color=if (selected) PlayerAccent else PlayerWhite,
+                                                maxLines=1,
+                                                overflow=TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                if (chapterItem.body.isBlank()) "正文未下载" else "本地实时朗读",
+                                                Modifier.padding(top=5.dp),
+                                                fontSize=11.sp,
+                                                color=PlayerMuted
+                                            )
+                                        }
                                     }
+                                    HorizontalDivider(color=PlayerWhite.copy(.08f))
                                 }
-                                HorizontalDivider(color=PlayerWhite.copy(.08f))
+                            }
+                        } else {
+                            val versions = chooser == PlayerChooser.VOICES
+                            val entries = if (versions) visible.filter { it.chapterId==displayItem?.chapterId } else chapters
+                            val selectedIndex=entries.indexOfFirst { it.id==displayItem?.id }.coerceAtLeast(0)
+                            val listState=rememberLazyListState(initialFirstVisibleItemIndex=selectedIndex)
+                            if (versions) Text("仅显示本机已导入的当前章节音频版本", Modifier.padding(bottom=12.dp), fontSize=12.sp, color=PlayerMuted)
+                            LazyColumn(Modifier.heightIn(max=440.dp).padding(bottom=16.dp), state=listState) {
+                                items(entries, key={ it.id }) { item ->
+                                    val selected=item.id==displayItem?.id
+                                    Row(Modifier.fillMaxWidth().clickable {
+                                        start(item, if (versions) item.positionFor(displayItem?.anchorAt(position) ?: 0) else library.position(item))
+                                        chooser=null
+                                    }.padding(vertical=17.dp), verticalAlignment=Alignment.CenterVertically) {
+                                        Glyph(if (selected) "audio" else "play", if (selected) PlayerAccent else PlayerMuted, size=20.dp)
+                                        Column(Modifier.weight(1f).padding(start=14.dp)) {
+                                            Text(if (versions) item.voice else item.title, fontSize=16.sp, color=if (selected) PlayerAccent else PlayerWhite)
+                                            Text(if (versions) "${audioTime(item.durationMs)} · ${item.id.take(8)}" else "${item.voice} · ${audioTime(item.durationMs)}",
+                                                Modifier.padding(top=5.dp), fontSize=11.sp, color=PlayerMuted)
+                                        }
+                                    }
+                                    HorizontalDivider(color=PlayerWhite.copy(.08f))
+                                }
                             }
                         }
                     }
@@ -612,4 +655,188 @@ private fun timerLabel(): String = when {
     AudioPlayback.timerMode == -1 -> "本章结束"
     AudioPlayback.timerRemainingMs > 0 -> audioTime(((AudioPlayback.timerRemainingMs + 999) / 1000 * 1000).toInt())
     else -> "定时"
+}
+
+/**
+ * The visual player is deliberately shared by imported audio and local
+ * realtime TTS. Only the data source and the callbacks differ; this keeps the
+ * local path from looking like a separate, unfinished screen.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun UnifiedPlayerSurface(
+    book: Book,
+    artworkArea: Dp,
+    artworkHeight: Dp,
+    currentText: String?,
+    currentLabel: String?,
+    position: Int,
+    duration: Int,
+    positionLabel: String,
+    durationLabel: String,
+    sliderEnabled: Boolean,
+    preparing: Boolean,
+    isPlaying: Boolean,
+    timerLabel: String,
+    timerSelected: Boolean,
+    speed: Float,
+    chaptersLabel: String,
+    fourthActionIcon: String,
+    fourthActionLabel: String,
+    fourthActionEnabled: Boolean,
+    previousEnabled: Boolean,
+    nextEnabled: Boolean,
+    voiceLabel: String,
+    voiceEnabled: Boolean,
+    onTimer: () -> Unit,
+    onSpeed: () -> Unit,
+    onChapters: () -> Unit,
+    onFourthAction: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onPlayPause: () -> Unit,
+    onSeek: (Int) -> Unit,
+    onVoice: () -> Unit,
+    onRead: (() -> Unit)?,
+) {
+    Column(Modifier.fillMaxWidth().height(artworkArea), horizontalAlignment = Alignment.CenterHorizontally) {
+        Spacer(Modifier.weight(1f))
+        BookCover(
+            book,
+            Modifier.width(artworkHeight * .735f).height(artworkHeight)
+                .shadow(22.dp, RoundedCornerShape(10.dp)).clip(RoundedCornerShape(10.dp))
+        )
+        Spacer(Modifier.weight(1f))
+        currentLabel?.takeIf { it.isNotBlank() }?.let {
+            Text(
+                it,
+                Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+                fontSize = 11.sp,
+                color = PlayerAccent,
+                textAlign = TextAlign.Center
+            )
+        }
+        Text(
+            currentText?.trim().takeIf { !it.isNullOrBlank() } ?: "准备播放…",
+            Modifier.fillMaxWidth().heightIn(min = 54.dp)
+                .padding(horizontal = 6.dp)
+                .clickable(enabled = onRead != null) { onRead?.invoke() },
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            fontFamily = Serif,
+            fontSize = 18.sp,
+            lineHeight = 28.sp,
+            color = PlayerWhite.copy(.88f),
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(12.dp))
+    }
+    Row(
+        Modifier.fillMaxWidth().height(68.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PlayerAction("timer", timerLabel, timerSelected, enabled = true, onClick = onTimer)
+        PlayerAction("speed", "语速 ${speedLabel(speed)}", onClick = onSpeed)
+        PlayerAction("list", chaptersLabel, enabled = true, onClick = onChapters)
+        PlayerAction(fourthActionIcon, fourthActionLabel, enabled = fourthActionEnabled, onClick = onFourthAction)
+    }
+    val sliderMax = duration.coerceAtLeast(1)
+    Slider(
+        value = position.toFloat().coerceIn(0f, sliderMax.toFloat()),
+        onValueChange = { if (sliderEnabled) onSeek(it.toInt()) },
+        onValueChangeFinished = {},
+        valueRange = 0f..sliderMax.toFloat(),
+        enabled = sliderEnabled && !preparing,
+        modifier = Modifier.fillMaxWidth().height(32.dp).semantics { contentDescription = "播放进度" },
+        colors = SliderDefaults.colors(
+            thumbColor = PlayerWhite,
+            activeTrackColor = PlayerWhite,
+            inactiveTrackColor = PlayerWhite.copy(.22f)
+        ),
+        thumb = { Box(Modifier.size(12.dp).background(PlayerWhite, CircleShape)) },
+        track = { state ->
+            SliderDefaults.Track(
+                state,
+                modifier = Modifier.height(3.dp),
+                colors = SliderDefaults.colors(
+                    activeTrackColor = PlayerWhite,
+                    inactiveTrackColor = PlayerWhite.copy(.22f)
+                ),
+                thumbTrackGapSize = 0.dp,
+                drawStopIndicator = null
+            )
+        }
+    )
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(positionLabel, fontSize = 11.sp, color = PlayerMuted)
+        Text(durationLabel, fontSize = 11.sp, color = PlayerMuted)
+    }
+    Row(
+        Modifier.fillMaxWidth().height(96.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        PlayerIcon("back15", "后退 15 秒", enabled = sliderEnabled && !preparing) {
+            onSeek(position - 15000)
+        }
+        PlayerIcon("previousChapter", "上一章", enabled = previousEnabled, onClick = onPrevious)
+        Box(
+            Modifier.size(74.dp)
+                .border(1.5.dp, PlayerWhite.copy(.42f), CircleShape)
+                .clip(CircleShape)
+                .clickable(enabled = !preparing, role = Role.Button, onClick = onPlayPause)
+                .semantics {
+                    contentDescription = if (preparing) "正在加载音频"
+                    else if (isPlaying) "暂停听书" else "播放听书"
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            if (preparing) {
+                CircularProgressIndicator(Modifier.size(28.dp), color = PlayerWhite, strokeWidth = 2.dp)
+            } else {
+                Glyph(if (isPlaying) "playerPause" else "playerPlay", PlayerWhite, size = 31.dp)
+            }
+        }
+        PlayerIcon("nextChapter", "下一章", enabled = nextEnabled, onClick = onNext)
+        PlayerIcon("next15", "前进 15 秒", enabled = sliderEnabled && !preparing) {
+            onSeek(position + 15000)
+        }
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 18.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            Modifier.weight(1f).height(52.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .background(PlayerWhite.copy(.08f))
+                .clickable(enabled = voiceEnabled, onClick = onVoice)
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                voiceLabel,
+                Modifier.weight(1f),
+                fontSize = 13.sp,
+                color = if (voiceEnabled) PlayerWhite else PlayerMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (voiceEnabled) Glyph("next", PlayerMuted, Modifier.padding(start = 8.dp), size = 14.dp)
+        }
+        Box(
+            Modifier.height(52.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .background(PlayerWhite.copy(.08f))
+                .clickable(enabled = onRead != null, onClick = { onRead?.invoke() })
+                .padding(horizontal = 18.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("定位原文", fontSize = 13.sp, color = if (onRead != null) PlayerWhite else PlayerMuted)
+        }
+    }
 }

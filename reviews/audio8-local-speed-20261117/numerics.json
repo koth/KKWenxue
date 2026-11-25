@@ -1,0 +1,66 @@
+{
+  "checks": [
+    {
+      "index": 0,
+      "projection": {
+        "max_absolute_error": 0.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "probability_total_variation": 0.0,
+        "identical": true
+      },
+      "hidden": {
+        "max_absolute_error": 0.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "probability_total_variation": 0.0,
+        "identical": true
+      },
+      "prefix": {
+        "max_absolute_error": 0.5,
+        "rmse": 0.10056088864803314,
+        "relative_rmse": 0.007318023592233658,
+        "probability_total_variation": 0.0009412546642124653,
+        "identical": false
+      },
+      "expanded_kv": {
+        "max_absolute_error": 0.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "probability_total_variation": 0.0,
+        "identical": true
+      }
+    },
+    {
+      "index": 1,
+      "projection": {
+        "max_absolute_error": 0.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "probability_total_variation": 0.0,
+        "identical": true
+      },
+      "hidden": {
+        "max_absolute_error": 0.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "probability_total_variation": 0.0,
+        "identical": true
+      },
+      "prefix": {
+        "max_absolute_error": 0.375,
+        "rmse": 0.10892927646636963,
+        "relative_rmse": 0.006755951326340437,
+        "probability_total_variation": 0.04364360123872757,
+        "identical": false
+      },
+      "expanded_kv": {
+        "max_absolute_error": 0.0,
+        "rmse": 0.0,
+        "relative_rmse": 0.0,
+        "probability_total_variation": 0.0,
+        "identical": true
+      }
+    }
+  ]
+}

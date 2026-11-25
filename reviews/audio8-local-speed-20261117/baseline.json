@@ -1,0 +1,1778 @@
+{
+  "binary": "D:\\work\\KKWenxue\\tmp\\audio8-baseline\\audio8-tts.exe",
+  "command": [
+    "D:\\work\\KKWenxue\\tmp\\audio8-baseline\\audio8-tts.exe",
+    "--model",
+    "D:\\work\\KKWenxue\\tmp\\audio8-model",
+    "--codec",
+    "D:\\work\\KKWenxue\\tmp\\audio8-model\\codec-decoder-bf16.safetensors",
+    "--server"
+  ],
+  "ready": {
+    "engine": {
+      "attention_graph_buckets": [],
+      "backend": "libtorch_cpp_cuda",
+      "batch_size": 1,
+      "compact_semantics": true,
+      "compute_capability": "8.6",
+      "context": 2048,
+      "cuda_free_bytes": 7567572992,
+      "cuda_total_bytes": 10736893952,
+      "dtype": "BFloat16",
+      "dynamic_kv": false,
+      "expanded_fp32_kv": true,
+      "fp16_model": false,
+      "gpu": "NVIDIA GeForce RTX 3080",
+      "graphs": true,
+      "inference_revision": "expanded-kv-v3",
+      "peak_reserved_bytes": 1931476992,
+      "peak_tensor_bytes": 1832152576,
+      "python_runtime": false,
+      "reference_prefix_cache": true,
+      "sample_rate": 44100
+    },
+    "main_to_ready_seconds": 1.2999098,
+    "stage": "ready"
+  },
+  "startup_seconds": 3.0355186999076977,
+  "warmup_requests": 3,
+  "reports": [
+    {
+      "audio_seconds": 3.575873015873016,
+      "decode_and_save_seconds": 0.2078412,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 7034896384,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 2399141888,
+        "peak_tensor_bytes": 2134840320,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 3.575873015873016,
+          "autoregressive_seconds": 0.9435722,
+          "decode_and_save_seconds": 0.2078412,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 9.245696067810059,
+              "semantic_ms": 16.665599822998047,
+              "slow_ms": 6.760447978973389
+            },
+            {
+              "fast_ms": 6.790751934051514,
+              "semantic_ms": 0.7417920231819153,
+              "slow_ms": 5.843967914581299
+            },
+            {
+              "fast_ms": 6.78707218170166,
+              "semantic_ms": 0.6656000018119812,
+              "slow_ms": 5.445631980895996
+            },
+            {
+              "fast_ms": 6.819839954376221,
+              "semantic_ms": 0.6133760213851929,
+              "slow_ms": 5.442560195922852
+            },
+            {
+              "fast_ms": 6.824960231781006,
+              "semantic_ms": 0.652288019657135,
+              "slow_ms": 5.468160152435303
+            }
+          ],
+          "frames": 77,
+          "generation_seconds": 0.9754974,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\0\\1.wav",
+          "prefill_seconds": 0.0319251,
+          "text": "「清水组长，它..它还在后面！」"
+        }
+      ],
+      "generation_seconds": 1.0121583,
+      "reference_cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0366609,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.0119415
+      },
+      "request": {
+        "minimum_seconds": 0,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\0",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 103100043,
+        "split_sentences": false,
+        "text": "「清水组长，它..它还在后面！」",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 1.8640013,
+      "state": "completed",
+      "text": "「清水组长，它..它还在后面！」",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\0\\audio8.wav",
+      "wall_seconds": 1.864538999972865,
+      "codes_sha256": "21e4bb54f817b866a869f9ef755676b575ce6f43f7a08b11ce70ec29ef86dff5",
+      "pcm_sha256": "b82cc2bfb5c9ba67770ae30d25177f33329c2193f0f2c3740fe3dc6e06a1cd4b"
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "decode_and_save_seconds": 0.0684028,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 6867124224,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 2566914048,
+        "peak_tensor_bytes": 2152300544,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 3.8545124716553287,
+          "autoregressive_seconds": 0.982398,
+          "decode_and_save_seconds": 0.0684028,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.185984134674072,
+              "semantic_ms": 1.1304960250854492,
+              "slow_ms": 4.968448162078857
+            },
+            {
+              "fast_ms": 6.140927791595459,
+              "semantic_ms": 0.6768640279769897,
+              "slow_ms": 4.9991679191589355
+            },
+            {
+              "fast_ms": 6.1532158851623535,
+              "semantic_ms": 0.6533120274543762,
+              "slow_ms": 4.996096134185791
+            },
+            {
+              "fast_ms": 6.1184000968933105,
+              "semantic_ms": 0.6205440163612366,
+              "slow_ms": 5.000192165374756
+            },
+            {
+              "fast_ms": 6.146048069000244,
+              "semantic_ms": 0.5980160236358643,
+              "slow_ms": 5.005311965942383
+            }
+          ],
+          "frames": 83,
+          "generation_seconds": 1.0175388,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\1\\1.wav",
+          "prefill_seconds": 0.0351407,
+          "text": "因为下雨的缘故，脚下的路泥泞坎坷。"
+        }
+      ],
+      "generation_seconds": 1.0175388,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001428
+      },
+      "request": {
+        "minimum_seconds": 0,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\1",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 111138,
+        "split_sentences": false,
+        "text": "因为下雨的缘故，脚下的路泥泞坎坷。",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 1.1029091,
+      "state": "completed",
+      "text": "因为下雨的缘故，脚下的路泥泞坎坷。",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\1\\audio8.wav",
+      "wall_seconds": 1.1035065000178292,
+      "codes_sha256": "b1f01f3ff3e3c5ca53a925b1da22c4e834b1775f99fde35e81ad55410ab0f816",
+      "pcm_sha256": "dfe651beb76970ca360e5dcda5fb90ccdc9dea47e5d06dd9234876c641ad942c"
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "decode_and_save_seconds": 0.1421299,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 5610930176,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 3823108096,
+        "peak_tensor_bytes": 2575995904,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 11.00625850340136,
+          "autoregressive_seconds": 2.792129,
+          "decode_and_save_seconds": 0.1421299,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.195199966430664,
+              "semantic_ms": 1.0076160430908203,
+              "slow_ms": 5.024767875671387
+            },
+            {
+              "fast_ms": 6.152192115783691,
+              "semantic_ms": 0.6696959733963013,
+              "slow_ms": 5.071872234344482
+            },
+            {
+              "fast_ms": 6.1829118728637695,
+              "semantic_ms": 0.6133760213851929,
+              "slow_ms": 4.992000102996826
+            },
+            {
+              "fast_ms": 6.215680122375488,
+              "semantic_ms": 0.5877760052680969,
+              "slow_ms": 5.007359981536865
+            },
+            {
+              "fast_ms": 6.205440044403076,
+              "semantic_ms": 0.5683199763298035,
+              "slow_ms": 5.002240180969238
+            }
+          ],
+          "frames": 237,
+          "generation_seconds": 2.8266003,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\2\\1.wav",
+          "prefill_seconds": 0.0344712,
+          "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。"
+        }
+      ],
+      "generation_seconds": 2.8266003,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001437
+      },
+      "request": {
+        "minimum_seconds": 5.125,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\2",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 103100045,
+        "split_sentences": false,
+        "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 3.0058459,
+      "state": "completed",
+      "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\2\\audio8.wav",
+      "wall_seconds": 3.006399399950169,
+      "codes_sha256": "1006e73e1ee9e2ecfd8169ac380efa6fda212c23359c88ff911bd31a6da4f2e7",
+      "pcm_sha256": "8594c86557c13143f02a35f2b9573382f54d62f142f02acf19a1165db6232644"
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "decode_and_save_seconds": 0.0531765,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 5610930176,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 3823108096,
+        "peak_tensor_bytes": 2575995904,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 3.575873015873016,
+          "autoregressive_seconds": 0.9115265,
+          "decode_and_save_seconds": 0.0531765,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.21670389175415,
+              "semantic_ms": 1.2472319602966309,
+              "slow_ms": 4.994048118591309
+            },
+            {
+              "fast_ms": 6.195199966430664,
+              "semantic_ms": 0.5406720042228699,
+              "slow_ms": 5.099520206451416
+            },
+            {
+              "fast_ms": 6.17574405670166,
+              "semantic_ms": 0.5847039818763733,
+              "slow_ms": 5.075967788696289
+            },
+            {
+              "fast_ms": 6.177792072296143,
+              "semantic_ms": 0.5765119791030884,
+              "slow_ms": 5.0278401374816895
+            },
+            {
+              "fast_ms": 6.187007904052734,
+              "semantic_ms": 0.5488640069961548,
+              "slow_ms": 5.021696090698242
+            }
+          ],
+          "frames": 77,
+          "generation_seconds": 0.9483655,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\3\\1.wav",
+          "prefill_seconds": 0.0368388,
+          "text": "「清水组长，它..它还在后面！」"
+        }
+      ],
+      "generation_seconds": 0.9483655,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001631
+      },
+      "request": {
+        "minimum_seconds": 0,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\3",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 103100043,
+        "split_sentences": false,
+        "text": "「清水组长，它..它还在后面！」",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 1.0151322,
+      "state": "completed",
+      "text": "「清水组长，它..它还在后面！」",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\3\\audio8.wav",
+      "wall_seconds": 1.0156235999893397,
+      "codes_sha256": "21e4bb54f817b866a869f9ef755676b575ce6f43f7a08b11ce70ec29ef86dff5",
+      "pcm_sha256": "b82cc2bfb5c9ba67770ae30d25177f33329c2193f0f2c3740fe3dc6e06a1cd4b"
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "decode_and_save_seconds": 0.0577909,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 5610930176,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 3823108096,
+        "peak_tensor_bytes": 2575995904,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 3.8545124716553287,
+          "autoregressive_seconds": 0.9819987,
+          "decode_and_save_seconds": 0.0577909,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.204415798187256,
+              "semantic_ms": 1.0629119873046875,
+              "slow_ms": 4.964352130889893
+            },
+            {
+              "fast_ms": 6.196224212646484,
+              "semantic_ms": 0.477183997631073,
+              "slow_ms": 5.10975980758667
+            },
+            {
+              "fast_ms": 6.151167869567871,
+              "semantic_ms": 0.5457919836044312,
+              "slow_ms": 5.056511878967285
+            },
+            {
+              "fast_ms": 6.18393611907959,
+              "semantic_ms": 0.5457919836044312,
+              "slow_ms": 5.014527797698975
+            },
+            {
+              "fast_ms": 6.1921281814575195,
+              "semantic_ms": 0.549888014793396,
+              "slow_ms": 5.026815891265869
+            }
+          ],
+          "frames": 83,
+          "generation_seconds": 1.0148853,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\4\\1.wav",
+          "prefill_seconds": 0.0328866,
+          "text": "因为下雨的缘故，脚下的路泥泞坎坷。"
+        }
+      ],
+      "generation_seconds": 1.0148853,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001465
+      },
+      "request": {
+        "minimum_seconds": 0,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\4",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 111138,
+        "split_sentences": false,
+        "text": "因为下雨的缘故，脚下的路泥泞坎坷。",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 1.0899913,
+      "state": "completed",
+      "text": "因为下雨的缘故，脚下的路泥泞坎坷。",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\4\\audio8.wav",
+      "wall_seconds": 1.0905356999719515,
+      "codes_sha256": "b1f01f3ff3e3c5ca53a925b1da22c4e834b1775f99fde35e81ad55410ab0f816",
+      "pcm_sha256": "dfe651beb76970ca360e5dcda5fb90ccdc9dea47e5d06dd9234876c641ad942c"
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "decode_and_save_seconds": 0.1295383,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 5610930176,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 3823108096,
+        "peak_tensor_bytes": 2575995904,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 11.00625850340136,
+          "autoregressive_seconds": 2.7870721,
+          "decode_and_save_seconds": 0.1295383,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.22489595413208,
+              "semantic_ms": 1.1929600238800049,
+              "slow_ms": 5.0032639503479
+            },
+            {
+              "fast_ms": 6.190080165863037,
+              "semantic_ms": 0.6635519862174988,
+              "slow_ms": 5.093376159667969
+            },
+            {
+              "fast_ms": 6.179840087890625,
+              "semantic_ms": 0.4925439953804016,
+              "slow_ms": 5.041152000427246
+            },
+            {
+              "fast_ms": 6.189055919647217,
+              "semantic_ms": 0.5253120064735413,
+              "slow_ms": 5.031936168670654
+            },
+            {
+              "fast_ms": 6.187007904052734,
+              "semantic_ms": 0.4618239998817444,
+              "slow_ms": 4.993023872375488
+            }
+          ],
+          "frames": 237,
+          "generation_seconds": 2.8240324,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\5\\1.wav",
+          "prefill_seconds": 0.0369602,
+          "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。"
+        }
+      ],
+      "generation_seconds": 2.8240324,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001374
+      },
+      "request": {
+        "minimum_seconds": 5.125,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\5",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 103100045,
+        "split_sentences": false,
+        "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 2.9886487,
+      "state": "completed",
+      "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\5\\audio8.wav",
+      "wall_seconds": 2.9892465999582782,
+      "codes_sha256": "1006e73e1ee9e2ecfd8169ac380efa6fda212c23359c88ff911bd31a6da4f2e7",
+      "pcm_sha256": "8594c86557c13143f02a35f2b9573382f54d62f142f02acf19a1165db6232644"
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "decode_and_save_seconds": 0.0558132,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 5610930176,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 3823108096,
+        "peak_tensor_bytes": 2575995904,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 3.575873015873016,
+          "autoregressive_seconds": 0.9123021,
+          "decode_and_save_seconds": 0.0558132,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.211584091186523,
+              "semantic_ms": 1.240064024925232,
+              "slow_ms": 5.037055969238281
+            },
+            {
+              "fast_ms": 6.185984134674072,
+              "semantic_ms": 0.5171200037002563,
+              "slow_ms": 5.022719860076904
+            },
+            {
+              "fast_ms": 6.203392028808594,
+              "semantic_ms": 0.49561598896980286,
+              "slow_ms": 5.031936168670654
+            },
+            {
+              "fast_ms": 6.181888103485107,
+              "semantic_ms": 0.5652480125427246,
+              "slow_ms": 5.026815891265869
+            },
+            {
+              "fast_ms": 6.204415798187256,
+              "semantic_ms": 0.4915199875831604,
+              "slow_ms": 5.029888153076172
+            }
+          ],
+          "frames": 77,
+          "generation_seconds": 0.9475735,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\6\\1.wav",
+          "prefill_seconds": 0.0352714,
+          "text": "「清水组长，它..它还在后面！」"
+        }
+      ],
+      "generation_seconds": 0.9475735,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001653
+      },
+      "request": {
+        "minimum_seconds": 0,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\6",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 103100043,
+        "split_sentences": false,
+        "text": "「清水组长，它..它还在后面！」",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 1.0293574,
+      "state": "completed",
+      "text": "「清水组长，它..它还在后面！」",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\6\\audio8.wav",
+      "wall_seconds": 1.0299517998937517,
+      "codes_sha256": "21e4bb54f817b866a869f9ef755676b575ce6f43f7a08b11ce70ec29ef86dff5",
+      "pcm_sha256": "b82cc2bfb5c9ba67770ae30d25177f33329c2193f0f2c3740fe3dc6e06a1cd4b"
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "decode_and_save_seconds": 0.0577989,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 5610930176,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 3823108096,
+        "peak_tensor_bytes": 2575995904,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 3.8545124716553287,
+          "autoregressive_seconds": 0.9812086,
+          "decode_and_save_seconds": 0.0577989,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.21670389175415,
+              "semantic_ms": 1.1827199459075928,
+              "slow_ms": 4.989952087402344
+            },
+            {
+              "fast_ms": 6.21670389175415,
+              "semantic_ms": 0.4628480076789856,
+              "slow_ms": 5.01043176651001
+            },
+            {
+              "fast_ms": 6.194176197052002,
+              "semantic_ms": 0.4915199875831604,
+              "slow_ms": 5.007359981536865
+            },
+            {
+              "fast_ms": 6.195199966430664,
+              "semantic_ms": 0.5437440276145935,
+              "slow_ms": 4.994048118591309
+            },
+            {
+              "fast_ms": 6.153183937072754,
+              "semantic_ms": 0.5509439706802368,
+              "slow_ms": 5.017600059509277
+            }
+          ],
+          "frames": 83,
+          "generation_seconds": 1.015458,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\7\\1.wav",
+          "prefill_seconds": 0.0342494,
+          "text": "因为下雨的缘故，脚下的路泥泞坎坷。"
+        }
+      ],
+      "generation_seconds": 1.015458,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001464
+      },
+      "request": {
+        "minimum_seconds": 0,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\7",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 111138,
+        "split_sentences": false,
+        "text": "因为下雨的缘故，脚下的路泥泞坎坷。",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 1.0902014,
+      "state": "completed",
+      "text": "因为下雨的缘故，脚下的路泥泞坎坷。",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\7\\audio8.wav",
+      "wall_seconds": 1.0907892000395805,
+      "codes_sha256": "b1f01f3ff3e3c5ca53a925b1da22c4e834b1775f99fde35e81ad55410ab0f816",
+      "pcm_sha256": "dfe651beb76970ca360e5dcda5fb90ccdc9dea47e5d06dd9234876c641ad942c"
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "decode_and_save_seconds": 0.1338016,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 5610930176,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 3823108096,
+        "peak_tensor_bytes": 2575995904,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 11.00625850340136,
+          "autoregressive_seconds": 2.7901261,
+          "decode_and_save_seconds": 0.1338016,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.196224212646484,
+              "semantic_ms": 1.2124160528182983,
+              "slow_ms": 4.9991679191589355
+            },
+            {
+              "fast_ms": 6.148096084594727,
+              "semantic_ms": 0.5529599785804749,
+              "slow_ms": 5.01145601272583
+            },
+            {
+              "fast_ms": 6.208511829376221,
+              "semantic_ms": 0.5447679758071899,
+              "slow_ms": 5.020671844482422
+            },
+            {
+              "fast_ms": 6.1921281814575195,
+              "semantic_ms": 0.5488640069961548,
+              "slow_ms": 4.998144149780273
+            },
+            {
+              "fast_ms": 6.184959888458252,
+              "semantic_ms": 0.536575973033905,
+              "slow_ms": 5.009407997131348
+            }
+          ],
+          "frames": 237,
+          "generation_seconds": 2.8250481,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\8\\1.wav",
+          "prefill_seconds": 0.034922,
+          "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。"
+        }
+      ],
+      "generation_seconds": 2.8250481,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001408
+      },
+      "request": {
+        "minimum_seconds": 5.125,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\8",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 103100045,
+        "split_sentences": false,
+        "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 2.9940895,
+      "state": "completed",
+      "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\8\\audio8.wav",
+      "wall_seconds": 2.99461799999699,
+      "codes_sha256": "1006e73e1ee9e2ecfd8169ac380efa6fda212c23359c88ff911bd31a6da4f2e7",
+      "pcm_sha256": "8594c86557c13143f02a35f2b9573382f54d62f142f02acf19a1165db6232644"
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "decode_and_save_seconds": 0.0553156,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 5610930176,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 3823108096,
+        "peak_tensor_bytes": 2575995904,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 3.575873015873016,
+          "autoregressive_seconds": 0.9062149,
+          "decode_and_save_seconds": 0.0553156,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.165503978729248,
+              "semantic_ms": 1.0168319940567017,
+              "slow_ms": 4.960256099700928
+            },
+            {
+              "fast_ms": 6.156288146972656,
+              "semantic_ms": 0.5222399830818176,
+              "slow_ms": 4.993023872375488
+            },
+            {
+              "fast_ms": 6.156288146972656,
+              "semantic_ms": 0.5611519813537598,
+              "slow_ms": 4.981760025024414
+            },
+            {
+              "fast_ms": 6.144000053405762,
+              "semantic_ms": 0.5509120225906372,
+              "slow_ms": 5.007359981536865
+            },
+            {
+              "fast_ms": 6.161407947540283,
+              "semantic_ms": 0.506879985332489,
+              "slow_ms": 4.960256099700928
+            }
+          ],
+          "frames": 77,
+          "generation_seconds": 0.93923,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\9\\1.wav",
+          "prefill_seconds": 0.033015,
+          "text": "「清水组长，它..它还在后面！」"
+        }
+      ],
+      "generation_seconds": 0.93923,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001482
+      },
+      "request": {
+        "minimum_seconds": 0,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\9",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 103100043,
+        "split_sentences": false,
+        "text": "「清水组长，它..它还在后面！」",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 1.0186895,
+      "state": "completed",
+      "text": "「清水组长，它..它还在后面！」",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\9\\audio8.wav",
+      "wall_seconds": 1.0193396999966353,
+      "codes_sha256": "21e4bb54f817b866a869f9ef755676b575ce6f43f7a08b11ce70ec29ef86dff5",
+      "pcm_sha256": "b82cc2bfb5c9ba67770ae30d25177f33329c2193f0f2c3740fe3dc6e06a1cd4b"
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "decode_and_save_seconds": 0.0582302,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 5610930176,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 3823108096,
+        "peak_tensor_bytes": 2575995904,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 3.8545124716553287,
+          "autoregressive_seconds": 0.9759305,
+          "decode_and_save_seconds": 0.0582302,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.176415920257568,
+              "semantic_ms": 1.0468800067901611,
+              "slow_ms": 4.943871974945068
+            },
+            {
+              "fast_ms": 6.171648025512695,
+              "semantic_ms": 0.5130239725112915,
+              "slow_ms": 4.964352130889893
+            },
+            {
+              "fast_ms": 6.140927791595459,
+              "semantic_ms": 0.4915199875831604,
+              "slow_ms": 4.960256099700928
+            },
+            {
+              "fast_ms": 6.1675519943237305,
+              "semantic_ms": 0.5550079941749573,
+              "slow_ms": 4.985856056213379
+            },
+            {
+              "fast_ms": 6.155263900756836,
+              "semantic_ms": 0.5253120064735413,
+              "slow_ms": 5.155839920043945
+            }
+          ],
+          "frames": 83,
+          "generation_seconds": 1.0074348,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\10\\1.wav",
+          "prefill_seconds": 0.0315042,
+          "text": "因为下雨的缘故，脚下的路泥泞坎坷。"
+        }
+      ],
+      "generation_seconds": 1.0074348,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001456
+      },
+      "request": {
+        "minimum_seconds": 0,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\10",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 111138,
+        "split_sentences": false,
+        "text": "因为下雨的缘故，脚下的路泥泞坎坷。",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 1.0828308,
+      "state": "completed",
+      "text": "因为下雨的缘故，脚下的路泥泞坎坷。",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\10\\audio8.wav",
+      "wall_seconds": 1.083384900004603,
+      "codes_sha256": "b1f01f3ff3e3c5ca53a925b1da22c4e834b1775f99fde35e81ad55410ab0f816",
+      "pcm_sha256": "dfe651beb76970ca360e5dcda5fb90ccdc9dea47e5d06dd9234876c641ad942c"
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "decode_and_save_seconds": 0.1303867,
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 5610930176,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 3823108096,
+        "peak_tensor_bytes": 2575995904,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "fragments": [
+        {
+          "audio_seconds": 11.00625850340136,
+          "autoregressive_seconds": 2.7758495,
+          "decode_and_save_seconds": 0.1303867,
+          "eos": true,
+          "frame_profile": [
+            {
+              "fast_ms": 6.191103935241699,
+              "semantic_ms": 1.2369920015335083,
+              "slow_ms": 4.968448162078857
+            },
+            {
+              "fast_ms": 6.160384178161621,
+              "semantic_ms": 0.4986880123615265,
+              "slow_ms": 4.994048118591309
+            },
+            {
+              "fast_ms": 6.165503978729248,
+              "semantic_ms": 0.5355520248413086,
+              "slow_ms": 4.978687763214111
+            },
+            {
+              "fast_ms": 6.1532158851623535,
+              "semantic_ms": 0.5591040253639221,
+              "slow_ms": 4.987904071807861
+            },
+            {
+              "fast_ms": 6.1624321937561035,
+              "semantic_ms": 0.4925439953804016,
+              "slow_ms": 4.990975856781006
+            }
+          ],
+          "frames": 237,
+          "generation_seconds": 2.8111523,
+          "index": 1,
+          "path": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\11\\1.wav",
+          "prefill_seconds": 0.0353026,
+          "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。"
+        }
+      ],
+      "generation_seconds": 2.8111523,
+      "reference_cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001261
+      },
+      "request": {
+        "minimum_seconds": 5.125,
+        "op": "synthesize",
+        "output_dir": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\11",
+        "pause": 0,
+        "profile_frames": 5,
+        "seed": 103100045,
+        "split_sentences": false,
+        "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。",
+        "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json"
+      },
+      "request_seconds": 2.9805251,
+      "state": "completed",
+      "text": "如今的黑泽凛身上浮现出了十几道伤痕，这还不包括被圆规刺屁股，雨水接触到伤口疼的他直哆嗦。",
+      "voice": {
+        "codes": "reference_codes.npy",
+        "codes_sha256": "f3f08820dcff370774b2dec0ce906428e6dd87caacc0bd68d00c74f59a7085b2",
+        "encoder": "audio8-codec-bf16-v1",
+        "reference_sha256": "8b3cce991c16270d2c275473f790f4ee98fd37e9f6bc9b76c0d73c1fdba21330",
+        "sample_rate": 44100,
+        "text": "历史长河中，无数先贤用智慧和勇气书写了辉煌篇章。今天，我们回顾那些经典时刻，从中汲取力量，照亮前行的道路，共同探索未知的未来。"
+      },
+      "wav": "D:\\work\\KKWenxue\\tmp\\audio8-runs\\baseline-warm\\11\\audio8.wav",
+      "wall_seconds": 2.981128100072965,
+      "codes_sha256": "1006e73e1ee9e2ecfd8169ac380efa6fda212c23359c88ff911bd31a6da4f2e7",
+      "pcm_sha256": "8594c86557c13143f02a35f2b9573382f54d62f142f02acf19a1165db6232644"
+    }
+  ],
+  "events": [
+    {
+      "python_runtime": false,
+      "stage": "loading_engine"
+    },
+    {
+      "stage": "loading_codec"
+    },
+    {
+      "engine": {
+        "attention_graph_buckets": [],
+        "backend": "libtorch_cpp_cuda",
+        "batch_size": 1,
+        "compact_semantics": true,
+        "compute_capability": "8.6",
+        "context": 2048,
+        "cuda_free_bytes": 7567572992,
+        "cuda_total_bytes": 10736893952,
+        "dtype": "BFloat16",
+        "dynamic_kv": false,
+        "expanded_fp32_kv": true,
+        "fp16_model": false,
+        "gpu": "NVIDIA GeForce RTX 3080",
+        "graphs": true,
+        "inference_revision": "expanded-kv-v3",
+        "peak_reserved_bytes": 1931476992,
+        "peak_tensor_bytes": 1832152576,
+        "python_runtime": false,
+        "reference_prefix_cache": true,
+        "sample_rate": 44100
+      },
+      "main_to_ready_seconds": 1.2999098,
+      "stage": "ready"
+    },
+    {
+      "stage": "capturing_cuda_graphs"
+    },
+    {
+      "seconds": 0.6181077,
+      "stage": "cuda_graphs_ready"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 387,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "fragment": 1,
+      "generation_seconds": 0.9754974,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "generation_seconds": 1.0121583,
+      "request_seconds": 1.8643868,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 388,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "fragment": 1,
+      "generation_seconds": 1.0175388,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "generation_seconds": 1.0175388,
+      "request_seconds": 1.1033579,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 409,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "fragment": 1,
+      "frames": 121,
+      "stage": "progress",
+      "unsaved_audio_seconds": 5.61922902494331
+    },
+    {
+      "fragment": 1,
+      "frames": 161,
+      "stage": "progress",
+      "unsaved_audio_seconds": 7.476825396825397
+    },
+    {
+      "fragment": 1,
+      "frames": 201,
+      "stage": "progress",
+      "unsaved_audio_seconds": 9.334421768707482
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "fragment": 1,
+      "generation_seconds": 2.8266003,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "generation_seconds": 2.8266003,
+      "request_seconds": 3.006263,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 387,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "fragment": 1,
+      "generation_seconds": 0.9483655,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "generation_seconds": 0.9483655,
+      "request_seconds": 1.0155042,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 388,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "fragment": 1,
+      "generation_seconds": 1.0148853,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "generation_seconds": 1.0148853,
+      "request_seconds": 1.0904261,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 409,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "fragment": 1,
+      "frames": 121,
+      "stage": "progress",
+      "unsaved_audio_seconds": 5.61922902494331
+    },
+    {
+      "fragment": 1,
+      "frames": 161,
+      "stage": "progress",
+      "unsaved_audio_seconds": 7.476825396825397
+    },
+    {
+      "fragment": 1,
+      "frames": 201,
+      "stage": "progress",
+      "unsaved_audio_seconds": 9.334421768707482
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "fragment": 1,
+      "generation_seconds": 2.8240324,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "generation_seconds": 2.8240324,
+      "request_seconds": 2.9891184,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 387,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "fragment": 1,
+      "generation_seconds": 0.9475735,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "generation_seconds": 0.9475735,
+      "request_seconds": 1.0298299,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 388,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "fragment": 1,
+      "generation_seconds": 1.015458,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "generation_seconds": 1.015458,
+      "request_seconds": 1.090679,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 409,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "fragment": 1,
+      "frames": 121,
+      "stage": "progress",
+      "unsaved_audio_seconds": 5.61922902494331
+    },
+    {
+      "fragment": 1,
+      "frames": 161,
+      "stage": "progress",
+      "unsaved_audio_seconds": 7.476825396825397
+    },
+    {
+      "fragment": 1,
+      "frames": 201,
+      "stage": "progress",
+      "unsaved_audio_seconds": 9.334421768707482
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "fragment": 1,
+      "generation_seconds": 2.8250481,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "generation_seconds": 2.8250481,
+      "request_seconds": 2.9944911,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 387,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "fragment": 1,
+      "generation_seconds": 0.93923,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 3.575873015873016,
+      "generation_seconds": 0.93923,
+      "request_seconds": 1.0191784,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 388,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "fragment": 1,
+      "generation_seconds": 1.0074348,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 3.8545124716553287,
+      "generation_seconds": 1.0074348,
+      "request_seconds": 1.0832642,
+      "stage": "completed"
+    },
+    {
+      "fragment": 1,
+      "prompt_positions": 409,
+      "stage": "generating",
+      "total": 1
+    },
+    {
+      "fragment": 1,
+      "frames": 1,
+      "stage": "progress",
+      "unsaved_audio_seconds": 0.046439909297052155
+    },
+    {
+      "fragment": 1,
+      "frames": 41,
+      "stage": "progress",
+      "unsaved_audio_seconds": 1.9040362811791383
+    },
+    {
+      "fragment": 1,
+      "frames": 81,
+      "stage": "progress",
+      "unsaved_audio_seconds": 3.7616326530612243
+    },
+    {
+      "fragment": 1,
+      "frames": 121,
+      "stage": "progress",
+      "unsaved_audio_seconds": 5.61922902494331
+    },
+    {
+      "fragment": 1,
+      "frames": 161,
+      "stage": "progress",
+      "unsaved_audio_seconds": 7.476825396825397
+    },
+    {
+      "fragment": 1,
+      "frames": 201,
+      "stage": "progress",
+      "unsaved_audio_seconds": 9.334421768707482
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "fragment": 1,
+      "generation_seconds": 2.8111523,
+      "stage": "fragment_saved"
+    },
+    {
+      "audio_seconds": 11.00625850340136,
+      "generation_seconds": 2.8111523,
+      "request_seconds": 2.980997,
+      "stage": "completed"
+    }
+  ],
+  "warm_wall": 15.294617599924095,
+  "warm_audio": 55.30993197278911,
+  "warm_rtf": 0.276525698991071
+}

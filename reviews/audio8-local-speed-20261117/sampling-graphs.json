@@ -1,0 +1,95 @@
+{
+  "passed": true,
+  "baseline": {
+    "reports": [
+      {
+        "index": 0,
+        "hashes": {
+          "1-codes.npy": "b26f77097ad1a19c253e81d707096ce8cd1740ea3c4acd7fa051bf6acffaf1a3",
+          "audio8.wav": "8b3a7a5809e9e0b187d33b9999bfe4001b80c623aa5eba88b826587fca2a5d3b"
+        },
+        "fragments": 1
+      },
+      {
+        "index": 1,
+        "hashes": {
+          "1-codes.npy": "7401e1df65671c691e47457988ca7fa2b6f002448f2e5859a581cbe588311b10",
+          "audio8.wav": "3ae6b8b508d4e5d5930b4cba93e5d7dfd76cde79f6525d07df26e0d69f1b1438"
+        },
+        "fragments": 1
+      },
+      {
+        "index": 2,
+        "hashes": {
+          "1-codes.npy": "09f5635284904553090d51ea71801a78b16733928613d4f68afe3c9ae2dbe5d5",
+          "audio8.wav": "e2e6d02189c7ce7fbee5b7c05f41eb8c12f8e2bb990ad028f0cd05c3baecf4b3"
+        },
+        "fragments": 1
+      },
+      {
+        "index": 3,
+        "hashes": {
+          "1-codes.npy": "b26f77097ad1a19c253e81d707096ce8cd1740ea3c4acd7fa051bf6acffaf1a3",
+          "2-codes.npy": "1037c14db324c9eb4cf23388f2f26e808b359c07d344cd1ef81b8bf19daf836d",
+          "audio8.wav": "81e70cd856dc87f4b9321a0c03b2d54e84f346bf3c8e59e06484fad422c78a73"
+        },
+        "fragments": 2
+      },
+      {
+        "index": 4,
+        "hashes": {
+          "1-codes.npy": "b26f77097ad1a19c253e81d707096ce8cd1740ea3c4acd7fa051bf6acffaf1a3",
+          "audio8.wav": "8b3a7a5809e9e0b187d33b9999bfe4001b80c623aa5eba88b826587fca2a5d3b"
+        },
+        "fragments": 1
+      }
+    ],
+    "graph_captures": 3
+  },
+  "fused": {
+    "reports": [
+      {
+        "index": 0,
+        "hashes": {
+          "1-codes.npy": "b26f77097ad1a19c253e81d707096ce8cd1740ea3c4acd7fa051bf6acffaf1a3",
+          "audio8.wav": "8b3a7a5809e9e0b187d33b9999bfe4001b80c623aa5eba88b826587fca2a5d3b"
+        },
+        "fragments": 1
+      },
+      {
+        "index": 1,
+        "hashes": {
+          "1-codes.npy": "7401e1df65671c691e47457988ca7fa2b6f002448f2e5859a581cbe588311b10",
+          "audio8.wav": "3ae6b8b508d4e5d5930b4cba93e5d7dfd76cde79f6525d07df26e0d69f1b1438"
+        },
+        "fragments": 1
+      },
+      {
+        "index": 2,
+        "hashes": {
+          "1-codes.npy": "09f5635284904553090d51ea71801a78b16733928613d4f68afe3c9ae2dbe5d5",
+          "audio8.wav": "e2e6d02189c7ce7fbee5b7c05f41eb8c12f8e2bb990ad028f0cd05c3baecf4b3"
+        },
+        "fragments": 1
+      },
+      {
+        "index": 3,
+        "hashes": {
+          "1-codes.npy": "b26f77097ad1a19c253e81d707096ce8cd1740ea3c4acd7fa051bf6acffaf1a3",
+          "2-codes.npy": "1037c14db324c9eb4cf23388f2f26e808b359c07d344cd1ef81b8bf19daf836d",
+          "audio8.wav": "81e70cd856dc87f4b9321a0c03b2d54e84f346bf3c8e59e06484fad422c78a73"
+        },
+        "fragments": 2
+      },
+      {
+        "index": 4,
+        "hashes": {
+          "1-codes.npy": "b26f77097ad1a19c253e81d707096ce8cd1740ea3c4acd7fa051bf6acffaf1a3",
+          "audio8.wav": "8b3a7a5809e9e0b187d33b9999bfe4001b80c623aa5eba88b826587fca2a5d3b"
+        },
+        "fragments": 1
+      }
+    ],
+    "graph_captures": 3
+  }
+}

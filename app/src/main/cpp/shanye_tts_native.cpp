@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,7 +19,11 @@
 #include "zac.h"
 #include "zonos3.h"
 #include "zonos3-generation.h"
+#include "zonos3-laci.h"
+#include "zonos3-short-text.h"
+#include "zonos3-text.h"
 #include "ggml-cpu.h"
+#include "zonos3-zh-heads-json.h"
 #endif
 
 namespace {
@@ -123,43 +128,57 @@ bool ensure_reference_codes(Runtime & runtime, const std::string & path) {
     return true;
 }
 
-// A short title can produce a valid but unrelated waveform because the model
-// was trained mostly on complete sentences. The release server solves this
-// with a pause marker plus a filler sentence. On Android we keep the same
-// conditioning and cut at the long pause before the filler.
-size_t short_text_cut(const std::vector<float> & audio) {
-    constexpr size_t kSampleRate = 44100;
-    constexpr size_t kWindow = kSampleRate / 50; // 20 ms
-    constexpr int kMinimumVoicedWindows = 5;    // 100 ms of speech
-    constexpr int kRequiredSilenceWindows = 8;  // 160 ms pause
-    constexpr float kVoicedRms = 0.012f;
-    constexpr float kSilentRms = 0.006f;
-    if (audio.size() < kWindow * (kMinimumVoicedWindows + kRequiredSilenceWindows)) return 0;
+const zonos3_laci::LaciHeads & chinese_laci_heads() {
+    static const zonos3_laci::LaciHeads heads = zonos3_laci::LaciHeads::parse(
+        std::string(reinterpret_cast<const char *>(zonos3_zh_heads_json), zonos3_zh_heads_json_len),
+        "embedded zonos3_mini_heads_zh.json");
+    return heads;
+}
 
-    int voiced_windows = 0;
-    int silent_windows = 0;
-    size_t silence_start = 0;
-    for (size_t offset = 0; offset + kWindow <= audio.size(); offset += kWindow) {
-        double power = 0.0;
-        for (size_t i = offset; i < offset + kWindow; ++i) {
-            const float sample = std::isfinite(audio[i]) ? audio[i] : 0.0f;
-            power += static_cast<double>(sample) * sample;
+// Match the server's `short_text=auto` prompt for short headings. A heading
+// generated in isolation is easy for the model to continue with unrelated
+// words, while the pause marker and the known filler give the alignment probe
+// a deterministic boundary at which the filler starts.
+std::optional<int> title_short_text_prompt(const zonos3_model & model, const std::string & text,
+                                           std::string & expanded) {
+    const auto & registry = zonos3_short::registry();
+    if (model.tok.pause_ids.empty() || registry.pause_marker.size() != 3) return std::nullopt;
+    const int bucket = static_cast<unsigned char>(registry.pause_marker[2]) - 0x83;
+    if (bucket < 0 || bucket >= static_cast<int>(model.tok.pause_ids.size())) return std::nullopt;
+    const auto filler = registry.fillers.find("cmn");
+    if (filler == registry.fillers.end()) return std::nullopt;
+
+    int words = 0;
+    bool in_word = false;
+    for (const char32_t cp : utf8_to_u32(text)) {
+        if (is_py_space(static_cast<uint32_t>(cp))) {
+            in_word = false;
+        } else if (!in_word) {
+            ++words;
+            in_word = true;
         }
-        const float rms = static_cast<float>(std::sqrt(power / static_cast<double>(kWindow)));
-        if (rms >= kVoicedRms) {
-            ++voiced_windows;
-            silent_windows = 0;
-            continue;
-        }
-        if (voiced_windows < kMinimumVoicedWindows || rms > kSilentRms) {
-            silent_windows = 0;
-            continue;
-        }
-        if (silent_windows == 0) silence_start = offset;
-        ++silent_windows;
-        if (silent_windows >= kRequiredSilenceWindows) return silence_start;
     }
-    return 0;
+    if (words > registry.max_words) return std::nullopt;
+
+    std::vector<int32_t> text_ids;
+    std::vector<int32_t> filler_ids;
+    std::string error;
+    if (!zonos3_payload_ids(model.tok, text, text_ids, error) ||
+        !zonos3_payload_ids(model.tok, filler->second, filler_ids, error) ||
+        text_ids.empty() ||
+        static_cast<int64_t>(text_ids.size()) * registry.max_ratio[1] >
+            static_cast<int64_t>(filler_ids.size()) * registry.max_ratio[0]) {
+        return std::nullopt;
+    }
+
+    expanded = text + registry.pause_marker + filler->second;
+    std::vector<int32_t> expanded_ids;
+    if (!zonos3_text_ids(model.tok, expanded, expanded_ids, error)) return std::nullopt;
+    const int pause_id = model.tok.pause_ids[bucket];
+    for (size_t i = 0; i + 1 < expanded_ids.size(); ++i) {
+        if (expanded_ids[i] == pause_id) return static_cast<int>(i + 1);
+    }
+    return std::nullopt;
 }
 #endif
 
@@ -245,9 +264,9 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeRelease(JNIEnv *, jclass) {
 
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclass, jstring text, jstring codes_path,
-                                                              jint max_frames, jint seed, jboolean stabilize_short_text) {
+                                                              jint max_frames, jint seed, jboolean title_synthesis) {
 #ifndef SHANYE_ZONOS3_AVAILABLE
-    (void) env; (void) text; (void) codes_path; (void) max_frames; (void) seed; (void) stabilize_short_text;
+    (void) env; (void) text; (void) codes_path; (void) max_frames; (void) seed; (void) title_synthesis;
     return nullptr;
 #else
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -267,18 +286,70 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
     }
     const std::vector<int32_t> & reference = g_runtime->reference_codes;
     const int reference_frames = g_runtime->reference_frames;
-    const bool stabilize = stabilize_short_text == JNI_TRUE;
+    const bool title_mode = title_synthesis == JNI_TRUE;
 
     auto generate_audio = [&](const std::string & synthesis_text, const zonos3_sampling & sampling,
-                              std::vector<float> & audio) -> bool {
+                              std::vector<float> & audio, bool use_title_alignment,
+                              bool allow_short_run_on, bool & short_run_on) -> bool {
+        short_run_on = false;
+        std::string expanded_text;
+        std::optional<int> filler_token;
+        bool alignment_available = false;
+        if (use_title_alignment) {
+            try {
+                (void) chinese_laci_heads();
+                alignment_available = true;
+            } catch (const std::exception & probe_error) {
+                __android_log_print(ANDROID_LOG_WARN, kTag, "title alignment heads unavailable: %s",
+                                    probe_error.what());
+            }
+        }
+        if (alignment_available) {
+            filler_token = title_short_text_prompt(g_runtime->backbone, synthesis_text, expanded_text);
+        }
+        const std::string effective_text = filler_token ? expanded_text : synthesis_text;
         zonos3_prompt_options options;
         options.reference_codes = reference.data();
         options.reference_frames = std::min(reference_frames, zonos3_generation().reference_max_frames);
         zonos3_prompt prompt;
         std::string error;
-        if (!zonos3_build_prompt(g_runtime->backbone, synthesis_text, options, prompt, &error)) {
+        if (!zonos3_build_prompt(g_runtime->backbone, effective_text, options, prompt, &error)) {
             __android_log_print(ANDROID_LOG_ERROR, kTag, "prompt failed: %s", error.c_str());
             return false;
+        }
+        std::vector<zonos3_probe_readout> readouts;
+        zonos3_generate_features features;
+        bool probe_enabled = false;
+        if (use_title_alignment) {
+            try {
+                int text_start = -1;
+                int text_length = 0;
+                const auto & heads = chinese_laci_heads();
+                probe_enabled = zonos3_locate_text_span(
+                    g_runtime->backbone, prompt.ids.data(), prompt.n_rows, text_start, text_length);
+                if (probe_enabled) {
+                    for (const auto & head : heads.heads) {
+                        features.probe.heads.push_back({head.layer, head.head});
+                    }
+                    features.probe.text_start = text_start;
+                    features.probe.text_len = text_length;
+                    features.readouts = &readouts;
+                }
+            } catch (const std::exception & probe_error) {
+                __android_log_print(ANDROID_LOG_WARN, kTag, "title alignment probe unavailable: %s",
+                                    probe_error.what());
+                probe_enabled = false;
+            }
+        }
+        if (filler_token && !probe_enabled) {
+            // Never decode the server's filler without the probe that tells us
+            // where to cut it. Fall back to the ordinary heading prompt.
+            filler_token.reset();
+            expanded_text.clear();
+            if (!zonos3_build_prompt(g_runtime->backbone, synthesis_text, options, prompt, &error)) {
+                __android_log_print(ANDROID_LOG_ERROR, kTag, "title fallback prompt failed: %s", error.c_str());
+                return false;
+            }
         }
         std::vector<int32_t> generated;
         int eos_frame = -1;
@@ -289,17 +360,65 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
                                            [](int, const int32_t *, int) {
                                                return !g_cancelled.load();
                                            },
-                                           nullptr);
+                                           nullptr,
+                                           probe_enabled ? &features : nullptr);
         if (frames <= 0 || g_cancelled.load()) {
             __android_log_print(ANDROID_LOG_ERROR, kTag, "generation failed: frames=%d eos=%d text_bytes=%zu",
-                                frames, eos_frame, synthesis_text.size());
+                                frames, eos_frame, effective_text.size());
             return false;
+        }
+        int decode_eos_frame = eos_frame;
+        const int generated_frames = static_cast<int>(generated.size() /
+                                                       static_cast<size_t>(g_runtime->backbone.hp.n_codebooks));
+        if (filler_token && probe_enabled && !readouts.empty() && generated_frames > 0) {
+            zonos3_short::ShortCut cutter(*filler_token, static_cast<int>(g_runtime->backbone.hp.n_codebooks));
+            const int n_codebooks = static_cast<int>(g_runtime->backbone.hp.n_codebooks);
+            for (int frame = 0; frame < generated_frames; ++frame) {
+                // The first sampled row is produced from the prefill logits.
+                // Readout frame 1 therefore belongs to the second generated
+                // row, just like the server scheduler's LACI path.
+                if (frame > 0 && frame - 1 < static_cast<int>(readouts.size())) {
+                    cutter.observe_reading(frame, readouts[frame - 1].argmax);
+                }
+                std::vector<int32_t> row(
+                    generated.begin() + static_cast<size_t>(frame) * n_codebooks,
+                    generated.begin() + static_cast<size_t>(frame + 1) * n_codebooks);
+                cutter.observe_row(row);
+            }
+
+            int keep_frames = generated_frames;
+            const auto & decision = cutter.decided();
+            const bool run_on = decision && decision->first == "run_on";
+            if (run_on && allow_short_run_on) {
+                short_run_on = true;
+                return false;
+            }
+            if (decision && decision->first == "cut") {
+                keep_frames = decision->second;
+            } else if (cutter.enter()) {
+                // Exact server fallback after the short-text retry budget is
+                // exhausted: do not let the filler reach the decoder.
+                keep_frames = std::min(
+                    *cutter.enter(), generated_frames - (n_codebooks - 1));
+            } else {
+                __android_log_print(ANDROID_LOG_WARN, kTag,
+                                    "short title alignment never reached the filler boundary");
+                short_run_on = allow_short_run_on;
+                return false;
+            }
+            keep_frames = std::clamp(keep_frames, 1, generated_frames);
+            if (keep_frames < generated_frames) {
+                generated.resize(static_cast<size_t>(keep_frames) * n_codebooks);
+                const int cut_eos = prompt.prefill_frames + keep_frames;
+                decode_eos_frame = decode_eos_frame >= 0 ? std::min(decode_eos_frame, cut_eos) : cut_eos;
+            }
         }
         std::vector<int32_t> codes = zonos3_prefill_codes(g_runtime->backbone, prompt);
         codes.insert(codes.end(), generated.begin(), generated.end());
-        if (!zac_decode(g_runtime->decoder, codes.data(), static_cast<int>(codes.size() / 10), 10, eos_frame, audio)) {
+        if (!zac_decode(g_runtime->decoder, codes.data(), static_cast<int>(codes.size() / 10), 10,
+                        decode_eos_frame, audio)) {
             __android_log_print(ANDROID_LOG_ERROR, kTag, "ZAC decode failed: code_frames=%zu eos=%d",
-                                codes.size() / 10, eos_frame);
+                                codes.size() / 10, decode_eos_frame);
             return false;
         }
         const size_t drop = std::min(audio.size(), static_cast<size_t>(prompt.prefill_frames) *
@@ -308,6 +427,32 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
         const float gain = zac_output_gain(g_runtime->decoder, -1.0);
         for (float & sample : audio) sample *= gain;
         zonos3_soft_limit(audio.data(), audio.size());
+        if (!filler_token && probe_enabled && !readouts.empty() && !generated.empty()) {
+            // The server keeps a short tail after the reading position reaches
+            // EOS. This preserves the final syllable without letting the model
+            // continue into hallucinated title text.
+            constexpr int kTitleTailFrames = 15;
+            const int target = std::max(0, features.probe.text_len - 2);
+            int reached = -1;
+            int consecutive = 0;
+            for (int i = 0; i < static_cast<int>(readouts.size()); ++i) {
+                if (readouts[i].argmax >= target) {
+                    if (++consecutive >= 2) {
+                        reached = i + 1;
+                        break;
+                    }
+                } else {
+                    consecutive = 0;
+                }
+            }
+            if (reached > 0) {
+                const int generated_frames = static_cast<int>(generated.size() / 10);
+                const int keep_frames = std::min(generated_frames, reached + kTitleTailFrames);
+                const size_t samples_per_frame = zac_samples_per_frame(g_runtime->decoder);
+                const size_t keep_samples = static_cast<size_t>(keep_frames) * samples_per_frame;
+                if (keep_samples < audio.size()) audio.resize(keep_samples);
+            }
+        }
         if (audio.empty()) {
             __android_log_print(ANDROID_LOG_ERROR, kTag, "ZAC produced empty audio");
             return false;
@@ -315,40 +460,28 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
         return true;
     };
 
-    if (stabilize) {
-        // U+E004 is the release registry's 0.5-second pause marker. The
-        // Chinese filler provides sentence-shaped context for short titles.
-        const std::string short_text = requested_text + "\xEE\x80\x84小鸟飞过了安静的小河。";
-        for (int attempt = 0; attempt < 3; ++attempt) {
+    if (title_mode) {
+        std::vector<float> audio;
+        const int max_short_text_retries = zonos3_short::registry().max_retries;
+        for (int attempt = 0; attempt <= max_short_text_retries; ++attempt) {
             zonos3_sampling sampling;
-            sampling.seed = static_cast<uint32_t>(seed) + static_cast<uint32_t>(attempt * 1009);
-            sampling.greedy = true;
-            std::vector<float> audio;
-            if (!generate_audio(short_text, sampling, audio)) {
-                if (g_cancelled.load()) return nullptr;
-                continue;
-            }
-            const size_t cut = short_text_cut(audio);
-            if (cut > 0) {
-                audio.resize(cut);
+            sampling.seed = static_cast<uint32_t>(seed) + static_cast<uint32_t>(attempt * 1000);
+            bool short_run_on = false;
+            if (generate_audio(requested_text, sampling, audio, true, attempt < max_short_text_retries,
+                               short_run_on)) {
                 return pcm16(env, audio);
             }
+            if (g_cancelled.load()) return nullptr;
+            if (!short_run_on) break;
         }
-
-        // Do not allow the filler to leak into the book if the model pack
-        // lacks pause rows or a clean silence boundary was not emitted.
-        zonos3_sampling fallback;
-        fallback.seed = static_cast<uint32_t>(seed);
-        fallback.greedy = true;
-        std::vector<float> audio;
-        if (generate_audio(requested_text, fallback, audio)) return pcm16(env, audio);
         return nullptr;
     }
 
     zonos3_sampling sampling;
     sampling.seed = static_cast<uint32_t>(seed);
     std::vector<float> audio;
-    if (!generate_audio(requested_text, sampling, audio)) return nullptr;
+    bool short_run_on = false;
+    if (!generate_audio(requested_text, sampling, audio, false, false, short_run_on)) return nullptr;
     return pcm16(env, audio);
 #endif
 }

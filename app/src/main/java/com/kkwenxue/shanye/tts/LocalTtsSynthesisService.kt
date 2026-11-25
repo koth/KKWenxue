@@ -181,13 +181,16 @@ class LocalTtsSynthesisService : Service() {
                     LocalTtsPendingJob(jobId, bookId, index, voiceId, resumeOffset)
                 )
 
-                session = LocalTtsLivePlayback.start(
+                val chapterSession = session?.also {
+                    it.beginChapter(hydrated.id, chapter.id, index) { currentIndex, offset ->
+                        library.saveLocalPlaybackPosition(hydrated, currentIndex, offset)
+                    }
+                } ?: LocalTtsLivePlayback.start(
                     hydrated.id, chapter.id, index, AudioPlayback.speed
                 ) { currentIndex, offset ->
                     library.saveLocalPlaybackPosition(hydrated, currentIndex, offset)
-                }
+                }.also { session = it }
                 library.saveLocalPlaybackPosition(hydrated, index, resumeOffset)
-                val chapterSession = session ?: error("本地语音播放会话未创建")
                 val firstSegmentStatus = if (resumeOffset > 0) "正在合成当前句…" else "正在合成章节标题…"
                 chapterSession.status(firstSegmentStatus, LocalTtsLivePhase.PREBUFFERING)
                 val result = withContext(Dispatchers.IO) {
@@ -205,8 +208,10 @@ class LocalTtsSynthesisService : Service() {
                     result.sourceRevision, result.pauseRuleRevision
                 )
                 library.savePlaybackPosition(published, result.durationMs)
-                chapterSession.close()
-                if (index == book.chapters.lastIndex) session = null
+                if (index == book.chapters.lastIndex) {
+                    chapterSession.close()
+                    session = null
+                }
             }
 
             currentChapterTitle = null

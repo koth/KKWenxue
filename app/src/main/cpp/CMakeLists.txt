@@ -60,6 +60,8 @@ if(IS_DIRECTORY "${SHANYE_ZONOS_ROOT}/ggml" AND EXISTS "${SHANYE_ZONOS_ROOT}/ggm
         zonos3_generation_json zonos3-generation-json.h)
     shanye_embed_json("${SHANYE_ZONOS_ROOT}/../../model/src/zonos3/registries/short_text.json"
         zonos3_short_text_json zonos3-short-text-json.h)
+    shanye_embed_json("${SHANYE_ZONOS_ROOT}/../../assets/laci_heads/zonos3_mini_heads_zh.json"
+        zonos3_zh_heads_json zonos3-zh-heads-json.h)
 
     add_library(shanye_zonos3_text STATIC "${SHANYE_ZONOS_ROOT}/src/zonos3-text.cpp")
     target_include_directories(shanye_zonos3_text PUBLIC "${SHANYE_ZONOS_ROOT}/src")

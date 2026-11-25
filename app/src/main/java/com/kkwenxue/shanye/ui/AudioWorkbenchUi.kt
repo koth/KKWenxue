@@ -1,6 +1,7 @@
 package com.kkwenxue.shanye.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,8 +13,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +55,7 @@ internal fun AudioWorkbenchHeader(
     onClose: () -> Unit,
     trailing: @Composable RowScope.() -> Unit = {}
 ) {
+    var modeMenuOpen = remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp),
@@ -62,24 +70,45 @@ internal fun AudioWorkbenchHeader(
             }
             trailing()
         }
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        androidx.compose.foundation.layout.Box(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
         ) {
-            AudioWorkbenchMode.entries.forEach { item ->
-                val selected = item == mode
+            OutlinedButton(
+                onClick = { modeMenuOpen.value = true },
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = WorkbenchWhite),
+                border = BorderStroke(1.dp, WorkbenchWhite.copy(.18f)),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 7.dp)
+            ) {
                 Text(
-                    item.label(),
-                    Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (selected) WorkbenchAccent.copy(.18f) else WorkbenchWhite.copy(.055f))
-                        .clickable { onModeSelected(item) }
-                        .padding(vertical = 10.dp),
-                    color = if (selected) WorkbenchAccent else WorkbenchMuted,
-                    fontSize = 11.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    "播放来源 · ${mode.label()}",
+                    Modifier.weight(1f),
+                    color = WorkbenchWhite,
+                    fontSize = 12.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Start
                 )
+                Text("▾", color = WorkbenchMuted, fontSize = 16.sp)
+            }
+            DropdownMenu(
+                expanded = modeMenuOpen.value,
+                onDismissRequest = { modeMenuOpen.value = false },
+                modifier = Modifier.background(WorkbenchPanel)
+            ) {
+                AudioWorkbenchMode.entries.forEach { item ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                item.label(),
+                                color = if (item == mode) WorkbenchAccent else WorkbenchWhite
+                            )
+                        },
+                        onClick = {
+                            modeMenuOpen.value = false
+                            onModeSelected(item)
+                        }
+                    )
+                }
             }
         }
         Spacer(Modifier.height(8.dp))

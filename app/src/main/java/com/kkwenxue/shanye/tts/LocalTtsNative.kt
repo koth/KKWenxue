@@ -19,10 +19,10 @@ internal object LocalTtsNative {
         codesPath: String,
         maxFrames: Int,
         seed: Int,
-        stabilizeShortText: Boolean = false
+        titleSynthesis: Boolean = false
     ): ByteArray? =
         if (!loaded) null else runCatching {
-            nativeSynthesize(text, codesPath, maxFrames, seed, stabilizeShortText)
+            nativeSynthesize(text, codesPath, maxFrames, seed, titleSynthesis)
         }.getOrNull()
 
     fun cancel() { if (loaded) runCatching { nativeCancel() } }

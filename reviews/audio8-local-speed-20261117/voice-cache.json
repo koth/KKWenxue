@@ -1,0 +1,104 @@
+{
+  "checks": [
+    {
+      "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.2174351,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.0121539
+      }
+    },
+    {
+      "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json",
+      "cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001311
+      }
+    },
+    {
+      "voice": "D:\\work\\KKWenxue\\tmp\\audio8-alternate-metadata\\voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0263315,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.0016378
+      }
+    },
+    {
+      "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0263649,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.0018031
+      }
+    },
+    {
+      "voice": "D:\\work\\KKWenxue\\tmp\\audio8-model\\voices\\cwns\\voice.json",
+      "cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001387
+      }
+    },
+    {
+      "voice": "D:\\work\\KKWenxue\\tmp\\audio8-voice-validation\\voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0258978,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.001669
+      }
+    },
+    {
+      "voice": "D:\\work\\KKWenxue\\tmp\\audio8-voice-validation\\voice.json",
+      "cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.00013
+      }
+    },
+    {
+      "voice": "D:\\work\\KKWenxue\\tmp\\audio8-voice-validation\\voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0279891,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.0015433
+      }
+    },
+    {
+      "voice": "D:\\work\\KKWenxue\\tmp\\audio8-voice-validation\\voice.json",
+      "cache": {
+        "prefix_hit": true,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0,
+        "voice_hit": true,
+        "voice_prepare_seconds": 0.0001113
+      }
+    },
+    {
+      "voice": "D:\\work\\KKWenxue\\tmp\\audio8-voice-validation\\voice.json",
+      "cache": {
+        "prefix_hit": false,
+        "prefix_positions": 366,
+        "reference_prefill_seconds": 0.0247974,
+        "voice_hit": false,
+        "voice_prepare_seconds": 0.0015101
+      }
+    }
+  ]
+}

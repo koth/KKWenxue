@@ -218,7 +218,13 @@ class MainActivity : ComponentActivity() {
                         })
                 }
                 if (showAudio) {
-                    AudioPlayerScreen(null, audioLibrary, audioItems, ::refreshAudio, { checkpoint ->
+                    // If the player is opened while a reader is active (for
+                    // example from the foreground-service notification), bind
+                    // it to that reader's book. Passing null here lets the
+                    // global player select the last audio artifact, which may
+                    // belong to another book currently being synthesized.
+                    val audioBook = readingId?.let { Library.book(it) }
+                    AudioPlayerScreen(audioBook, audioLibrary, audioItems, ::refreshAudio, { checkpoint ->
                         // Closing the player keeps the screen/book underneath it.
                         if (checkpoint != null && readingId == checkpoint.anchor.bookId) {
                             val book = Library.book(checkpoint.anchor.bookId)

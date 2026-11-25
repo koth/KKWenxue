@@ -1,0 +1,281 @@
+{
+  "checks": [
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "norm",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "norm",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "norm",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "operation": "norm_200_rows"
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "rope",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "rope",
+      "values": 128
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "rope",
+      "values": 6272
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "rope",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "silu_multiply",
+      "values": 4864
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "zero_norm",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "cached_query",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "cached_keys",
+      "values": 8960
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "cached_values",
+      "values": 8960
+    },
+    {
+      "different_values": 0,
+      "dtype": "BFloat16",
+      "max_absolute_error": 0.0,
+      "operation": "cached_query",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "cached_keys",
+      "values": 8960
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "cached_values",
+      "values": 8960
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "scaled_cache_keys_boundary",
+      "values": 1835008
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "scaled_cache_values_boundary",
+      "values": 1835008
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "scaled_cache_keys_boundary",
+      "values": 1835008
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "scaled_cache_values_boundary",
+      "values": 1835008
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "norm",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "norm",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "norm",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "operation": "norm_200_rows"
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "rope",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "rope",
+      "values": 128
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "rope",
+      "values": 6272
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "rope",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "silu_multiply",
+      "values": 4864
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "zero_norm",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "cached_query",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "cached_keys",
+      "values": 8960
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "cached_values",
+      "values": 8960
+    },
+    {
+      "different_values": 0,
+      "dtype": "Half",
+      "max_absolute_error": 0.0,
+      "operation": "cached_query",
+      "values": 896
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "cached_keys",
+      "values": 8960
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "cached_values",
+      "values": 8960
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "scaled_cache_keys_boundary",
+      "values": 1835008
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "scaled_cache_values_boundary",
+      "values": 1835008
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "scaled_cache_keys_boundary",
+      "values": 1835008
+    },
+    {
+      "different_values": 0,
+      "dtype": "Float",
+      "max_absolute_error": 0.0,
+      "operation": "scaled_cache_values_boundary",
+      "values": 1835008
+    }
+  ],
+  "passed": true
+}
