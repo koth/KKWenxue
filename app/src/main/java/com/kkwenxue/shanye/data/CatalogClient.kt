@@ -133,18 +133,13 @@ data class OnlineUpdatePlan(
 }
 
 class CatalogClient(private val baseUrl: String = BASE_URL) {
-    private var lastQuery: String? = null
-    private var lastResults: List<CatalogBook> = emptyList()
-
     fun search(query: String, limit: Int = 20): List<CatalogBook> {
         val q = query.trim()
         if (q.isEmpty()) return emptyList()
-        if (q == lastQuery) return lastResults
         val encoded = URLEncoder.encode(q, "UTF-8")
         val value = request("/v1/catalog/search?q=$encoded&limit=${limit.coerceIn(1, 200)}")
         val items = value.optJSONArray("items") ?: org.json.JSONArray()
         val result = buildList { for (i in 0 until items.length()) add(parseBook(items.getJSONObject(i))) }
-        lastQuery = q; lastResults = result
         return result
     }
 

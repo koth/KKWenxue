@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifdef SHANYE_ZONOS3_AVAILABLE
@@ -21,6 +22,7 @@
 #include "zonos3-generation.h"
 #include "zonos3-laci.h"
 #include "zonos3-short-text.h"
+#include "zonos3-span-follow.h"
 #include "zonos3-text.h"
 #include "ggml-cpu.h"
 #include "zonos3-zh-heads-json.h"
@@ -172,13 +174,68 @@ std::optional<int> title_short_text_prompt(const zonos3_model & model, const std
     }
 
     expanded = text + registry.pause_marker + filler->second;
-    std::vector<int32_t> expanded_ids;
-    if (!zonos3_text_ids(model.tok, expanded, expanded_ids, error)) return std::nullopt;
-    const int pause_id = model.tok.pause_ids[bucket];
-    for (size_t i = 0; i + 1 < expanded_ids.size(); ++i) {
-        if (expanded_ids[i] == pause_id) return static_cast<int>(i + 1);
+    const std::u32string text32 = utf8_to_u32(text);
+    const std::u32string expanded32 = utf8_to_u32(expanded);
+    std::unordered_map<int32_t, int> token_bytes;
+    for (const auto & [symbol, id] : model.tok.vocab) {
+        int bytes = 0;
+        for (unsigned char value : symbol) bytes += (value & 0xC0) != 0x80;
+        token_bytes[id + model.tok.offset] = bytes;
+    }
+    for (const auto & [content, id] : model.tok.added)
+        token_bytes[id + model.tok.offset] = static_cast<int>(content.size());
+    zonos3_follow::BpeOffsets bpe = [&model, &token_bytes](const std::u32string & piece) {
+        std::vector<zonos3_follow::Range> ranges;
+        const std::string utf8 = utf8_from_u32(piece);
+        std::vector<int> char_of(utf8.size() + 1, static_cast<int>(piece.size()));
+        for (size_t byte = 0, character = 0; byte < utf8.size(); ++byte) {
+            if (byte > 0 && (static_cast<unsigned char>(utf8[byte]) & 0xC0) != 0x80) ++character;
+            char_of[byte] = static_cast<int>(character);
+        }
+        const std::vector<int32_t> ids = zonos3_tokenize(model.tok, utf8);
+        size_t at = 0;
+        for (size_t i = 1; i + 1 < ids.size(); ++i) {
+            const auto found = token_bytes.find(ids[i]);
+            const size_t bytes = found == token_bytes.end() ? 0 : static_cast<size_t>(found->second);
+            if (bytes == 0 || at + bytes > utf8.size()) continue;
+            ranges.emplace_back(char_of[at], char_of[at + bytes - 1] + 1);
+            at += bytes;
+        }
+        return ranges;
+    };
+    zonos3_follow::TextMarkers markers;
+    markers.pauses = true;
+    const auto ranges = zonos3_follow::token_char_ranges(expanded32, bpe, markers);
+    for (size_t index = 0; index < ranges.size(); ++index) {
+        const auto [start, end] = ranges[index];
+        bool all_space = true;
+        for (int character = start; character < end && character < static_cast<int>(expanded32.size()); ++character)
+            all_space = all_space && is_py_space(static_cast<uint32_t>(expanded32[character]));
+        if (start > static_cast<int>(text32.size()) && !all_space) return static_cast<int>(index);
     }
     return std::nullopt;
+}
+
+void normalize_segment_loudness(std::vector<float> & audio) {
+    if (audio.empty()) return;
+    double power = 0.0;
+    float peak = 0.0f;
+    size_t count = 0;
+    for (float sample : audio) {
+        if (!std::isfinite(sample)) continue;
+        const float magnitude = std::abs(sample);
+        if (magnitude < 0.01f) continue;
+        power += static_cast<double>(sample) * sample;
+        peak = std::max(peak, magnitude);
+        ++count;
+    }
+    if (count == 0 || peak <= 0.0f) return;
+    constexpr float target_rms = 0.10f;
+    constexpr float true_peak = 0.794328f;
+    const float rms = static_cast<float>(std::sqrt(power / static_cast<double>(count)));
+    const float gain = std::clamp(target_rms / rms, 0.5f, 4.0f);
+    const float applied = std::min(gain, true_peak / peak);
+    for (float & sample : audio) sample *= applied;
 }
 #endif
 
@@ -290,7 +347,8 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
 
     auto generate_audio = [&](const std::string & synthesis_text, const zonos3_sampling & sampling,
                               std::vector<float> & audio, bool use_title_alignment,
-                              bool allow_short_run_on, bool & short_run_on) -> bool {
+                              bool allow_short_run_on, bool & short_run_on,
+                              bool enable_short_text = true) -> bool {
         short_run_on = false;
         std::string expanded_text;
         std::optional<int> filler_token;
@@ -304,7 +362,7 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
                                     probe_error.what());
             }
         }
-        if (alignment_available) {
+        if (alignment_available && enable_short_text) {
             filler_token = title_short_text_prompt(g_runtime->backbone, synthesis_text, expanded_text);
         }
         const std::string effective_text = filler_token ? expanded_text : synthesis_text;
@@ -353,7 +411,15 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
         }
         std::vector<int32_t> generated;
         int eos_frame = -1;
-        const int budget = std::max(1, std::min(static_cast<int>(max_frames),
+        int requested_budget = static_cast<int>(max_frames);
+        if (use_title_alignment && !filler_token) {
+            // A heading is a bounded utterance. If the alignment probe is
+            // unavailable, the cap still prevents the model from continuing
+            // into an unrelated sentence.
+            const int title_chars = static_cast<int>(utf8_length(synthesis_text));
+            requested_budget = std::clamp(40 + title_chars * 24, 90, 360);
+        }
+        const int budget = std::max(1, std::min(requested_budget,
                                                  static_cast<int>(g_runtime->backbone.hp.n_ctx_train) - prompt.n_rows));
         const int frames = zonos3_generate(g_runtime->backbone, prompt, budget, sampling, 1.0f, generated, eos_frame,
                                            true, nullptr,
@@ -453,6 +519,7 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
                 if (keep_samples < audio.size()) audio.resize(keep_samples);
             }
         }
+        normalize_segment_loudness(audio);
         if (audio.empty()) {
             __android_log_print(ANDROID_LOG_ERROR, kTag, "ZAC produced empty audio");
             return false;
@@ -462,17 +529,17 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeSynthesize(JNIEnv * env, jclas
 
     if (title_mode) {
         std::vector<float> audio;
-        const int max_short_text_retries = zonos3_short::registry().max_retries;
-        for (int attempt = 0; attempt <= max_short_text_retries; ++attempt) {
+        // Titles use the original text with the alignment probe. The server's
+        // short-text filler is useful for ordinary short utterances, but a
+        // faulty filler boundary can turn a heading into unrelated speech.
+        for (int attempt = 0; attempt < 3; ++attempt) {
             zonos3_sampling sampling;
             sampling.seed = static_cast<uint32_t>(seed) + static_cast<uint32_t>(attempt * 1000);
-            bool short_run_on = false;
-            if (generate_audio(requested_text, sampling, audio, true, attempt < max_short_text_retries,
-                               short_run_on)) {
+            bool ignored = false;
+            if (generate_audio(requested_text, sampling, audio, true, false, ignored, false)) {
                 return pcm16(env, audio);
             }
             if (g_cancelled.load()) return nullptr;
-            if (!short_run_on) break;
         }
         return nullptr;
     }

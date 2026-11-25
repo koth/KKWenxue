@@ -489,13 +489,21 @@ async fn version(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult {
     let book = db::get_book(&conn, id)
         .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "没有这本书".into()))?;
+    let recent = db::is_recent_update(&conn, id).map_err(db_err)?;
+    if !recent {
+        // A per-book version check is also a freshness hint. Queue a detail
+        // fetch for the next incremental run when this book was not observed
+        // in the rolling recent-updates window.
+        db::request_refresh(&conn, id).map_err(db_err)?;
+    }
     Ok(Json(json!({
         "bookId": book.id,
         "latestChapterId": book.latest_chapter_id,
         "chapterCount": db::chapter_count(&conn,id).map_err(db_err)?,
         "remoteRevision": db::manifest_revision(&conn,id).map_err(db_err)?,
         "lastUpdateAt": book.last_update_at,
-        "latestChapter": book.latest_chapter
+        "latestChapter": book.latest_chapter,
+        "refreshQueued": !recent
     })))
 }
 
@@ -517,7 +525,7 @@ async fn source_txt(
     if p.id <= 0 || !(1..=100).contains(&p.p) {
         return Err((StatusCode::BAD_REQUEST, "书源请求参数无效".into()));
     }
-    let url = format!("https://www.suduguu.com/txt/?id={}&p={}", p.id, p.p);
+    let url = format!("{}/txt/?id={}&p={}", st.source_url.trim_end_matches('/'), p.id, p.p);
     let response = st
         .relay_client
         .get(url)

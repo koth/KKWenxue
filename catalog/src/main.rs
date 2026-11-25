@@ -19,7 +19,14 @@ use reqwest::Client;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-const BASE: &str = "https://www.suduguu.com";
+const DEFAULT_BASE: &str = "https://www.suduguu.com";
+
+fn source_base() -> String {
+    std::env::var("SHANYE_CATALOG_SOURCE")
+        .unwrap_or_else(|_| DEFAULT_BASE.into())
+        .trim_end_matches('/')
+        .to_owned()
+}
 
 struct Fetcher {
     client: Client,
@@ -111,13 +118,14 @@ async fn cmd_preheat(args: &[String]) -> Result<(), String> {
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
+    let base = source_base();
     let selector = scraper::Selector::parse("div.item h3 a[href]").map_err(|e| e.to_string())?;
     let mut ids = Vec::new();
     for page in 1..=pages {
         let url = if page == 1 {
-            format!("{BASE}/paihang/")
+            format!("{base}/paihang/")
         } else {
-            format!("{BASE}/paihang/{page}.html")
+            format!("{base}/paihang/{page}.html")
         };
         let response = client.get(url).send().await.map_err(|e| e.to_string())?;
         if !response.status().is_success() {
@@ -179,6 +187,7 @@ async fn scan_updates(
     max_pages: usize,
     quiet_pages: Option<usize>,
 ) -> Result<(usize, usize), String> {
+    let base = source_base();
     let known = db::known_latest_chapters(conn).map_err(|e| e.to_string())?;
     let mut quiet = 0usize;
     let mut pages = 0usize;
@@ -186,9 +195,9 @@ async fn scan_updates(
 
     for page in 1..=max_pages {
         let url = if page == 1 {
-            format!("{BASE}/zuixin/")
+            format!("{base}/zuixin/")
         } else {
-            format!("{BASE}/zuixin/{page}.html")
+            format!("{base}/zuixin/{page}.html")
         };
         let (code, body) = fetcher.get(&url).await?;
         if (300..400).contains(&code) {
@@ -209,6 +218,7 @@ async fn scan_updates(
             seen += 1;
             if known.get(&item.id) != Some(&item.latest_chapter_id) {
                 changed += 1;
+                db::mark_recent_update(conn, item.id).map_err(|e| e.to_string())?;
             }
             db::upsert_list(conn, item).map_err(|e| e.to_string())?;
         }
@@ -237,6 +247,7 @@ async fn fetch_details(
     ids: Vec<i64>,
     workers: usize,
 ) -> Result<(usize, usize), String> {
+    let base = source_base();
     let ids = Arc::new(ids);
     let next = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut handles = Vec::new();
@@ -246,13 +257,14 @@ async fn fetch_details(
         let fetcher = fetcher.clone();
         let ids = ids.clone();
         let next = next.clone();
+        let base = base.clone();
         handles.push(tokio::spawn(async move {
             let conn = db::open(&db_path).map_err(|e| e.to_string())?;
             let (mut ok, mut failed) = (0usize, 0usize);
             loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(id) = ids.get(i).copied() else { break };
-                let url = format!("{BASE}/{id}/");
+                let url = format!("{base}/{id}/");
                 match fetcher.get(&url).await {
                     Ok((200, body)) => match parsers::parse_detail(&body, id) {
                         Some(mut d) => {
@@ -270,7 +282,7 @@ async fn fetch_details(
                                     complete = false;
                                     break;
                                 }
-                                let page_url = format!("{BASE}/{id}/p-{page}.html");
+                                let page_url = format!("{base}/{id}/p-{page}.html");
                                 match fetcher.get(&page_url).await {
                                     Ok((200, page_body)) => {
                                         if let Some(page_detail) =
@@ -434,18 +446,25 @@ async fn cmd_incremental(args: &[String]) -> Result<(), String> {
 
     let before = db::known_latest_chapters(&conn).map_err(|e| e.to_string())?;
     let (pages, seen) = scan_updates(&conn, fetcher.as_ref(), max_pages, Some(quiet)).await?;
+    let requested = db::pending_refresh_ids(&conn, 1000).map_err(|e| e.to_string())?;
     let after = db::known_latest_chapters(&conn).map_err(|e| e.to_string())?;
-    let changed: Vec<i64> = after
+    let mut changed: Vec<i64> = after
         .iter()
         .filter(|(id, cid)| before.get(id).map(|old| old != *cid).unwrap_or(true))
         .map(|(id, _)| *id)
         .collect();
+    for id in &requested {
+        if !changed.contains(id) {
+            changed.push(*id);
+        }
+    }
     eprintln!("增量：{pages} 页 / {seen} 条，变化 {} 本", changed.len());
 
     drop(conn);
     let (ok, failed) =
         fetch_details(&db_path, fetcher.clone(), changed.clone(), workers_env()).await?;
     let conn = db::open(&db_path).map_err(|e| e.to_string())?;
+    db::clear_refresh_requests(&conn, &requested).map_err(|e| e.to_string())?;
     db::finish_sync_run(
         &conn,
         run,

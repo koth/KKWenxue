@@ -24,7 +24,7 @@ import com.kkwenxue.shanye.data.RelayConnection
 private fun localTtsSha256(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
     .joinToString("") { "%02x".format(it) }
 private const val LOCAL_TTS_PAUSE_RULE_REVISION = "punctuation-pauses-v3-${TtsTextNormalizer.REVISION}"
-private const val LOCAL_TTS_SYNTHESIS_POLICY_REVISION = "title-server-short-text-v2"
+private const val LOCAL_TTS_SYNTHESIS_POLICY_REVISION = "title-alignment-direct-v1-loudness-v1"
 
 private fun localTtsWavHeader(pcmBytes: Int, sampleRate: Int): ByteArray =
     ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
@@ -132,7 +132,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         key: LocalTtsSegmentKey,
         sourceStart: Int,
         sourceEnd: Int,
-        maxFrames: Int = 300,
+        maxFrames: Int = 800,
         titleSynthesis: Boolean = false
     ): LocalTtsSegment {
         val manifest = modelPack.current() ?: error("本地模型尚未准备")
@@ -311,7 +311,10 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
                 // native bridge uses the same Chinese alignment heads to stop at
                 // the heading's text boundary instead of guessing from waveform
                 // silence or appending a filler sentence.
-                val titleSynthesis = piece.index < 0
+                // Server short_text=auto also protects very short body cues
+                // from unrelated continuations. Use the same alignment-aware
+                // path for headings and short utterances.
+                val titleSynthesis = piece.index < 0 || isShortText(ttsText)
                 val key = LocalTtsSegmentKey(
                     book.id,
                     chapter.id,
@@ -503,6 +506,11 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
     private fun ttsTextFor(piece: Piece): String {
         val normalized = TtsTextNormalizer.normalize(piece.text)
         return ChineseScriptConverter.convert(normalized, ChineseScript.SIMPLIFIED)
+    }
+
+    private fun isShortText(text: String): Boolean {
+        val words = text.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+        return words <= 2 && text.count { it.isLetterOrDigit() || it.code > 0x7f } <= SHORT_TEXT_CHAR_LIMIT
     }
 
     /**

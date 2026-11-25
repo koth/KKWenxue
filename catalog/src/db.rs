@@ -66,6 +66,14 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE TABLE IF NOT EXISTS content_generations(book_id INTEGER PRIMARY KEY,updated_at INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS chapter_bodies(book_id INTEGER NOT NULL,source_id INTEGER NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,sha256 TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(book_id,source_id));
+        CREATE TABLE IF NOT EXISTS recent_updates(
+            book_id INTEGER PRIMARY KEY,
+            observed_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS refresh_requests(
+            book_id INTEGER PRIMARY KEY,
+            requested_at INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS prefetch_jobs (
             id TEXT PRIMARY KEY,
             book_id INTEGER NOT NULL,
@@ -345,6 +353,53 @@ pub fn known_latest_chapters(
         map.insert(id, cid);
     }
     Ok(map)
+}
+
+const RECENT_UPDATE_WINDOW: i64 = 12 * 60 * 60;
+
+/// Mark a book observed with a newer chapter during the current catalog scan.
+/// The short-lived watermark lets per-book checks detect books missed by the
+/// front-page scan without treating the whole catalog as permanently fresh.
+pub fn mark_recent_update(conn: &Connection, book_id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO recent_updates(book_id,observed_at) VALUES(?1,?2)
+         ON CONFLICT(book_id) DO UPDATE SET observed_at=excluded.observed_at",
+        params![book_id, now()],
+    )?;
+    Ok(())
+}
+
+pub fn is_recent_update(conn: &Connection, book_id: i64) -> rusqlite::Result<bool> {
+    let cutoff = now() - RECENT_UPDATE_WINDOW;
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM recent_updates WHERE book_id=?1 AND observed_at>=?2)",
+        params![book_id, cutoff],
+        |r| r.get(0),
+    )
+}
+
+pub fn request_refresh(conn: &Connection, book_id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO refresh_requests(book_id,requested_at) VALUES(?1,?2)
+         ON CONFLICT(book_id) DO UPDATE SET requested_at=excluded.requested_at",
+        params![book_id, now()],
+    )?;
+    Ok(())
+}
+
+pub fn pending_refresh_ids(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT book_id FROM refresh_requests ORDER BY requested_at,book_id LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, i64>(0))?;
+    rows.collect()
+}
+
+pub fn clear_refresh_requests(conn: &Connection, ids: &[i64]) -> rusqlite::Result<()> {
+    for book_id in ids {
+        conn.execute("DELETE FROM refresh_requests WHERE book_id=?1", params![book_id])?;
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
