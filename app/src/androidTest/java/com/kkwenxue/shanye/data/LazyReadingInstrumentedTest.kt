@@ -88,6 +88,47 @@ class LazyReadingInstrumentedTest {
         }
     }
 
+    @Test fun chapterIdentityAcceptsLegacyAndCanonicalIds()=runBlocking {
+        val ctx=context()
+        val refs=book().copy(
+            chapters = listOf(
+                Chapter("online:catalog:77:chapter:source:1", "第一章", "")
+            )
+        )
+        BookDatabase(ctx).use { it.save(refs) }
+        Server {
+            content().put("chapterId", "online:catalog:77:chapter:1")
+        }.use { server ->
+            val loaded = OnlineChapterStore(ctx).load(refs, 0, server.client)
+            assertEquals("春风吹过了山岗。\n\n这是足够长的正文，用来检查书签的位置。", loaded.chapters[0].body)
+        }
+    }
+
+    @Test fun sourceSwitchKeepsChapterBodiesAndCacheRowsIsolated()=runBlocking {
+        val ctx=context()
+        val suduguu=book().copy(remoteSource="suduguu")
+        val sudugu520=book().copy(remoteSource="sudugu520")
+        BookDatabase(ctx).use { it.save(suduguu) }
+        Server { path ->
+            val source=if(path.contains("source=sudugu520")) "sudugu520" else "suduguu"
+            content(body="正文来自 $source。").put("sourceKey", source)
+        }.use { server ->
+            val first=OnlineChapterStore(ctx).load(suduguu,0,server.client)
+            assertEquals("正文来自 suduguu。",first.chapters[0].body)
+            val second=OnlineChapterStore(ctx).load(sudugu520,0,server.client)
+            assertEquals("正文来自 sudugu520。",second.chapters[0].body)
+            assertEquals(2,server.hits.get())
+        }
+        assertEquals(
+            "正文来自 suduguu。",
+            OnlineChapterStore(ctx).cached(suduguu,0)?.body
+        )
+        assertEquals(
+            "正文来自 sudugu520。",
+            OnlineChapterStore(ctx).cached(sudugu520,0)?.body
+        )
+    }
+
     @Test fun manifestTransactionPreservesUnchangedCacheAndMapsReorderedAnchors()=runBlocking {
         val ctx=context();val original=book()
         BookDatabase(ctx).use{it.save(original)}

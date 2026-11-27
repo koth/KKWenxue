@@ -1,0 +1,20 @@
+[Unit]
+Description=Shanye catalog deep sync (sudugu520, daily 04:40)
+After=network-online.target shanye-catalog.service
+Requires=shanye-catalog.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/var/lib/shanye-catalog
+EnvironmentFile=/etc/shanye-catalog.env
+Environment=SHANYE_CATALOG_SOURCE_KEY=sudugu520
+Environment=SHANYE_CATALOG_SOURCE=https://www.sudugu520.com
+Environment=SHANYE_CATALOG_WORKERS=1
+Environment=SHANYE_CATALOG_RATE=1
+ExecStart=/usr/bin/flock -n -E 0 /run/shanye-catalog-sync.lock /usr/local/bin/shanye-catalog incremental --pages 30 --quiet 3
+TimeoutStartSec=30min
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=512M
+TasksMax=8
+UMask=0077

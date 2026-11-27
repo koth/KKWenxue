@@ -38,15 +38,33 @@ class OnlineChapterStore(context: Context, private val maxCacheBytes: Long = 512
 
     suspend fun load(book: Book, chapterIndex: Int, client: CatalogClient = CatalogClient(), interactive: Boolean = true): Book {
         val chapter = book.chapters.getOrNull(chapterIndex) ?: error("章节不在目录中")
-        if (book.remoteBookId == null || chapter.body.isNotBlank()) return book
-        val key = syncSha256("${book.id}:${chapter.id}")
+        if (book.catalogBookId == null || chapter.body.isNotBlank()) return book
+        val key = syncSha256("${book.id}:${book.catalogSourceKey.orEmpty()}:${chapter.id}")
         val body = locks.getOrPut(key) { Mutex() }.withLock {
             val local = runInterruptible(Dispatchers.IO) { readCached(book, chapter, key) }
             local ?: ChapterRequests.run(interactive) {
                 runInterruptible(Dispatchers.IO) {
-                    val sourceId = chapter.id.substringAfter(":source:", "").toLongOrNull() ?: error("章节身份无效")
-                    val content = client.chapter(book.remoteBookId, sourceId, revision = book.activeRevision) ?: error("章节正文未返回")
-                    require(content.bookId == book.remoteBookId && content.sourceId == sourceId && content.chapterId == chapter.id) { "章节身份不匹配" }
+                    val chapterId = chapter.id.substringAfter(":chapter:", "").substringBefore(":")
+                        .toLongOrNull() ?: chapter.id.substringAfter(":source:", "").toLongOrNull()
+                        ?: error("章节身份无效")
+                    val content = client.chapter(
+                        requireNotNull(book.catalogBookId),
+                        chapterId,
+                        revision = book.activeRevision,
+                        sourceKey = book.catalogSourceKey
+                    ) ?: error("章节正文未返回")
+                    require(
+                        content.bookId == book.catalogBookId &&
+                            chapterIdsEquivalent(
+                                chapter.id,
+                                content.chapterId,
+                                book.catalogBookId,
+                                chapterId
+                            ) &&
+                            (content.sourceKey.isNullOrBlank() ||
+                                book.catalogSourceKey.isNullOrBlank() ||
+                                content.sourceKey == book.catalogSourceKey)
+                    ) { "章节身份不匹配" }
                     require(content.revision == book.activeRevision) { "章节目录版本已变化，请返回书架刷新" }
                     require(content.bytes in 1..(2L * 1024 * 1024) && content.body.toByteArray(Charsets.UTF_8).size.toLong() == content.bytes) { "章节大小校验失败" }
                     require(syncSha256(content.body) == content.sha256 && (chapter.bodySha256 == null || chapter.bodySha256 == content.sha256)) { "章节正文校验失败" }
@@ -59,7 +77,16 @@ class OnlineChapterStore(context: Context, private val maxCacheBytes: Long = 512
                             // A concurrent manifest update may have invalidated this request.
                             val current = db.load(book.id).firstOrNull()
                             require(current == null || current.activeRevision == book.activeRevision) { "章节目录已更新，请重新打开" }
-                            db.saveChapterCache(book.id, chapter.id, book.activeRevision.orEmpty(), file.name, content.bytes, content.sha256, content.etag)
+                            db.saveChapterCache(
+                                book.id,
+                                chapter.id,
+                                book.activeRevision.orEmpty(),
+                                file.name,
+                                content.bytes,
+                                content.sha256,
+                                content.etag,
+                                book.catalogSourceKey.orEmpty()
+                            )
                         }
                         trimCache(setOf(file.name))
                     } finally { temp.delete() }
@@ -72,20 +99,51 @@ class OnlineChapterStore(context: Context, private val maxCacheBytes: Long = 512
         })
     }
 
+    /**
+     * Old catalog clients used the source site's chapter ID in the local
+     * chapter key, while the source-scoped API uses the catalog's internal
+     * chapter ID. During the migration both forms can legitimately refer to
+     * the same response. Compare the numeric chapter component instead of
+     * requiring one exact serialized ID.
+     */
+    private fun chapterIdsEquivalent(
+        expected: String,
+        actual: String,
+        bookId: Long,
+        requestedId: Long
+    ): Boolean {
+        if (expected == actual) return true
+        val prefix = "online:catalog:$bookId:chapter:"
+
+        fun numericId(value: String): Long? {
+            if (!value.startsWith(prefix)) return null
+            return value.removePrefix(prefix)
+                .removePrefix("source:")
+                .substringBefore(':')
+                .toLongOrNull()
+        }
+
+        val expectedId = numericId(expected)
+        val actualId = numericId(actual)
+        return expectedId != null && actualId != null &&
+            expectedId == actualId && (expectedId == requestedId || actualId == requestedId)
+    }
+
     private fun readCached(book: Book, chapter: Chapter, key: String): String? {
-        val file = File(root, "$key.txt")
         return BookDatabase(context).use { db ->
-            val cache = db.latestChapterCache(book.id, chapter.id) ?: return@use null
-            if (!file.isFile) { db.deleteChapterCache(book.id, chapter.id); return@use null }
+            val sourceKey = book.catalogSourceKey.orEmpty()
+            val cache = db.latestChapterCache(book.id, chapter.id, sourceKey) ?: return@use null
+            val file = File(root, cache.path).takeIf { it.isFile } ?: File(root, "$key.txt")
+            if (!file.isFile) { db.deleteChapterCache(book.id, chapter.id, sourceKey); return@use null }
             val bytes = file.readBytes()
             val valid = bytes.size.toLong() == cache.bytes && bytes.size <= 2 * 1024 * 1024 &&
                 syncSha256(bytes.toString(Charsets.UTF_8)) == cache.sha256 &&
                 (chapter.bodySha256 == null || chapter.bodySha256 == cache.sha256)
             if (!valid) {
-                file.delete(); db.deleteChapterCache(book.id, chapter.id); return@use null
+                file.delete(); db.deleteChapterCache(book.id, chapter.id, sourceKey); return@use null
             }
             file.setLastModified(System.currentTimeMillis())
-            db.touchChapterCache(book.id, chapter.id, book.activeRevision.orEmpty())
+            db.touchChapterCache(book.id, chapter.id, book.activeRevision.orEmpty(), sourceKey)
             bytes.toString(Charsets.UTF_8)
         }
     }
@@ -93,16 +151,16 @@ class OnlineChapterStore(context: Context, private val maxCacheBytes: Long = 512
     fun cached(book: Book,index: Int): Chapter? {
         val chapter=book.chapters.getOrNull(index) ?: return null
         if(chapter.body.isNotBlank())return chapter
-        val body=readCached(book,chapter,syncSha256("${book.id}:${chapter.id}")) ?: return null
+        val body=readCached(book,chapter,syncSha256("${book.id}:${book.catalogSourceKey.orEmpty()}:${chapter.id}")) ?: return null
         return chapter.copy(body=body)
     }
 
-    fun invalidate(bookId: String, chapterId: String) {
-        BookDatabase(context).use { it.deleteChapterCache(bookId, chapterId) }
-        File(root, syncSha256("$bookId:$chapterId") + ".txt").delete()
+    fun invalidate(bookId: String, chapterId: String, sourceKey: String = "") {
+        BookDatabase(context).use { it.deleteChapterCache(bookId, chapterId, sourceKey) }
+        File(root, syncSha256("$bookId:$sourceKey:$chapterId") + ".txt").delete()
     }
-    fun protect(bookId: String, chapterId: String, flag: Int=1) = BookDatabase(context).use { it.setChapterCacheProtected(bookId, chapterId, true,flag) }
-    fun unprotect(bookId: String, chapterId: String, flag: Int=1) = BookDatabase(context).use { it.setChapterCacheProtected(bookId, chapterId, false,flag) }
+    fun protect(bookId: String, chapterId: String, flag: Int=1, sourceKey: String = "") = BookDatabase(context).use { it.setChapterCacheProtected(bookId, chapterId, true,flag,sourceKey) }
+    fun unprotect(bookId: String, chapterId: String, flag: Int=1, sourceKey: String = "") = BookDatabase(context).use { it.setChapterCacheProtected(bookId, chapterId, false,flag,sourceKey) }
 
     internal fun trimCache(keep: Set<String> = emptySet()) = synchronized(trimLock) {
         val files = root.listFiles { file -> file.isFile && file.extension == "txt" }.orEmpty()

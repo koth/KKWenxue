@@ -12,6 +12,7 @@ use axum::{
     Json, Router,
 };
 use futures_util::StreamExt;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -33,7 +34,7 @@ pub struct AppState {
     pub chapter_fetches: Arc<Mutex<HashMap<ChapterKey, std::sync::Weak<Mutex<()>>>>>,
 }
 
-pub type ChapterKey = (i64, i64, String);
+pub type ChapterKey = (i64, String, String);
 
 #[derive(Clone)]
 pub struct CachedChapter {
@@ -100,6 +101,33 @@ fn db_err(e: rusqlite::Error) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, "目录数据库错误".into())
 }
 
+fn book_value(conn: &rusqlite::Connection, book: &db::BookRow) -> rusqlite::Result<Value> {
+    let mut value = serde_json::to_value(book).unwrap_or(Value::Null);
+    let sources = db::book_sources(conn, book.id)?;
+    value["bookId"] = json!(book.id);
+    value["sources"] = serde_json::to_value(&sources).unwrap_or_default();
+    value["recommendedSource"] = sources
+        .iter()
+        .find(|source| source.is_preferred && source.binding_state == "confirmed")
+        .or_else(|| {
+            sources
+                .iter()
+                .find(|source| source.binding_state == "confirmed")
+        })
+        .map(|source| json!(source.source_key))
+        .unwrap_or(Value::Null);
+    value["matchState"] = conn
+        .query_row(
+            "SELECT COALESCE(match_state,'confirmed') FROM books
+             WHERE COALESCE(book_id,id)=?1",
+            rusqlite::params![book.id],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap_or_else(|_| "confirmed".into())
+        .into();
+    Ok(value)
+}
+
 #[derive(Deserialize)]
 pub struct SearchParams {
     q: Option<String>,
@@ -120,6 +148,36 @@ pub struct ListParams {
 struct SourceParams {
     id: i64,
     p: u32,
+}
+
+#[derive(Deserialize)]
+struct SourceSelect {
+    source: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceBindingAction {
+    source_key: String,
+    external_book_id: String,
+    reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceSplitAction {
+    source_key: String,
+    external_book_id: String,
+    reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolveBookRequest {
+    source_key: String,
+    external_book_id: String,
+    title: String,
+    author: String,
 }
 
 #[derive(Deserialize)]
@@ -231,7 +289,12 @@ async fn search(State(st): State<AppState>, Query(p): Query<SearchParams>) -> Ap
     let conn = st.db.lock().await;
     let rows = db::search(&conn, &q, limit, p.cursor).map_err(db_err)?;
     let next = rows.last().map(|r| r.id);
-    Ok(Json(json!({"items": rows, "nextCursor": next})))
+    let items = rows
+        .iter()
+        .map(|book| book_value(&conn, book))
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(db_err)?;
+    Ok(Json(json!({"items": items, "nextCursor": next})))
 }
 
 async fn list(State(st): State<AppState>, Query(p): Query<ListParams>) -> ApiResult {
@@ -248,15 +311,378 @@ async fn list(State(st): State<AppState>, Query(p): Query<ListParams>) -> ApiRes
     )
     .map_err(db_err)?;
     let next = rows.last().map(|r| r.id);
-    Ok(Json(json!({"items": rows, "nextCursor": next})))
+    let items = rows
+        .iter()
+        .map(|book| book_value(&conn, book))
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(db_err)?;
+    Ok(Json(json!({"items": items, "nextCursor": next})))
 }
 
-async fn book(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult {
+async fn book(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Query(selection): Query<SourceSelect>,
+) -> Result<Json<Value>, CatalogError> {
     let conn = st.db.lock().await;
-    match db::get_book(&conn, id).map_err(db_err)? {
-        Some(b) => Ok(Json(serde_json::to_value(b).unwrap_or(Value::Null))),
-        None => Err((StatusCode::NOT_FOUND, "没有这本书".into())),
+    if let Some(source_key) = selection.source.filter(|value| !value.trim().is_empty()) {
+        let binding = db::find_external_book(&conn, &source_key, &id.to_string())
+            .map_err(CatalogError::db)?
+            .ok_or_else(|| {
+                CatalogError::new(
+                    StatusCode::NOT_FOUND,
+                    "legacy",
+                    "book_not_found",
+                    "外站书籍不存在",
+                )
+            })?;
+        let logical = db::get_book(&conn, binding.book_id)
+            .map_err(CatalogError::db)?
+            .ok_or_else(|| {
+                CatalogError::new(
+                    StatusCode::NOT_FOUND,
+                    "legacy",
+                    "book_not_found",
+                    "内部书籍不存在",
+                )
+            })?;
+        let mut value = book_value(&conn, &logical).map_err(CatalogError::db)?;
+        value["sourceKey"] = json!(source_key);
+        value["externalBookId"] = json!(id.to_string());
+        return Ok(Json(value));
     }
+    let external_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM book_sources WHERE external_book_id=?1)",
+            params![id.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(CatalogError::db)?;
+    if external_exists && db::get_book(&conn, id).map_err(CatalogError::db)?.is_none() {
+        return Err(CatalogError::new(
+            StatusCode::BAD_REQUEST,
+            "legacy",
+            "source_required",
+            "访问外站书籍 ID 时必须指定 source",
+        ));
+    }
+    match db::get_book(&conn, id).map_err(CatalogError::db)? {
+        Some(b) => Ok(Json(book_value(&conn, &b).map_err(CatalogError::db)?)),
+        None => Err(CatalogError::new(
+            StatusCode::NOT_FOUND,
+            "book",
+            "book_not_found",
+            "没有这本书",
+        )),
+    }
+}
+
+async fn legacy_book(
+    State(st): State<AppState>,
+    Path(external_id): Path<String>,
+    Query(selection): Query<SourceSelect>,
+) -> Result<Json<Value>, CatalogError> {
+    let source_key = selection
+        .source
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            CatalogError::new(
+                StatusCode::BAD_REQUEST,
+                "legacy",
+                "source_required",
+                "访问外站书籍 ID 时必须指定 source",
+            )
+        })?;
+    let conn = st.db.lock().await;
+    let binding = db::find_external_book(&conn, &source_key, &external_id)
+        .map_err(CatalogError::db)?
+        .ok_or_else(|| {
+            CatalogError::new(
+                StatusCode::NOT_FOUND,
+                "legacy",
+                "book_not_found",
+                "外站书籍不存在",
+            )
+        })?;
+    let book = db::get_book(&conn, binding.book_id)
+        .map_err(CatalogError::db)?
+        .ok_or_else(|| {
+            CatalogError::new(
+                StatusCode::NOT_FOUND,
+                "legacy",
+                "book_not_found",
+                "内部书籍不存在",
+            )
+        })?;
+    let mut value = book_value(&conn, &book).map_err(CatalogError::db)?;
+    value["sourceKey"] = json!(source_key);
+    value["externalBookId"] = json!(external_id);
+    Ok(Json(value))
+}
+
+async fn book_sources(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Query(selection): Query<SourceSelect>,
+) -> Result<Json<Value>, CatalogError> {
+    let conn = st.db.lock().await;
+    // A source-scoped external ID can collide with an internal catalog ID.
+    // When a source is supplied, resolve the (source, external ID) pair
+    // before falling back to the canonical internal ID.
+    let logical_id = if let Some(source_key) = selection
+        .source
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        if let Some(binding) = db::find_external_book(&conn, source_key, &id.to_string())
+            .map_err(CatalogError::db)?
+            .filter(|binding| binding.binding_state == "confirmed")
+        {
+            binding.book_id
+        } else if db::get_book(&conn, id).map_err(CatalogError::db)?.is_some() {
+            id
+        } else {
+            legacy_binding(&conn, id)
+                .map_err(CatalogError::db)?
+                .map(|binding| binding.book_id)
+                .ok_or_else(|| {
+                    CatalogError::new(
+                        StatusCode::NOT_FOUND,
+                        "sources",
+                        "book_not_found",
+                        "没有这本书",
+                    )
+                })?
+        }
+    } else if db::get_book(&conn, id).map_err(CatalogError::db)?.is_some() {
+        id
+    } else {
+        legacy_binding(&conn, id)
+            .map_err(CatalogError::db)?
+            .map(|binding| binding.book_id)
+            .ok_or_else(|| {
+                CatalogError::new(
+                    StatusCode::NOT_FOUND,
+                    "sources",
+                    "book_not_found",
+                    "没有这本书",
+                )
+            })?
+    };
+    let items = db::book_sources(&conn, logical_id).map_err(CatalogError::db)?;
+    let recommended = items
+        .iter()
+        .find(|item| item.is_preferred && item.binding_state == "confirmed")
+        .or_else(|| items.iter().find(|item| item.binding_state == "confirmed"))
+        .map(|item| item.source_key.clone());
+    Ok(Json(json!({
+        "bookId": logical_id,
+        "requestedBookId": id,
+        "recommendedSource": recommended,
+        "items": items
+    })))
+}
+
+async fn source_metrics(
+    State(st): State<AppState>,
+    Path(source_key): Path<String>,
+) -> Result<Json<Value>, CatalogError> {
+    let conn = st.db.lock().await;
+    if db::get_source(&conn, &source_key)
+        .map_err(CatalogError::db)?
+        .is_none()
+    {
+        return Err(CatalogError::new(
+            StatusCode::NOT_FOUND,
+            "sources",
+            "source_not_found",
+            "来源不存在",
+        ));
+    }
+    Ok(Json(
+        serde_json::to_value(db::source_metrics(&conn, &source_key).map_err(CatalogError::db)?)
+            .unwrap_or(Value::Null),
+    ))
+}
+
+async fn preferred_source(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Json(action): Json<SourceSelect>,
+) -> Result<Json<Value>, CatalogError> {
+    let source_key = action
+        .source
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            CatalogError::new(
+                StatusCode::BAD_REQUEST,
+                "sources",
+                "source_required",
+                "必须指定来源",
+            )
+        })?;
+    let conn = st.db.lock().await;
+    let logical_id = if db::get_book(&conn, id).map_err(CatalogError::db)?.is_some() {
+        id
+    } else {
+        legacy_binding(&conn, id)
+            .map_err(CatalogError::db)?
+            .map(|binding| binding.book_id)
+            .ok_or_else(|| {
+                CatalogError::new(
+                    StatusCode::NOT_FOUND,
+                    "sources",
+                    "book_not_found",
+                    "没有这本书",
+                )
+            })?
+    };
+    if !db::set_preferred_source(&conn, logical_id, &source_key).map_err(CatalogError::db)? {
+        return Err(CatalogError::new(
+            StatusCode::NOT_FOUND,
+            "sources",
+            "source_not_bound",
+            "该来源未绑定到这本书",
+        ));
+    }
+    Ok(Json(json!({
+        "bookId": logical_id,
+        "requestedBookId": id,
+        "sourceKey": source_key,
+        "items": db::book_sources(&conn,logical_id).map_err(CatalogError::db)?
+    })))
+}
+
+async fn confirm_source(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Json(action): Json<SourceBindingAction>,
+) -> Result<Json<Value>, CatalogError> {
+    let conn = st.db.lock().await;
+    if !db::resolve_confirmed_source(
+        &conn,
+        id,
+        &action.source_key,
+        &action.external_book_id,
+        "api",
+    )
+    .map_err(CatalogError::db)?
+    {
+        return Err(CatalogError::new(
+            StatusCode::NOT_FOUND,
+            "sources",
+            "source_not_found",
+            "待确认来源不存在",
+        ));
+    }
+    Ok(Json(json!({
+        "bookId": id,
+        "sourceKey": action.source_key,
+        "externalBookId": action.external_book_id,
+        "state": "confirmed"
+    })))
+}
+
+async fn reject_source(
+    State(st): State<AppState>,
+    Json(action): Json<SourceBindingAction>,
+) -> Result<Json<Value>, CatalogError> {
+    let conn = st.db.lock().await;
+    if !db::reject_source(
+        &conn,
+        &action.source_key,
+        &action.external_book_id,
+        "api",
+        action.reason.as_deref().unwrap_or("manual rejection"),
+    )
+    .map_err(CatalogError::db)?
+    {
+        return Err(CatalogError::new(
+            StatusCode::NOT_FOUND,
+            "sources",
+            "source_not_found",
+            "来源记录不存在",
+        ));
+    }
+    Ok(Json(json!({
+        "sourceKey": action.source_key,
+        "externalBookId": action.external_book_id,
+        "state": "rejected"
+    })))
+}
+
+async fn split_source(
+    State(st): State<AppState>,
+    Json(action): Json<SourceSplitAction>,
+) -> Result<Json<Value>, CatalogError> {
+    let conn = st.db.lock().await;
+    let Some(book_id) = db::split_source(
+        &conn,
+        &action.source_key,
+        &action.external_book_id,
+        "api",
+        action.reason.as_deref().unwrap_or("manual split"),
+    )
+    .map_err(CatalogError::db)?
+    else {
+        return Err(CatalogError::new(
+            StatusCode::NOT_FOUND,
+            "sources",
+            "source_not_found",
+            "来源记录不存在",
+        ));
+    };
+    Ok(Json(json!({
+        "bookId": book_id,
+        "sourceKey": action.source_key,
+        "externalBookId": action.external_book_id,
+        "state": "confirmed"
+    })))
+}
+
+async fn resolve_book(
+    State(st): State<AppState>,
+    Json(request): Json<ResolveBookRequest>,
+) -> Result<Json<Value>, CatalogError> {
+    if request.source_key.trim().is_empty()
+        || request.external_book_id.trim().is_empty()
+        || request.title.trim().is_empty()
+    {
+        return Err(CatalogError::new(
+            StatusCode::BAD_REQUEST,
+            "resolve",
+            "invalid_request",
+            "来源、外站 ID 和书名不能为空",
+        ));
+    }
+    let conn = st.db.lock().await;
+    if let Some(binding) =
+        db::find_external_book(&conn, &request.source_key, &request.external_book_id)
+            .map_err(CatalogError::db)?
+    {
+        return Ok(Json(json!({
+            "state": binding.binding_state,
+            "bookId": binding.book_id,
+            "source": binding
+        })));
+    }
+    let candidates =
+        db::candidate_books(&conn, &request.title, &request.author).map_err(CatalogError::db)?;
+    let match_candidates =
+        db::match_candidates(&conn, &request.source_key, &request.external_book_id)
+            .map_err(CatalogError::db)?;
+    let state = if candidates.len() == 1 {
+        "candidate"
+    } else {
+        "ambiguous"
+    };
+    Ok(Json(json!({
+        "state": state,
+        "sourceKey": request.source_key,
+        "externalBookId": request.external_book_id,
+        "candidates": candidates,
+        "matchCandidates": match_candidates
+    })))
 }
 
 #[derive(Deserialize)]
@@ -264,12 +690,14 @@ struct ManifestParams {
     limit: Option<usize>,
     cursor: Option<i64>,
     revision: Option<String>,
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PrefetchRequest {
     chapter_ids: Vec<i64>,
+    source_key: Option<String>,
     priority: Option<i64>,
 }
 
@@ -317,12 +745,52 @@ impl IntoResponse for CatalogError {
     }
 }
 
+fn legacy_binding(
+    conn: &rusqlite::Connection,
+    external_book_id: i64,
+) -> rusqlite::Result<Option<db::BookSourceRow>> {
+    let Some(binding) = db::find_external_book_legacy(conn, &external_book_id.to_string())? else {
+        return Ok(None);
+    };
+    if binding.binding_state != "confirmed" {
+        return Ok(None);
+    }
+    Ok(Some(binding))
+}
+
 async fn manifest(
     State(st): State<AppState>,
     Path(id): Path<i64>,
     Query(p): Query<ManifestParams>,
     headers: HeaderMap,
 ) -> Result<Response, CatalogError> {
+    if let Some(source_key) = p.source.as_deref().filter(|value| !value.is_empty()) {
+        let legacy = {
+            let conn = st.db.lock().await;
+            if db::get_book(&conn, id).map_err(CatalogError::db)?.is_none() {
+                db::find_external_book(&conn, source_key, &id.to_string())
+                    .map_err(CatalogError::db)?
+                    .filter(|binding| binding.binding_state == "confirmed")
+            } else {
+                None
+            }
+        };
+        if let Some(binding) = legacy {
+            return legacy_manifest(&st, id, &binding, &p, headers).await;
+        }
+        return source_manifest(&st, id, source_key, &p, headers).await;
+    }
+    let legacy = {
+        let conn = st.db.lock().await;
+        if db::get_book(&conn, id).map_err(CatalogError::db)?.is_none() {
+            legacy_binding(&conn, id).map_err(CatalogError::db)?
+        } else {
+            None
+        }
+    };
+    if let Some(binding) = legacy {
+        return legacy_manifest(&st, id, &binding, &p, headers).await;
+    }
     ensure_manifest(&st, id).await?;
     let conn = st.db.lock().await;
     let _book = db::get_book(&conn, id)
@@ -360,10 +828,10 @@ async fn manifest(
         ));
     }
     let etag = format!(
-        "\"manifest:{id}:{revision}:{}:{}:{:x}\"",
+        "\"manifest:{id}:{revision}:{}:{}:{}\"",
         p.cursor.unwrap_or(-1),
         limit,
-        Sha256::digest(serde_json::to_vec(&items).unwrap())
+        format!("{:x}", Sha256::digest(serde_json::to_vec(&items).unwrap()))
     );
     if headers
         .get("If-None-Match")
@@ -378,6 +846,221 @@ async fn manifest(
     }
     let mut response = Json(json!({
         "bookId": id,
+        "revision": revision,
+        "chapterCount": chapter_count,
+        "items": items,
+        "nextCursor": next
+    }))
+    .into_response();
+    response
+        .headers_mut()
+        .insert("etag", HeaderValue::from_str(&etag).unwrap());
+    Ok(response)
+}
+
+/// Compatibility manifest for pre-source clients.  Before multi-source
+/// cataloging, the app used the source book ID (for example 203) as the
+/// catalog book ID and sent chapter external IDs directly.  Keep that
+/// contract working while new clients use the internal book/chapter IDs.
+async fn legacy_manifest(
+    st: &AppState,
+    legacy_book_id: i64,
+    binding: &db::BookSourceRow,
+    params: &ManifestParams,
+    headers: HeaderMap,
+) -> Result<Response, CatalogError> {
+    let conn = st.db.lock().await;
+    if db::source_has_ambiguity(&conn, binding.book_id, &binding.source_key)
+        .map_err(CatalogError::db)?
+    {
+        return Err(CatalogError::new(
+            StatusCode::CONFLICT,
+            "manifest",
+            "chapter_ambiguous",
+            "该来源章节目录存在歧义，暂不能发布",
+        ));
+    }
+    let limit = params.limit.unwrap_or(100).clamp(1, 500);
+    let source_items = db::source_chapters(
+        &conn,
+        binding.book_id,
+        &binding.source_key,
+        limit,
+        params.cursor,
+    )
+    .map_err(CatalogError::db)?;
+    let chapter_count = db::source_chapter_count(&conn, binding.book_id, &binding.source_key)
+        .map_err(CatalogError::db)?;
+    if chapter_count == 0 {
+        return Err(CatalogError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "manifest",
+            "manifest_unavailable",
+            "章节目录暂不可用，请稍后重试",
+        ));
+    }
+    let revision = db::source_manifest_revision(&conn, binding.book_id, &binding.source_key)
+        .map_err(CatalogError::db)?;
+    // An old client may send its pre-migration catalog-v2 revision here.  It
+    // is only an identity hint for the compatibility route, not a reason to
+    // reject a valid source directory.
+    let items = source_items
+        .into_iter()
+        .map(|item| {
+            let external = item
+                .get("externalChapterId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    CatalogError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "manifest",
+                        "invalid_source_id",
+                        "来源章节 ID 无效",
+                    )
+                })?;
+            let source_id = external.parse::<i64>().map_err(|_| {
+                CatalogError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "manifest",
+                    "invalid_source_id",
+                    "旧版客户端不支持非数字章节 ID",
+                )
+            })?;
+            Ok(json!({
+                "source_id": source_id,
+                "chapter_index": item["index"],
+                "title": item["title"],
+                "body_sha256": item["bodySha256"]
+            }))
+        })
+        .collect::<Result<Vec<_>, CatalogError>>()?;
+    let next = items
+        .last()
+        .and_then(|item| item.get("chapter_index").and_then(Value::as_i64))
+        .filter(|index| index + 1 < chapter_count);
+    let etag = format!(
+        "\"legacy-manifest:{}:{}:{}\"",
+        legacy_book_id,
+        revision,
+        format!("{:x}", Sha256::digest(serde_json::to_vec(&items).unwrap()))
+    );
+    if headers
+        .get("If-None-Match")
+        .and_then(|value| value.to_str().ok())
+        == Some(etag.as_str())
+    {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response
+            .headers_mut()
+            .insert("etag", HeaderValue::from_str(&etag).unwrap());
+        return Ok(response);
+    }
+    let mut response = Json(json!({
+        "bookId": legacy_book_id,
+        "revision": revision,
+        "chapterCount": chapter_count,
+        "items": items,
+        "nextCursor": next
+    }))
+    .into_response();
+    response
+        .headers_mut()
+        .insert("etag", HeaderValue::from_str(&etag).unwrap());
+    Ok(response)
+}
+
+async fn source_manifest(
+    st: &AppState,
+    id: i64,
+    source_key: &str,
+    params: &ManifestParams,
+    headers: HeaderMap,
+) -> Result<Response, CatalogError> {
+    let conn = st.db.lock().await;
+    let _book = db::get_book(&conn, id)
+        .map_err(CatalogError::db)?
+        .ok_or_else(|| {
+            CatalogError::new(
+                StatusCode::NOT_FOUND,
+                "manifest",
+                "book_not_found",
+                "没有这本书",
+            )
+        })?;
+    let source = db::find_book_source(&conn, id, source_key)
+        .map_err(CatalogError::db)?
+        .ok_or_else(|| {
+            CatalogError::new(
+                StatusCode::NOT_FOUND,
+                "manifest",
+                "source_not_bound",
+                "该来源未绑定到这本书",
+            )
+        })?;
+    if source.binding_state != "confirmed" {
+        return Err(CatalogError::new(
+            StatusCode::CONFLICT,
+            "manifest",
+            "source_unresolved",
+            "该来源尚未完成书籍匹配确认",
+        ));
+    }
+    if db::source_has_ambiguity(&conn, id, source_key).map_err(CatalogError::db)? {
+        return Err(CatalogError::new(
+            StatusCode::CONFLICT,
+            "manifest",
+            "chapter_ambiguous",
+            "该来源章节目录存在歧义，暂不能发布",
+        ));
+    }
+    let limit = params.limit.unwrap_or(100).clamp(1, 500);
+    let items = db::source_chapters(&conn, id, source_key, limit, params.cursor)
+        .map_err(CatalogError::db)?;
+    let chapter_count =
+        db::source_chapter_count(&conn, id, source_key).map_err(CatalogError::db)?;
+    if chapter_count == 0 {
+        return Err(CatalogError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "manifest",
+            "manifest_unavailable",
+            "该来源章节目录暂不可用，请稍后重试",
+        ));
+    }
+    let revision = db::source_manifest_revision(&conn, id, source_key).map_err(CatalogError::db)?;
+    if params.revision.as_deref().is_some_and(|r| r != revision) {
+        return Err(CatalogError::new(
+            StatusCode::CONFLICT,
+            "manifest",
+            "stale_revision",
+            "该来源章节目录已更新，请重新加载",
+        ));
+    }
+    let next = items
+        .last()
+        .and_then(|item| item.get("index").and_then(Value::as_i64))
+        .filter(|index| index + 1 < chapter_count);
+    let etag = format!(
+        "\"manifest:{}:{}:{}:{}\"",
+        id,
+        source_key,
+        revision,
+        format!("{:x}", Sha256::digest(serde_json::to_vec(&items).unwrap()))
+    );
+    if headers
+        .get("If-None-Match")
+        .and_then(|value| value.to_str().ok())
+        == Some(etag.as_str())
+    {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response
+            .headers_mut()
+            .insert("etag", HeaderValue::from_str(&etag).unwrap());
+        return Ok(response);
+    }
+    let mut response = Json(json!({
+        "bookId": id,
+        "sourceKey": source.source_key,
+        "externalBookId": source.external_book_id,
         "revision": revision,
         "chapterCount": chapter_count,
         "items": items,
@@ -409,7 +1092,7 @@ async fn ensure_manifest(st: &AppState, id: i64) -> Result<(), CatalogError> {
     if !needed {
         return Ok(());
     }
-    let key = (id, 0, "manifest".to_string());
+    let key = (id, "manifest".to_string(), "manifest".to_string());
     let lock = {
         let mut locks = st.chapter_fetches.lock().await;
         match locks.get(&key).and_then(|l| l.upgrade()) {
@@ -484,11 +1167,68 @@ fn remote_revision(book: &db::BookRow) -> String {
     )
 }
 
-async fn version(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult {
+async fn version(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Query(selection): Query<SourceSelect>,
+) -> ApiResult {
     let conn = st.db.lock().await;
-    let book = db::get_book(&conn, id)
-        .map_err(db_err)?
-        .ok_or((StatusCode::NOT_FOUND, "没有这本书".into()))?;
+    let Some(book) = db::get_book(&conn, id).map_err(db_err)? else {
+        if let Some(binding) = legacy_binding(&conn, id).map_err(db_err)? {
+            let chapter_count =
+                db::source_chapter_count(&conn, binding.book_id, &binding.source_key)
+                    .map_err(db_err)?;
+            let remote_revision =
+                db::source_manifest_revision(&conn, binding.book_id, &binding.source_key)
+                    .map_err(db_err)?;
+            let refresh_queued =
+                !db::is_source_recent_update(&conn, binding.book_source_id).map_err(db_err)?;
+            let logical = db::get_book(&conn, binding.book_id)
+                .map_err(db_err)?
+                .ok_or((StatusCode::NOT_FOUND, "没有这本书".into()))?;
+            return Ok(Json(json!({
+                "bookId": id,
+                "externalBookId": binding.external_book_id,
+                "latestChapterId": binding.latest_external_chapter_id
+                    .as_deref()
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .unwrap_or_default(),
+                "chapterCount": chapter_count,
+                "remoteRevision": remote_revision,
+                "lastUpdateAt": binding.last_update_at,
+                "latestChapter": logical.latest_chapter,
+                "refreshQueued": refresh_queued
+            })));
+        }
+        return Err((StatusCode::NOT_FOUND, "没有这本书".into()));
+    };
+    if let Some(source_key) = selection
+        .source
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        let source = db::find_book_source(&conn, id, source_key)
+            .map_err(db_err)?
+            .ok_or((StatusCode::NOT_FOUND, "该来源未绑定到这本书".into()))?;
+        let recent = db::is_source_recent_update(&conn, source.book_source_id).map_err(db_err)?;
+        if !recent {
+            db::request_source_refresh(&conn, source.book_source_id).map_err(db_err)?;
+        }
+        return Ok(Json(json!({
+            "bookId": id,
+            "sourceKey": source_key,
+            "externalBookId": source.external_book_id,
+            "latestChapterId": source.latest_external_chapter_id
+                .as_deref()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or_default(),
+            "chapterCount": db::source_chapter_count(&conn,id,source_key).map_err(db_err)?,
+            "remoteRevision": db::source_manifest_revision(&conn,id,source_key).map_err(db_err)?,
+            "lastUpdateAt": source.last_update_at,
+            "latestChapter": book.latest_chapter,
+            "refreshQueued": !recent
+        })));
+    }
     let recent = db::is_recent_update(&conn, id).map_err(db_err)?;
     if !recent {
         // A per-book version check is also a freshness hint. Queue a detail
@@ -525,7 +1265,12 @@ async fn source_txt(
     if p.id <= 0 || !(1..=100).contains(&p.p) {
         return Err((StatusCode::BAD_REQUEST, "书源请求参数无效".into()));
     }
-    let url = format!("{}/txt/?id={}&p={}", st.source_url.trim_end_matches('/'), p.id, p.p);
+    let url = format!(
+        "{}/txt/?id={}&p={}",
+        st.source_url.trim_end_matches('/'),
+        p.id,
+        p.p
+    );
     let response = st
         .relay_client
         .get(url)
@@ -560,6 +1305,7 @@ async fn source_txt(
 #[derive(Deserialize)]
 struct ChapterParams {
     revision: Option<String>,
+    source: Option<String>,
 }
 
 async fn chapter_body(
@@ -568,17 +1314,35 @@ async fn chapter_body(
     Query(params): Query<ChapterParams>,
     headers: HeaderMap,
 ) -> Result<Response, CatalogError> {
+    if let Some(source_key) = params.source.as_deref().filter(|value| !value.is_empty()) {
+        let legacy = {
+            let conn = st.db.lock().await;
+            if db::get_book(&conn, id).map_err(CatalogError::db)?.is_none() {
+                db::find_external_book(&conn, source_key, &id.to_string())
+                    .map_err(CatalogError::db)?
+                    .filter(|binding| binding.binding_state == "confirmed")
+            } else {
+                None
+            }
+        };
+        if let Some(binding) = legacy {
+            return legacy_chapter_body(&st, id, source_id, &binding, &params, headers).await;
+        }
+        return source_chapter_body(&st, id, source_id, source_key, &params, headers).await;
+    }
     let conn = st.db.lock().await;
-    let book = db::get_book(&conn, id)
-        .map_err(CatalogError::db)?
-        .ok_or_else(|| {
-            CatalogError::new(
-                StatusCode::NOT_FOUND,
-                "chapter",
-                "book_not_found",
-                "没有这本书",
-            )
-        })?;
+    let Some(book) = db::get_book(&conn, id).map_err(CatalogError::db)? else {
+        if let Some(binding) = legacy_binding(&conn, id).map_err(CatalogError::db)? {
+            drop(conn);
+            return legacy_chapter_body(&st, id, source_id, &binding, &params, headers).await;
+        }
+        return Err(CatalogError::new(
+            StatusCode::NOT_FOUND,
+            "chapter",
+            "book_not_found",
+            "没有这本书",
+        ));
+    };
     let known = db::has_chapter(&conn, id, source_id).map_err(CatalogError::db)?;
     let revision = db::manifest_revision(&conn, id).map_err(CatalogError::db)?;
     drop(conn);
@@ -623,6 +1387,430 @@ async fn chapter_body(
     Ok(out)
 }
 
+async fn legacy_chapter_body(
+    st: &AppState,
+    legacy_book_id: i64,
+    external_chapter_id: i64,
+    binding: &db::BookSourceRow,
+    params: &ChapterParams,
+    headers: HeaderMap,
+) -> Result<Response, CatalogError> {
+    let external_chapter_id = external_chapter_id.to_string();
+    let (title, ordinal, revision) = {
+        let conn = st.db.lock().await;
+        let (_, _, title, ordinal, _) = db::source_chapter_by_external_id(
+            &conn,
+            binding.book_id,
+            &binding.source_key,
+            &external_chapter_id,
+        )
+        .map_err(CatalogError::db)?
+        .ok_or_else(|| {
+            CatalogError::new(
+                StatusCode::NOT_FOUND,
+                "chapter",
+                "chapter_not_found",
+                "章节不存在",
+            )
+        })?;
+        let revision = db::source_manifest_revision(&conn, binding.book_id, &binding.source_key)
+            .map_err(CatalogError::db)?;
+        (title, ordinal, revision)
+    };
+    let cached = get_cached_source_chapter(
+        st,
+        binding.book_id,
+        &binding.source_key,
+        binding,
+        &external_chapter_id,
+        &title,
+        &revision,
+    )
+    .await?;
+    if headers
+        .get("If-None-Match")
+        .and_then(|value| value.to_str().ok())
+        == Some(cached.etag.as_str())
+    {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response
+            .headers_mut()
+            .insert("etag", HeaderValue::from_str(&cached.etag).unwrap());
+        return Ok(response);
+    }
+    // Keep the revision supplied by an old client so its existing local book
+    // remains readable during the one-time ID migration. New clients use the
+    // source-scoped route and receive the canonical source revision.
+    let client_revision = params
+        .revision
+        .clone()
+        .unwrap_or_else(|| cached.revision.clone());
+    let mut out = Json(json!({
+        "bookId": legacy_book_id,
+        "chapterId": format!("online:catalog:{legacy_book_id}:chapter:{external_chapter_id}"),
+        "sourceId": external_chapter_id.parse::<i64>().unwrap_or_default(),
+        "index": ordinal,
+        "title": title,
+        "revision": client_revision,
+        "body": cached.body,
+        "bytes": cached.body.len(),
+        "sha256": cached.sha256
+    }))
+    .into_response();
+    out.headers_mut()
+        .insert("etag", HeaderValue::from_str(&cached.etag).unwrap());
+    Ok(out)
+}
+
+async fn source_chapter_body(
+    st: &AppState,
+    id: i64,
+    chapter_id: i64,
+    source_key: &str,
+    params: &ChapterParams,
+    headers: HeaderMap,
+) -> Result<Response, CatalogError> {
+    let (book, binding, external_chapter_id, title, ordinal, revision) = {
+        let conn = st.db.lock().await;
+        let book = db::get_book(&conn, id)
+            .map_err(CatalogError::db)?
+            .ok_or_else(|| {
+                CatalogError::new(
+                    StatusCode::NOT_FOUND,
+                    "chapter",
+                    "book_not_found",
+                    "没有这本书",
+                )
+            })?;
+        let (binding, external, title, ordinal, _) =
+            db::source_chapter(&conn, id, source_key, chapter_id)
+                .map_err(CatalogError::db)?
+                .ok_or_else(|| {
+                    CatalogError::new(
+                        StatusCode::NOT_FOUND,
+                        "chapter",
+                        "chapter_not_found",
+                        "该来源章节不存在",
+                    )
+                })?;
+        if binding.binding_state != "confirmed" {
+            return Err(CatalogError::new(
+                StatusCode::CONFLICT,
+                "chapter",
+                "source_unresolved",
+                "该来源尚未完成书籍匹配确认",
+            ));
+        }
+        let revision =
+            db::source_manifest_revision(&conn, id, source_key).map_err(CatalogError::db)?;
+        (book, binding, external, title, ordinal, revision)
+    };
+    if params.revision.as_deref().is_some_and(|r| r != revision) {
+        return Err(CatalogError::new(
+            StatusCode::CONFLICT,
+            "chapter",
+            "stale_revision",
+            "该来源章节目录已更新，请刷新目录",
+        ));
+    }
+    let cached = get_cached_source_chapter(
+        st,
+        id,
+        source_key,
+        &binding,
+        &external_chapter_id,
+        &title,
+        &revision,
+    )
+    .await?;
+    let etag = cached.etag.clone();
+    if headers.get("If-None-Match").and_then(|v| v.to_str().ok()) == Some(etag.as_str()) {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response
+            .headers_mut()
+            .insert("etag", HeaderValue::from_str(&etag).unwrap());
+        return Ok(response);
+    }
+    let mut out = Json(json!({
+        "bookId": id,
+        "chapterId": format!("online:catalog:{id}:chapter:{chapter_id}"),
+        "sourceKey": source_key,
+        "externalBookId": binding.external_book_id,
+        "externalChapterId": external_chapter_id,
+        "index": ordinal,
+        "title": title,
+        "revision": cached.revision,
+        "body": cached.body,
+        "bytes": cached.body.len(),
+        "sha256": cached.sha256
+    }))
+    .into_response();
+    out.headers_mut()
+        .insert("etag", HeaderValue::from_str(&etag).unwrap());
+    let _ = book;
+    Ok(out)
+}
+
+async fn get_cached_source_chapter(
+    st: &AppState,
+    book_id: i64,
+    source_key: &str,
+    binding: &db::BookSourceRow,
+    external_chapter_id: &str,
+    title: &str,
+    revision: &str,
+) -> Result<CachedChapter, CatalogError> {
+    let cache_id = format!("{source_key}:{external_chapter_id}");
+    let key = (book_id, cache_id, revision.to_string());
+    let lock = {
+        let mut locks = st.chapter_fetches.lock().await;
+        locks.retain(|_, value| value.strong_count() > 0);
+        match locks.get(&key).and_then(|value| value.upgrade()) {
+            Some(lock) => lock,
+            None => {
+                let lock = Arc::new(Mutex::new(()));
+                locks.insert(key.clone(), Arc::downgrade(&lock));
+                lock
+            }
+        }
+    };
+    let _guard = lock.lock().await;
+    if let Some(value) = st.chapter_cache.lock().await.get(&key) {
+        return Ok(value);
+    }
+    {
+        let conn = st.db.lock().await;
+        let cached = conn
+            .query_row(
+                "SELECT body,sha256,updated_at FROM source_chapter_bodies
+                 WHERE book_source_id=?1 AND external_chapter_id=?2
+                   AND source_revision=?3 AND updated_at>?4",
+                rusqlite::params![
+                    binding.book_source_id,
+                    external_chapter_id,
+                    binding.source_revision,
+                    now() - 21600
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(CatalogError::db)?;
+        if let Some((body, sha, updated)) = cached {
+            if format!("{:x}", Sha256::digest(body.as_bytes())) == sha {
+                return Ok(CachedChapter {
+                    revision: revision.to_string(),
+                    body,
+                    sha256: sha.clone(),
+                    etag: format!("\"{source_key}:{external_chapter_id}:{sha}\""),
+                    updated_at: updated as u64,
+                });
+            }
+        }
+    }
+    let value = fetch_source_chapter(
+        st,
+        book_id,
+        source_key,
+        binding,
+        external_chapter_id,
+        title,
+        revision,
+    )
+    .await?;
+    st.chapter_cache.lock().await.insert(key, value.clone());
+    Ok(value)
+}
+
+async fn fetch_source_chapter(
+    st: &AppState,
+    book_id: i64,
+    source_key: &str,
+    binding: &db::BookSourceRow,
+    external_chapter_id: &str,
+    title: &str,
+    revision: &str,
+) -> Result<CachedChapter, CatalogError> {
+    let adapter = crate::sources::built_in_adapters()
+        .into_iter()
+        .find(|adapter| adapter.source_key() == source_key)
+        .ok_or_else(|| {
+            CatalogError::new(
+                StatusCode::NOT_FOUND,
+                "chapter",
+                "source_unknown",
+                "来源适配器不存在",
+            )
+        })?;
+    let base_url = {
+        let conn = st.db.lock().await;
+        db::get_source(&conn, source_key)
+            .map_err(CatalogError::db)?
+            .map(|source| source.base_url)
+            .unwrap_or_else(|| adapter.base_url().to_string())
+    };
+    let mut path = adapter
+        .chapter_path(&binding.external_book_id, external_chapter_id, None)
+        .map_err(|error| {
+            CatalogError::new(
+                StatusCode::BAD_REQUEST,
+                "chapter",
+                "invalid_source_id",
+                error.message,
+            )
+        })?;
+    let expected_prefix = format!("/{}/{external_chapter_id}-", binding.external_book_id);
+    let mut seen = HashSet::new();
+    let mut paragraphs = Vec::new();
+    for _ in 0..50 {
+        if !seen.insert(path.clone()) {
+            return Err(CatalogError::new(
+                StatusCode::BAD_GATEWAY,
+                "chapter",
+                "parse_failed",
+                "章节分页重复",
+            ));
+        }
+        let response = st
+            .relay_client
+            .get(format!("{}{}", base_url.trim_end_matches('/'), path))
+            .header("User-Agent", "shanye-catalog/0.2")
+            .send()
+            .await
+            .map_err(|_| {
+                CatalogError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "chapter",
+                    "source_unavailable",
+                    "书源暂不可用",
+                )
+            })?;
+        let status = response.status().as_u16();
+        let final_url = response.url().to_string();
+        let body = response.text().await.map_err(|_| {
+            CatalogError::new(
+                StatusCode::BAD_GATEWAY,
+                "chapter",
+                "source_unavailable",
+                "书源响应中断",
+            )
+        })?;
+        adapter
+            .validate_response(status, &final_url, &body)
+            .map_err(|error| {
+                CatalogError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "chapter",
+                    "source_rejected",
+                    error.message,
+                )
+            })?;
+        let (lines, next) = parse_chapter_page_for_prefix(&body, &expected_prefix)?;
+        paragraphs.extend(lines);
+        if paragraphs.iter().map(String::len).sum::<usize>() > 2 * 1024 * 1024 {
+            return Err(CatalogError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "chapter",
+                "body_too_large",
+                "章节正文超过 2MB",
+            ));
+        }
+        match next {
+            Some(next) => path = next,
+            None => {
+                path.clear();
+                break;
+            }
+        }
+    }
+    if !path.is_empty() {
+        return Err(CatalogError::new(
+            StatusCode::BAD_GATEWAY,
+            "chapter",
+            "parse_failed",
+            "章节分页超过限制",
+        ));
+    }
+    let body = paragraphs.join("\n\n");
+    if body.trim().is_empty() {
+        return Err(CatalogError::new(
+            StatusCode::BAD_GATEWAY,
+            "chapter",
+            "empty_body",
+            "章节正文为空",
+        ));
+    }
+    let sha256 = format!("{:x}", Sha256::digest(body.as_bytes()));
+    let published_revision = {
+        let conn = st.db.lock().await;
+        let tx = conn.unchecked_transaction().map_err(CatalogError::db)?;
+        if db::source_manifest_revision(&tx, book_id, source_key).map_err(CatalogError::db)?
+            != revision
+        {
+            return Err(CatalogError::new(
+                StatusCode::CONFLICT,
+                "chapter",
+                "stale_revision",
+                "章节目录已更新，请刷新目录",
+            ));
+        }
+        let old: Option<String> = tx
+            .query_row(
+                "SELECT body_sha256 FROM source_chapters
+                 WHERE book_source_id=?1 AND external_chapter_id=?2",
+                rusqlite::params![binding.book_source_id, external_chapter_id],
+                |r| r.get(0),
+            )
+            .map_err(CatalogError::db)?;
+        if old.as_ref().is_some_and(|hash| hash != &sha256) {
+            tx.execute(
+                "INSERT INTO source_content_generations(book_source_id,updated_at)
+                 VALUES(?1,1) ON CONFLICT(book_source_id)
+                 DO UPDATE SET updated_at=updated_at+1",
+                rusqlite::params![binding.book_source_id],
+            )
+            .map_err(CatalogError::db)?;
+        }
+        tx.execute(
+            "UPDATE source_chapters SET body_sha256=?3
+             WHERE book_source_id=?1 AND external_chapter_id=?2",
+            rusqlite::params![binding.book_source_id, external_chapter_id, sha256],
+        )
+        .map_err(CatalogError::db)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO source_chapter_bodies
+                (book_source_id,external_chapter_id,source_revision,title,body,sha256,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            rusqlite::params![
+                binding.book_source_id,
+                external_chapter_id,
+                binding.source_revision,
+                title,
+                body,
+                sha256,
+                now()
+            ],
+        )
+        .map_err(CatalogError::db)?;
+        let published =
+            db::source_manifest_revision(&tx, book_id, source_key).map_err(CatalogError::db)?;
+        tx.commit().map_err(CatalogError::db)?;
+        published
+    };
+    Ok(CachedChapter {
+        revision: published_revision,
+        body,
+        sha256: sha256.clone(),
+        etag: format!("\"{source_key}:{external_chapter_id}:{sha256}\""),
+        updated_at: now() as u64,
+    })
+}
+
 async fn get_cached_chapter(
     st: &AppState,
     id: i64,
@@ -630,7 +1818,7 @@ async fn get_cached_chapter(
     book: &db::BookRow,
     revision: String,
 ) -> Result<CachedChapter, CatalogError> {
-    let key = (id, source_id, revision.clone());
+    let key = (id, source_id.to_string(), revision.clone());
     let lock = {
         let mut locks = st.chapter_fetches.lock().await;
         locks.retain(|_, value| value.strong_count() > 0);
@@ -683,10 +1871,10 @@ async fn prefetch(
                 "没有这本书",
             )
         })?;
-    let mut source_ids = request.chapter_ids;
-    source_ids.sort_unstable();
-    source_ids.dedup();
-    if source_ids.is_empty() || source_ids.len() > 2000 {
+    let mut chapter_ids = request.chapter_ids;
+    chapter_ids.sort_unstable();
+    chapter_ids.dedup();
+    if chapter_ids.is_empty() || chapter_ids.len() > 2000 {
         return Err(CatalogError::new(
             StatusCode::BAD_REQUEST,
             "prefetch",
@@ -694,18 +1882,77 @@ async fn prefetch(
             "预取章节数量应为 1–2000",
         ));
     }
-    for source_id in &source_ids {
-        if !db::has_chapter(&conn, id, *source_id).map_err(CatalogError::db)? {
+    let source_key = request
+        .source_key
+        .filter(|value| !value.trim().is_empty() && value != "catalog");
+    if let Some(source_key) = source_key {
+        let source = db::find_book_source(&conn, id, &source_key)
+            .map_err(CatalogError::db)?
+            .ok_or_else(|| {
+                CatalogError::new(
+                    StatusCode::NOT_FOUND,
+                    "prefetch",
+                    "source_not_bound",
+                    "该来源未绑定到这本书",
+                )
+            })?;
+        if source.binding_state != "confirmed" {
+            return Err(CatalogError::new(
+                StatusCode::CONFLICT,
+                "prefetch",
+                "source_unresolved",
+                "该来源尚未完成书籍匹配确认",
+            ));
+        }
+        let signature = format!(
+            "{id}:{source_key}:{}:{chapter_ids:?}",
+            db::source_manifest_revision(&conn, id, &source_key).map_err(CatalogError::db)?
+        );
+        let task_id = format!("prefetch-{:x}", Sha256::digest(signature.as_bytes()));
+        if let Some(existing) = db::prefetch_job(&conn, &task_id).map_err(CatalogError::db)? {
+            return Ok(Json(existing));
+        }
+        let total = db::create_source_prefetch_job(
+            &conn,
+            &task_id,
+            id,
+            source.book_source_id,
+            request.priority.unwrap_or(50).clamp(0, 100),
+            &chapter_ids,
+        )
+        .map_err(|error| {
+            if matches!(error, rusqlite::Error::QueryReturnedNoRows) {
+                CatalogError::new(
+                    StatusCode::NOT_FOUND,
+                    "prefetch",
+                    "chapter_not_found",
+                    "来源章节不存在或尚未完成映射",
+                )
+            } else {
+                CatalogError::db(error)
+            }
+        })?;
+        drop(conn);
+        return Ok(Json(json!({
+            "taskId": task_id,
+            "bookId": id,
+            "sourceKey": source_key,
+            "state": "queued",
+            "total": total
+        })));
+    }
+    for chapter_id in &chapter_ids {
+        if !db::has_chapter(&conn, id, *chapter_id).map_err(CatalogError::db)? {
             return Err(CatalogError::new(
                 StatusCode::NOT_FOUND,
                 "prefetch",
                 "chapter_not_found",
-                format!("章节 {} 不存在", source_id),
+                format!("章节 {} 不存在", chapter_id),
             ));
         }
     }
     let signature = format!(
-        "{id}:{}:{source_ids:?}",
+        "{id}:{}:{chapter_ids:?}",
         db::manifest_revision(&conn, id).map_err(CatalogError::db)?
     );
     let task_id = format!("prefetch-{:x}", Sha256::digest(signature.as_bytes()));
@@ -717,12 +1964,12 @@ async fn prefetch(
         &task_id,
         id,
         request.priority.unwrap_or(50).clamp(0, 100),
-        &source_ids,
+        &chapter_ids,
     )
     .map_err(CatalogError::db)?;
     drop(conn);
     Ok(Json(
-        json!({"taskId": task_id, "bookId": id, "state": "queued", "total": source_ids.len()}),
+        json!({"taskId": task_id, "bookId": id, "state": "queued", "total": chapter_ids.len()}),
     ))
 }
 
@@ -766,6 +2013,12 @@ async fn retry_prefetch(
     )
     .map_err(CatalogError::db)?;
     conn.execute(
+        "UPDATE source_prefetch_items SET state='queued',error=NULL
+         WHERE job_id=?1 AND state='failed'",
+        rusqlite::params![task_id],
+    )
+    .map_err(CatalogError::db)?;
+    conn.execute(
         "UPDATE prefetch_jobs SET state='queued',failed=0 WHERE id=?1",
         rusqlite::params![task_id],
     )
@@ -785,53 +2038,212 @@ pub async fn run_prefetch(st: AppState) {
             "UPDATE prefetch_items SET state='queued' WHERE state='running'",
             [],
         );
+        let _ = conn.execute(
+            "UPDATE source_prefetch_items SET state='queued' WHERE state='running'",
+            [],
+        );
     }
     loop {
-        let next = {
+        let source_next = {
             let conn = st.db.lock().await;
-            conn.query_row("SELECT i.job_id,j.book_id,i.source_id FROM prefetch_items i JOIN prefetch_jobs j ON j.id=i.job_id WHERE i.state='queued' ORDER BY j.priority DESC,j.created_at,i.source_id LIMIT 1",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?))).ok()
+            conn.query_row(
+                "SELECT i.job_id,j.book_id,i.book_source_id,i.external_chapter_id
+                 FROM source_prefetch_items i
+                 JOIN prefetch_jobs j ON j.id=i.job_id
+                 WHERE i.state='queued'
+                 ORDER BY j.priority DESC,j.created_at,i.external_chapter_id
+                 LIMIT 1",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
         };
-        let Some((job, id, source)) = next else {
+        let legacy_next = {
+            let conn = st.db.lock().await;
+            conn.query_row(
+                "SELECT i.job_id,j.book_id,i.source_id
+                 FROM prefetch_items i
+                 JOIN prefetch_jobs j ON j.id=i.job_id
+                 WHERE i.state='queued'
+                 ORDER BY j.priority DESC,j.created_at,i.source_id
+                 LIMIT 1",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()
+        };
+        let source_next = source_next.ok().flatten();
+        let legacy_next = legacy_next.ok().flatten();
+        let Some(work) = source_next
+            .map(|(job, id, book_source_id, external)| PrefetchWork::Source {
+                job,
+                id,
+                book_source_id,
+                external,
+            })
+            .or_else(|| {
+                legacy_next.map(|(job, id, source)| PrefetchWork::Legacy { job, id, source })
+            })
+        else {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             continue;
         };
         let result = async {
-            let (book, revision) = {
-                let conn = st.db.lock().await;
-                db::update_prefetch_item(&conn, &job, source, "running", None)
-                    .map_err(CatalogError::db)?;
-                let book = db::get_book(&conn, id)
-                    .map_err(CatalogError::db)?
-                    .ok_or_else(|| {
-                        CatalogError::new(
-                            StatusCode::NOT_FOUND,
-                            "prefetch",
-                            "book_not_found",
-                            "书籍不存在",
+            match &work {
+                PrefetchWork::Source {
+                    job,
+                    id,
+                    book_source_id,
+                    external,
+                } => {
+                    let (binding, title, revision) = {
+                        let conn = st.db.lock().await;
+                        db::update_source_prefetch_item(
+                            &conn,
+                            job,
+                            *book_source_id,
+                            external,
+                            "running",
+                            None,
                         )
-                    })?;
-                if !db::has_chapter(&conn, id, source).map_err(CatalogError::db)? {
-                    return Err(CatalogError::new(
-                        StatusCode::NOT_FOUND,
-                        "prefetch",
-                        "chapter_not_found",
-                        "章节已移除",
-                    ));
+                        .map_err(CatalogError::db)?;
+                        let (binding, _, title) =
+                            db::source_prefetch_item(&conn, job, *book_source_id, external)
+                                .map_err(CatalogError::db)?
+                                .ok_or_else(|| {
+                                    CatalogError::new(
+                                        StatusCode::NOT_FOUND,
+                                        "prefetch",
+                                        "chapter_not_found",
+                                        "来源章节已移除",
+                                    )
+                                })?;
+                        if binding.book_id != *id || binding.binding_state != "confirmed" {
+                            return Err(CatalogError::new(
+                                StatusCode::CONFLICT,
+                                "prefetch",
+                                "source_unresolved",
+                                "来源绑定已失效",
+                            ));
+                        }
+                        let revision =
+                            db::source_manifest_revision(&conn, *id, &binding.source_key)
+                                .map_err(CatalogError::db)?;
+                        (binding, title, revision)
+                    };
+                    get_cached_source_chapter(
+                        &st,
+                        *id,
+                        &binding.source_key,
+                        &binding,
+                        external,
+                        &title,
+                        &revision,
+                    )
+                    .await
                 }
-                (
-                    book,
-                    db::manifest_revision(&conn, id).map_err(CatalogError::db)?,
-                )
-            };
-            get_cached_chapter(&st, id, source, &book, revision).await
+                PrefetchWork::Legacy { job, id, source } => {
+                    let (book, revision) = {
+                        let conn = st.db.lock().await;
+                        db::update_prefetch_item(&conn, job, *source, "running", None)
+                            .map_err(CatalogError::db)?;
+                        let book = db::get_book(&conn, *id)
+                            .map_err(CatalogError::db)?
+                            .ok_or_else(|| {
+                                CatalogError::new(
+                                    StatusCode::NOT_FOUND,
+                                    "prefetch",
+                                    "book_not_found",
+                                    "书籍不存在",
+                                )
+                            })?;
+                        if !db::has_chapter(&conn, *id, *source).map_err(CatalogError::db)? {
+                            return Err(CatalogError::new(
+                                StatusCode::NOT_FOUND,
+                                "prefetch",
+                                "chapter_not_found",
+                                "章节已移除",
+                            ));
+                        }
+                        (
+                            book,
+                            db::manifest_revision(&conn, *id).map_err(CatalogError::db)?,
+                        )
+                    };
+                    get_cached_chapter(&st, *id, *source, &book, revision).await
+                }
+            }
         }
         .await;
         let conn = st.db.lock().await;
-        let _ = match result {
-            Ok(_) => db::update_prefetch_item(&conn, &job, source, "completed", None),
-            Err(e) => db::update_prefetch_item(&conn, &job, source, "failed", Some(&e.message)),
+        let _ = match (&work, result) {
+            (
+                PrefetchWork::Source {
+                    job,
+                    book_source_id,
+                    external,
+                    ..
+                },
+                Ok(_),
+            ) => db::update_source_prefetch_item(
+                &conn,
+                job,
+                *book_source_id,
+                external,
+                "completed",
+                None,
+            ),
+            (
+                PrefetchWork::Source {
+                    job,
+                    book_source_id,
+                    external,
+                    ..
+                },
+                Err(e),
+            ) => db::update_source_prefetch_item(
+                &conn,
+                job,
+                *book_source_id,
+                external,
+                "failed",
+                Some(&e.message),
+            ),
+            (PrefetchWork::Legacy { job, source, .. }, Ok(_)) => {
+                db::update_prefetch_item(&conn, job, *source, "completed", None)
+            }
+            (PrefetchWork::Legacy { job, source, .. }, Err(e)) => {
+                db::update_prefetch_item(&conn, job, *source, "failed", Some(&e.message))
+            }
         };
     }
+}
+
+enum PrefetchWork {
+    Source {
+        job: String,
+        id: i64,
+        book_source_id: i64,
+        external: String,
+    },
+    Legacy {
+        job: String,
+        id: i64,
+        source: i64,
+    },
 }
 
 async fn fetch_chapter(
@@ -1001,6 +2413,13 @@ fn parse_chapter_page(
     book_id: i64,
     source_id: i64,
 ) -> Result<(Vec<String>, Option<String>), CatalogError> {
+    parse_chapter_page_for_prefix(html, &format!("/{book_id}/{source_id}-"))
+}
+
+fn parse_chapter_page_for_prefix(
+    html: &str,
+    expected_prefix: &str,
+) -> Result<(Vec<String>, Option<String>), CatalogError> {
     let doc = scraper::Html::parse_document(html);
     let container = doc
         .select(&scraper::Selector::parse("div.con").unwrap())
@@ -1025,7 +2444,7 @@ fn parse_chapter_page(
         }
         let href = a.value().attr("href").unwrap_or("");
         let suffix = href
-            .strip_prefix(&format!("/{book_id}/{source_id}-"))
+            .strip_prefix(expected_prefix)
             .and_then(|s| s.strip_suffix(".html"));
         if suffix.and_then(|s| s.parse::<usize>().ok()).is_none() {
             return Err(CatalogError::new(
@@ -1217,6 +2636,7 @@ fn content_state(task: &Value) -> Json<Value> {
 async fn update_plan(
     State(st): State<AppState>,
     Path(id): Path<i64>,
+    Query(selection): Query<SourceSelect>,
     Json(request): Json<UpdatePlanRequest>,
 ) -> Result<Response, Response> {
     let book = {
@@ -1227,8 +2647,15 @@ async fn update_plan(
                 UpdateError(StatusCode::NOT_FOUND, "book_not_found", "没有这本书").into_response()
             })?
     };
-    let expected_revision =
-        db::manifest_revision(&*st.db.lock().await, id).map_err(|e| db_err(e).into_response())?;
+    let source_key = selection.source.filter(|value| !value.is_empty());
+    let expected_revision = {
+        let conn = st.db.lock().await;
+        match source_key.as_deref() {
+            Some(source_key) => db::source_manifest_revision(&conn, id, source_key),
+            None => db::manifest_revision(&conn, id),
+        }
+        .map_err(|e| db_err(e).into_response())?
+    };
     validate_update_request(&book, &request, &expected_revision)
         .map_err(IntoResponse::into_response)?;
     if st.relay_token.trim().is_empty() {
@@ -1246,6 +2673,7 @@ async fn update_plan(
     request.chapters.hash(&mut plan_key);
     let payload = json!({
         "bookId": id,
+        "sourceKey": source_key,
         "latestChapterId": book.latest_chapter_id,
         "fromRevision": from,
         "targetRevision": target,
@@ -1256,7 +2684,8 @@ async fn update_plan(
         "content.update",
         payload,
         format!(
-            "content.update:txt-v2:{id}:{from}:{:016x}",
+            "content.update:txt-v3:{id}:{}:{from}:{:016x}",
+            source_key.as_deref().unwrap_or("legacy"),
             plan_key.finish()
         ),
     )
@@ -1281,6 +2710,7 @@ async fn update_plan(
 async fn content(
     State(st): State<AppState>,
     Path(id): Path<i64>,
+    Query(selection): Query<SourceSelect>,
 ) -> Result<Response, (StatusCode, String)> {
     let book = {
         let conn = st.db.lock().await;
@@ -1291,13 +2721,25 @@ async fn content(
     if st.relay_token.trim().is_empty() {
         return Err((StatusCode::SERVICE_UNAVAILABLE, "正文服务尚未配置".into()));
     }
+    let source_key = selection.source.filter(|value| !value.is_empty());
     let latest = book.latest_chapter_id;
+    let catalog_revision = if let Some(source_key) = source_key.as_deref() {
+        let conn = st.db.lock().await;
+        db::find_book_source(&conn, id, source_key)
+            .map_err(db_err)?
+            .ok_or((StatusCode::NOT_FOUND, "该来源未绑定到这本书".into()))?;
+        db::source_manifest_revision(&conn, id, source_key).map_err(db_err)?
+    } else {
+        remote_revision(&book)
+    };
     // The preheat key uses a different priority. Relay rejects collisions even
     // for the same book/version; workers still share the on-disk book cache.
-    let catalog_revision = remote_revision(&book);
     let mut task = create_content_task(&st, "content.fetch",
-        json!({"bookId": id, "latestChapterId": latest, "title": book.title, "author": book.author, "catalogRevision": catalog_revision}),
-        format!("content.fetch:txt-v3:{catalog_revision}")).await?;
+        json!({"bookId": id, "sourceKey": source_key, "latestChapterId": latest, "title": book.title, "author": book.author, "catalogRevision": catalog_revision}),
+        format!(
+            "content.fetch:txt-v4:{}:{catalog_revision}",
+            source_key.as_deref().unwrap_or("legacy")
+        )).await?;
     // A cached fetch is only the small manifest; the App needs the serve task's ZIP.
     if task_result_ready(&task) {
         task = serve_content(&st, &task).await?;
@@ -1419,7 +2861,24 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/catalog/stats", get(stats))
         .route("/v1/catalog/search", get(search))
         .route("/v1/catalog/books", get(list))
+        .route("/v1/catalog/legacy/books/{external_id}", get(legacy_book))
         .route("/v1/catalog/books/{id}", get(book))
+        .route("/v1/catalog/books/{id}/sources", get(book_sources))
+        .route(
+            "/v1/catalog/sources/{source_key}/metrics",
+            get(source_metrics),
+        )
+        .route(
+            "/v1/catalog/books/{id}/sources/preferred",
+            post(preferred_source),
+        )
+        .route(
+            "/v1/catalog/books/{id}/sources/confirm",
+            post(confirm_source),
+        )
+        .route("/v1/catalog/sources/reject", post(reject_source))
+        .route("/v1/catalog/sources/split", post(split_source))
+        .route("/v1/catalog/books/resolve", post(resolve_book))
         .route("/v1/catalog/books/{id}/manifest", get(manifest))
         .route(
             "/v1/catalog/books/{id}/chapters/{source_id}",
@@ -1532,6 +2991,157 @@ mod tests {
                 .unwrap();
             assert_eq!(task["id"], "replacement");
         }
+    }
+
+    #[tokio::test]
+    async fn source_scoped_catalog_endpoints_do_not_guess_legacy_sources() {
+        let st = start_mock(Router::new()).await;
+        {
+            let conn = st.db.lock().await;
+            db::init(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO books(id,title,author,meta_level)
+                 VALUES(1,'测试书','作者',2)",
+                [],
+            )
+            .unwrap();
+            let source =
+                db::ensure_book_source(&conn, 1, "suduguu", "203", "测试书", "作者", "confirmed")
+                    .unwrap();
+            conn.execute(
+                "INSERT INTO source_chapters
+                    (book_source_id,external_chapter_id,chapter_id,ordinal,source_title,
+                     source_revision,last_seen_at)
+                 VALUES(?1,'407',900,0,'第一章','fixture',1)",
+                rusqlite::params![source],
+            )
+            .unwrap();
+        }
+        let api = start_mock(router(st.clone())).await;
+        let sources = api
+            .relay_client
+            .get(format!("{}/v1/catalog/books/1/sources", api.relay_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(sources.status(), StatusCode::OK);
+        assert_eq!(
+            sources.json::<Value>().await.unwrap()["items"][0]["sourceKey"],
+            "suduguu"
+        );
+
+        let manifest = api
+            .relay_client
+            .get(format!(
+                "{}/v1/catalog/books/1/manifest?source=suduguu",
+                api.relay_url
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(manifest.status(), StatusCode::OK);
+        assert_eq!(
+            manifest.json::<Value>().await.unwrap()["items"][0]["externalChapterId"],
+            "407"
+        );
+        let prefetch = api
+            .relay_client
+            .post(format!("{}/v1/catalog/books/1/prefetch", api.relay_url))
+            .json(&json!({
+                "sourceKey": "suduguu",
+                "chapterIds": [900],
+                "priority": 80
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(prefetch.status(), StatusCode::OK);
+        let prefetch_json = prefetch.json::<Value>().await.unwrap();
+        assert_eq!(prefetch_json["sourceKey"], "suduguu");
+        let prefetch_status = api
+            .relay_client
+            .get(format!(
+                "{}/v1/catalog/prefetch/{}",
+                api.relay_url,
+                prefetch_json["taskId"].as_str().unwrap()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            prefetch_status.json::<Value>().await.unwrap()["items"][0]["externalChapterId"],
+            "407"
+        );
+
+        let legacy = api
+            .relay_client
+            .get(format!("{}/v1/catalog/legacy/books/203", api.relay_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(legacy.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            legacy.json::<Value>().await.unwrap()["code"],
+            "source_required"
+        );
+        let legacy_path = api
+            .relay_client
+            .get(format!("{}/v1/catalog/books/203", api.relay_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(legacy_path.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            legacy_path.json::<Value>().await.unwrap()["code"],
+            "source_required"
+        );
+        let selected = api
+            .relay_client
+            .get(format!(
+                "{}/v1/catalog/books/203?source=suduguu",
+                api.relay_url
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(selected.status(), StatusCode::OK);
+        assert_eq!(
+            selected.json::<Value>().await.unwrap()["externalBookId"],
+            "203"
+        );
+    }
+
+    #[tokio::test]
+    async fn source_metrics_are_exposed_per_registered_source() {
+        let st = start_mock(Router::new()).await;
+        {
+            let conn = st.db.lock().await;
+            db::init(&conn).unwrap();
+            db::record_source_error(
+                &conn,
+                "sudugu520",
+                Some("407"),
+                "source_redirect",
+                "redirect to google",
+            )
+            .unwrap();
+            db::start_source_sync_run(&conn, "incremental", "sudugu520").unwrap();
+        }
+        let api = start_mock(router(st)).await;
+        let response = api
+            .relay_client
+            .get(format!(
+                "{}/v1/catalog/sources/sudugu520/metrics",
+                api.relay_url
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["sourceKey"], "sudugu520");
+        assert_eq!(value["redirectFailures"], 1);
+        assert_eq!(value["syncRuns"], 1);
     }
 
     #[tokio::test]
@@ -1751,6 +3361,7 @@ mod tests {
             Path((77, 1)),
             Query(ChapterParams {
                 revision: Some(revision.clone()),
+                source: None,
             }),
             headers,
         )
@@ -1778,6 +3389,7 @@ mod tests {
             Path((77, 1)),
             Query(ChapterParams {
                 revision: Some("outdated".into()),
+                source: None,
             }),
             HeaderMap::new(),
         )

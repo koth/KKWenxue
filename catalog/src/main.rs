@@ -10,6 +10,7 @@
 mod api;
 mod db;
 mod parsers;
+mod sources;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,6 +27,17 @@ fn source_base() -> String {
         .unwrap_or_else(|_| DEFAULT_BASE.into())
         .trim_end_matches('/')
         .to_owned()
+}
+
+fn source_adapter() -> Box<dyn sources::SourceAdapter> {
+    let key = std::env::var("SHANYE_CATALOG_SOURCE_KEY").unwrap_or_else(|_| "suduguu".into());
+    sources::built_in_adapters()
+        .into_iter()
+        .find(|adapter| adapter.source_key() == key)
+        .unwrap_or_else(|| {
+            eprintln!("未知来源 {key}，回退到 suduguu");
+            Box::new(sources::SuduguuAdapter)
+        })
 }
 
 struct Fetcher {
@@ -63,17 +75,33 @@ impl Fetcher {
         }
     }
 
-    async fn get(&self, url: &str) -> Result<(u16, String), String> {
-        self.acquire().await;
-        let resp = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        let code = resp.status().as_u16();
-        let body = resp.text().await.map_err(|e| e.to_string())?;
-        Ok((code, body))
+    async fn get(&self, url: &str) -> Result<(u16, String, String), String> {
+        let mut last_error = String::new();
+        for attempt in 0..3 {
+            self.acquire().await;
+            match self.client.get(url).send().await {
+                Ok(resp) => {
+                    let code = resp.status().as_u16();
+                    let final_url = resp.url().to_string();
+                    match resp.text().await {
+                        Ok(body) => {
+                            if attempt < 2 && (code == 429 || (500..600).contains(&code)) {
+                                tokio::time::sleep(Duration::from_millis(250 * (1 << attempt)))
+                                    .await;
+                                continue;
+                            }
+                            return Ok((code, final_url, body));
+                        }
+                        Err(error) => last_error = error.to_string(),
+                    }
+                }
+                Err(error) => last_error = error.to_string(),
+            }
+            if attempt < 2 {
+                tokio::time::sleep(Duration::from_millis(250 * (1 << attempt))).await;
+            }
+        }
+        Err(last_error)
     }
 }
 
@@ -93,6 +121,19 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn flag(args: &[String], name: &str) -> bool {
     args.iter().any(|a| a == name)
+}
+
+fn source_error_code(kind: sources::SourceErrorKind) -> &'static str {
+    match kind {
+        sources::SourceErrorKind::Redirect => "redirect",
+        sources::SourceErrorKind::NotFound => "not_found",
+        sources::SourceErrorKind::EmptyResponse => "empty",
+        sources::SourceErrorKind::InvalidBook => "invalid_book",
+        sources::SourceErrorKind::InvalidDirectory => "invalid_directory",
+        sources::SourceErrorKind::DuplicateChapter => "duplicate_chapter",
+        sources::SourceErrorKind::Parse => "parse",
+        sources::SourceErrorKind::Transport => "transport",
+    }
 }
 
 async fn cmd_preheat(args: &[String]) -> Result<(), String> {
@@ -184,43 +225,124 @@ async fn cmd_preheat(args: &[String]) -> Result<(), String> {
 async fn scan_updates(
     conn: &rusqlite::Connection,
     fetcher: &Fetcher,
+    adapter: &dyn sources::SourceAdapter,
     max_pages: usize,
     quiet_pages: Option<usize>,
 ) -> Result<(usize, usize), String> {
-    let base = source_base();
-    let known = db::known_latest_chapters(conn).map_err(|e| e.to_string())?;
+    let base = std::env::var("SHANYE_CATALOG_SOURCE")
+        .unwrap_or_else(|_| adapter.base_url().into())
+        .trim_end_matches('/')
+        .to_owned();
+    db::ensure_source(
+        conn,
+        adapter.source_key(),
+        adapter.display_name(),
+        &base,
+        if adapter.source_key() == "sudugu520" {
+            20
+        } else {
+            10
+        },
+    )
+    .map_err(|e| format!("ensure source failed: {e}"))?;
+    let known = db::known_latest_chapters_for_source(conn, adapter.source_key())
+        .map_err(|e| format!("load known source chapters failed: {e}"))?;
     let mut quiet = 0usize;
     let mut pages = 0usize;
     let mut seen = 0usize;
 
     for page in 1..=max_pages {
-        let url = if page == 1 {
-            format!("{base}/zuixin/")
-        } else {
-            format!("{base}/zuixin/{page}.html")
+        let url = format!("{base}{}", adapter.list_path(page));
+        let (code, final_url, body) = fetcher
+            .get(&url)
+            .await
+            .map_err(|e| format!("fetch list page {page} failed: {e}"))?;
+        if let Err(error) = adapter.validate_response(code, &final_url, &body) {
+            let _ = db::record_source_error(
+                conn,
+                adapter.source_key(),
+                None,
+                &format!("source_{}", source_error_code(error.kind)),
+                &error.message,
+            );
+            if matches!(error.kind, sources::SourceErrorKind::NotFound)
+                || (300..400).contains(&code)
+            {
+                eprintln!(
+                    "  来源 {} 第 {page} 页停止：{}",
+                    adapter.source_key(),
+                    error.message
+                );
+                break;
+            }
+            let _ = db::record_source_health(
+                conn,
+                adapter.source_key(),
+                false,
+                Some(source_error_code(error.kind)),
+                Some(&error.message),
+            );
+            return Err(error.message);
+        }
+        let items = match adapter.parse_list(&body) {
+            Ok(items) => items,
+            Err(error) => {
+                let _ = db::record_source_error(
+                    conn,
+                    adapter.source_key(),
+                    None,
+                    &format!("source_{}", source_error_code(error.kind)),
+                    &error.message,
+                );
+                return Err(error.message);
+            }
         };
-        let (code, body) = fetcher.get(&url).await?;
-        if (300..400).contains(&code) {
-            eprintln!("  第 {page} 页返回 {code}（越界或限流），停止");
-            break;
-        }
-        if code != 200 {
-            return Err(format!("列表页第 {page} 页 HTTP {code}"));
-        }
-        let items = parsers::parse_list(&body);
-        if items.is_empty() {
-            eprintln!("  第 {page} 页解析为空，停止（可能是改版）");
-            break;
-        }
+        db::set_source_cursor(conn, adapter.source_key(), Some(&page.to_string()), None)
+            .map_err(|e| format!("save list cursor page {page} failed: {e}"))?;
         pages = page;
         let mut changed = 0usize;
         for item in &items {
             seen += 1;
-            if known.get(&item.id) != Some(&item.latest_chapter_id) {
+            let item_changed = known.get(&item.external_book_id).copied()
+                != item
+                    .latest_external_chapter_id
+                    .as_deref()
+                    .and_then(|value| value.parse::<i64>().ok());
+            if item_changed {
                 changed += 1;
-                db::mark_recent_update(conn, item.id).map_err(|e| e.to_string())?;
             }
-            db::upsert_list(conn, item).map_err(|e| e.to_string())?;
+            let book_id = match db::upsert_source_list(conn, adapter.source_key(), item) {
+                Ok(book_id) => book_id,
+                Err(error) => {
+                    let message = format!(
+                        "upsert source list {} ({}) failed: {error}",
+                        item.external_book_id, item.title
+                    );
+                    let _ = db::record_source_error(
+                        conn,
+                        adapter.source_key(),
+                        Some(&item.external_book_id),
+                        "source_list_persist",
+                        &message,
+                    );
+                    eprintln!("  {message}，跳过此条继续");
+                    continue;
+                }
+            };
+            if item_changed {
+                db::mark_recent_update(conn, book_id)
+                    .map_err(|e| format!("mark book update {book_id} failed: {e}"))?;
+                if let Some(binding) =
+                    db::find_external_book(conn, adapter.source_key(), &item.external_book_id)
+                        .map_err(|e| {
+                            format!("load source binding {} failed: {e}", item.external_book_id)
+                        })?
+                {
+                    db::mark_source_recent_update(conn, binding.book_source_id).map_err(|e| {
+                        format!("mark source update {} failed: {e}", binding.book_source_id)
+                    })?;
+                }
+            }
         }
         if let Some(quiet_limit) = quiet_pages {
             if changed == 0 {
@@ -237,6 +359,8 @@ async fn scan_updates(
             eprintln!("  列表已扫 {page} 页 / {seen} 本");
         }
     }
+    db::record_source_health(conn, adapter.source_key(), true, None, None)
+        .map_err(|e| format!("record source health failed: {e}"))?;
     Ok((pages, seen))
 }
 
@@ -244,10 +368,15 @@ async fn scan_updates(
 async fn fetch_details(
     db_path: &str,
     fetcher: Arc<Fetcher>,
-    ids: Vec<i64>,
+    adapter: Arc<dyn sources::SourceAdapter>,
+    ids: Vec<String>,
     workers: usize,
 ) -> Result<(usize, usize), String> {
-    let base = source_base();
+    let base = std::env::var("SHANYE_CATALOG_SOURCE")
+        .unwrap_or_else(|_| adapter.base_url().into())
+        .trim_end_matches('/')
+        .to_owned();
+    let source_key = adapter.source_key().to_string();
     let ids = Arc::new(ids);
     let next = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut handles = Vec::new();
@@ -258,84 +387,194 @@ async fn fetch_details(
         let ids = ids.clone();
         let next = next.clone();
         let base = base.clone();
+        let adapter = adapter.clone();
+        let source_key = source_key.clone();
         handles.push(tokio::spawn(async move {
-            let conn = db::open(&db_path).map_err(|e| e.to_string())?;
+            let conn = db::open_existing(&db_path)
+                .map_err(|e| format!("worker database open failed: {e}"))?;
             let (mut ok, mut failed) = (0usize, 0usize);
             loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some(id) = ids.get(i).copied() else { break };
-                let url = format!("{base}/{id}/");
+                let Some(id) = ids.get(i).cloned() else { break };
+                let url = format!("{base}{}", adapter.detail_path(&id).map_err(|e| e.message)?);
                 match fetcher.get(&url).await {
-                    Ok((200, body)) => match parsers::parse_detail(&body, id) {
-                        Some(mut d) => {
-                            let mut next_page = parsers::next_directory_page(&body);
-                            let mut seen = d
-                                .chapters
-                                .iter()
-                                .map(|chapter| chapter.source_id)
-                                .collect::<std::collections::HashSet<_>>();
-                            let mut pages = 0usize;
-                            let mut complete = true;
-                            let mut visited = std::collections::HashSet::new();
-                            while let Some(page) = next_page {
-                                if page <= 1 || page > 100 || !visited.insert(page) {
-                                    complete = false;
-                                    break;
-                                }
-                                let page_url = format!("{base}/{id}/p-{page}.html");
-                                match fetcher.get(&page_url).await {
-                                    Ok((200, page_body)) => {
-                                        if let Some(page_detail) =
-                                            parsers::parse_detail(&page_body, id)
+                    Ok((code, final_url, body))
+                        if adapter.validate_response(code, &final_url, &body).is_ok() =>
+                    {
+                        match adapter.parse_detail(&body, &id) {
+                            Ok(mut d) => {
+                                let mut next_page = adapter.next_directory_page(&body);
+                                let mut seen = d
+                                    .chapters
+                                    .iter()
+                                    .map(|chapter| chapter.external_chapter_id.clone())
+                                    .collect::<std::collections::HashSet<_>>();
+                                let mut pages = 0usize;
+                                let mut complete = true;
+                                let mut visited = std::collections::HashSet::new();
+                                while let Some(page) = next_page {
+                                    if page <= 1 || page > 100 || !visited.insert(page) {
+                                        complete = false;
+                                        break;
+                                    }
+                                    let page_url = format!(
+                                        "{base}{}",
+                                        adapter
+                                            .directory_page_path(&id, page)
+                                            .map_err(|e| e.message)?
+                                    );
+                                    match fetcher.get(&page_url).await {
+                                        Ok((code, final_url, page_body))
+                                            if adapter
+                                                .validate_response(code, &final_url, &page_body)
+                                                .is_ok() =>
                                         {
-                                            for chapter in page_detail.chapters {
-                                                if seen.insert(chapter.source_id) {
-                                                    d.chapters.push(chapter);
+                                            if let Ok(page_detail) =
+                                                adapter.parse_detail(&page_body, &id)
+                                            {
+                                                for chapter in page_detail.chapters {
+                                                    if seen
+                                                        .insert(chapter.external_chapter_id.clone())
+                                                    {
+                                                        let mut chapter = chapter;
+                                                        // `parse_detail` numbers each directory
+                                                        // page from zero. Rebase appended pages
+                                                        // to one global ordinal before persisting,
+                                                        // otherwise page 2 is matched against the
+                                                        // beginning of the canonical directory.
+                                                        chapter.ordinal = d.chapters.len();
+                                                        d.chapters.push(chapter);
+                                                    }
                                                 }
+                                                next_page = adapter.next_directory_page(&page_body);
+                                                pages += 1;
+                                            } else {
+                                                complete = false;
+                                                break;
                                             }
-                                            next_page = parsers::next_directory_page(&page_body);
-                                            pages += 1;
-                                        } else {
+                                        }
+                                        Ok((code, _, _)) => {
+                                            let _ = db::record_source_error(
+                                                &conn,
+                                                &source_key,
+                                                Some(&id),
+                                                "source_directory_error",
+                                                &format!("目录 {id}/p-{page} HTTP {code}"),
+                                            );
+                                            eprintln!("  目录 {id}/p-{page} HTTP {code}");
+                                            complete = false;
+                                            break;
+                                        }
+                                        Err(error) => {
+                                            let _ = db::record_source_error(
+                                                &conn,
+                                                &source_key,
+                                                Some(&id),
+                                                "source_directory_transport",
+                                                &error,
+                                            );
+                                            eprintln!("  目录 {id}/p-{page} 失败：{error}");
                                             complete = false;
                                             break;
                                         }
                                     }
-                                    Ok((code, _)) => {
-                                        eprintln!("  目录 {id}/p-{page} HTTP {code}");
-                                        complete = false;
-                                        break;
-                                    }
-                                    Err(error) => {
-                                        eprintln!("  目录 {id}/p-{page} 失败：{error}");
+                                    if pages >= 100 && next_page.is_some() {
                                         complete = false;
                                         break;
                                     }
                                 }
-                                if pages >= 100 && next_page.is_some() {
-                                    complete = false;
-                                    break;
+                                if complete
+                                    && db::upsert_source_detail(&conn, &source_key, &d).is_ok()
+                                {
+                                    let _ =
+                                        db::set_source_cursor(&conn, &source_key, None, Some(&id));
+                                    let _ = db::record_source_health(
+                                        &conn,
+                                        &source_key,
+                                        true,
+                                        None,
+                                        None,
+                                    );
+                                    ok += 1;
+                                } else {
+                                    failed += 1;
+                                    let _ = db::record_source_health(
+                                        &conn,
+                                        &source_key,
+                                        false,
+                                        Some("persist"),
+                                        Some("目录写入失败"),
+                                    );
                                 }
                             }
-                            if complete && db::upsert_detail(&conn, &d).is_ok() {
-                                ok += 1;
-                            } else {
+                            Err(error) => {
                                 failed += 1;
-                                let _ = db::record_detail_failure(&conn, id);
+                                let _ = db::record_source_error(
+                                    &conn,
+                                    &source_key,
+                                    Some(&id),
+                                    &format!("source_{}", source_error_code(error.kind)),
+                                    &error.message,
+                                );
+                                let _ = db::record_source_health(
+                                    &conn,
+                                    &source_key,
+                                    false,
+                                    Some("parse"),
+                                    Some(&error.message),
+                                );
                             }
                         }
-                        None => {
-                            failed += 1;
-                            let _ = db::record_detail_failure(&conn, id);
-                        }
-                    },
-                    Ok((code, _)) => {
+                    }
+                    Ok((code, final_url, body)) => {
                         failed += 1;
-                        let _ = db::record_detail_failure(&conn, id);
+                        let event = if (300..400).contains(&code) {
+                            "source_redirect"
+                        } else if code == 404 {
+                            "source_not_found"
+                        } else {
+                            "source_http_error"
+                        };
+                        let _ = db::record_source_error(
+                            &conn,
+                            &source_key,
+                            Some(&id),
+                            event,
+                            &format!(
+                                "{}: {}",
+                                final_url,
+                                body.chars().take(120).collect::<String>()
+                            ),
+                        );
+                        let _ = db::record_source_health(
+                            &conn,
+                            &source_key,
+                            false,
+                            Some(&code.to_string()),
+                            Some(&format!(
+                                "{}: {}",
+                                final_url,
+                                body.chars().take(120).collect::<String>()
+                            )),
+                        );
                         eprintln!("  详情 {id} HTTP {code}");
                     }
                     Err(e) => {
                         failed += 1;
-                        let _ = db::record_detail_failure(&conn, id);
+                        let _ = db::record_source_error(
+                            &conn,
+                            &source_key,
+                            Some(&id),
+                            "source_transport",
+                            &e,
+                        );
+                        let _ = db::record_source_health(
+                            &conn,
+                            &source_key,
+                            false,
+                            Some("transport"),
+                            Some(&e),
+                        );
                         eprintln!("  详情 {id} 失败：{e}");
                     }
                 }
@@ -374,20 +613,33 @@ async fn cmd_bootstrap(args: &[String]) -> Result<(), String> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(600);
     let conn = db::open(&db_path).map_err(|e| e.to_string())?;
-    let fetcher = Arc::new(Fetcher::new(rate));
-    let run = db::start_sync_run(&conn, "bootstrap").map_err(|e| e.to_string())?;
+    let adapter: Arc<dyn sources::SourceAdapter> = source_adapter().into();
+    let source_rate =
+        db::source_rate_limit_ms(&conn, adapter.source_key()).map_err(|e| e.to_string())?;
+    let fetcher = Arc::new(Fetcher::new(rate.min(1000.0 / source_rate.max(1) as f64)));
+    let run = db::start_source_sync_run(&conn, "bootstrap", adapter.source_key())
+        .map_err(|e| e.to_string())?;
 
     eprintln!("bootstrap: 扫描 /zuixin/ 最多 {max_pages} 页（{rate} req/s）");
-    let (pages, seen) = scan_updates(&conn, fetcher.as_ref(), max_pages, None).await?;
+    let (pages, seen) =
+        scan_updates(&conn, fetcher.as_ref(), adapter.as_ref(), max_pages, None).await?;
     eprintln!("列表完成：{pages} 页 / {seen} 条");
 
     let (ok, failed) = if flag(args, "--no-details") {
         (0, 0)
     } else {
-        let ids = db::pending_detail_ids(&conn, 100_000).map_err(|e| e.to_string())?;
+        let ids = db::pending_source_detail_ids(&conn, adapter.source_key(), 100_000)
+            .map_err(|e| e.to_string())?;
         eprintln!("待抓详情 {} 本（{} 并发）", ids.len(), workers_env());
         drop(conn);
-        let r = fetch_details(&db_path, fetcher.clone(), ids, workers_env()).await?;
+        let r = fetch_details(
+            &db_path,
+            fetcher.clone(),
+            adapter.clone(),
+            ids,
+            workers_env(),
+        )
+        .await?;
         let conn = db::open(&db_path).map_err(|e| e.to_string())?;
         let total: i64 = conn
             .query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0))
@@ -440,43 +692,159 @@ async fn cmd_incremental(args: &[String]) -> Result<(), String> {
     let quiet: usize = arg_value(args, "--quiet")
         .and_then(|v| v.parse().ok())
         .unwrap_or(3);
-    let conn = db::open(&db_path).map_err(|e| e.to_string())?;
-    let fetcher = Arc::new(Fetcher::new(rate));
-    let run = db::start_sync_run(&conn, "incremental").map_err(|e| e.to_string())?;
+    let conn = db::open(&db_path).map_err(|e| format!("initial database open failed: {e}"))?;
+    let adapter: Arc<dyn sources::SourceAdapter> = source_adapter().into();
+    let source_rate = db::source_rate_limit_ms(&conn, adapter.source_key())
+        .map_err(|e| format!("source rate lookup failed: {e}"))?;
+    let fetcher = Arc::new(Fetcher::new(rate.min(1000.0 / source_rate.max(1) as f64)));
+    let run = db::start_source_sync_run(&conn, "incremental", adapter.source_key())
+        .map_err(|e| format!("start sync run failed: {e}"))?;
 
-    let before = db::known_latest_chapters(&conn).map_err(|e| e.to_string())?;
-    let (pages, seen) = scan_updates(&conn, fetcher.as_ref(), max_pages, Some(quiet)).await?;
-    let requested = db::pending_refresh_ids(&conn, 1000).map_err(|e| e.to_string())?;
-    let after = db::known_latest_chapters(&conn).map_err(|e| e.to_string())?;
-    let mut changed: Vec<i64> = after
+    let before = db::known_latest_chapters_for_source(&conn, adapter.source_key())
+        .map_err(|e| format!("load source cursor failed: {e}"))?;
+    let (pages, seen) = scan_updates(
+        &conn,
+        fetcher.as_ref(),
+        adapter.as_ref(),
+        max_pages,
+        Some(quiet),
+    )
+    .await
+    .map_err(|e| format!("scan source updates failed: {e}"))?;
+    let requested = db::pending_source_refreshes(&conn, adapter.source_key(), 1000)
+        .map_err(|e| format!("load pending source refreshes failed: {e}"))?;
+    let after = db::known_latest_chapters_for_source(&conn, adapter.source_key())
+        .map_err(|e| format!("load updated source cursor failed: {e}"))?;
+    let mut changed_external: Vec<String> = after
         .iter()
-        .filter(|(id, cid)| before.get(id).map(|old| old != *cid).unwrap_or(true))
-        .map(|(id, _)| *id)
+        .filter(|(id, cid)| before.get(*id).map(|old| old != *cid).unwrap_or(true))
+        .map(|(id, _)| id.clone())
         .collect();
-    for id in &requested {
-        if !changed.contains(id) {
-            changed.push(*id);
+    let requested_book_ids = requested
+        .iter()
+        .map(|(_, book_id)| *book_id)
+        .collect::<Vec<_>>();
+    let requested_external =
+        db::source_external_ids_for_books(&conn, adapter.source_key(), &requested_book_ids)
+            .map_err(|e| format!("load requested source IDs failed: {e}"))?;
+    for id in requested_external {
+        if !changed_external.contains(&id) {
+            changed_external.push(id);
         }
     }
-    eprintln!("增量：{pages} 页 / {seen} 条，变化 {} 本", changed.len());
+    eprintln!(
+        "增量：{pages} 页 / {seen} 条，变化 {} 本",
+        changed_external.len()
+    );
 
     drop(conn);
-    let (ok, failed) =
-        fetch_details(&db_path, fetcher.clone(), changed.clone(), workers_env()).await?;
-    let conn = db::open(&db_path).map_err(|e| e.to_string())?;
-    db::clear_refresh_requests(&conn, &requested).map_err(|e| e.to_string())?;
+    let (ok, failed) = fetch_details(
+        &db_path,
+        fetcher.clone(),
+        adapter.clone(),
+        changed_external,
+        workers_env(),
+    )
+    .await
+    .map_err(|e| format!("fetch source details failed: {e}"))?;
+    let conn =
+        db::open(&db_path).map_err(|e| format!("reopen database after details failed: {e}"))?;
+    db::clear_source_refreshes(
+        &conn,
+        adapter.source_key(),
+        &requested
+            .iter()
+            .map(|(source_id, _)| *source_id)
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| format!("clear source refreshes failed: {e}"))?;
     db::finish_sync_run(
         &conn,
         run,
         pages as i64,
         seen as i64,
-        changed.len() as i64,
+        ok as i64,
         ok as i64,
         failed as i64,
         None,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("finish sync run failed: {e}"))?;
     eprintln!("增量完成：更新 {ok} 本，失败 {failed}");
+    Ok(())
+}
+
+/// Fetch one source book by external ID, then explicitly bind it to an
+/// existing canonical catalog book. This avoids silently fuzzy-merging a
+/// source when the book is not present in the source's recent-updates pages.
+async fn cmd_bind_source(args: &[String]) -> Result<(), String> {
+    let book_id = arg_value(args, "--book-id")
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| "bind-source 需要 --book-id".to_string())?;
+    let external_book_id = arg_value(args, "--external-book-id")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "bind-source 需要 --external-book-id".to_string())?;
+    let db_path = std::env::var("SHANYE_CATALOG_DB").unwrap_or_else(|_| "./catalog.sqlite".into());
+    let rate: f64 = std::env::var("SHANYE_CATALOG_RATE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1.0);
+    let conn = db::open(&db_path).map_err(|e| e.to_string())?;
+    let adapter: Arc<dyn sources::SourceAdapter> = source_adapter().into();
+    let base = source_base();
+    db::ensure_source(
+        &conn,
+        adapter.source_key(),
+        adapter.display_name(),
+        &base,
+        if adapter.source_key() == "sudugu520" {
+            20
+        } else {
+            10
+        },
+    )
+    .map_err(|e| format!("ensure source failed: {e}"))?;
+    let source_rate = db::source_rate_limit_ms(&conn, adapter.source_key())
+        .map_err(|e| format!("source rate lookup failed: {e}"))?;
+    let fetcher = Arc::new(Fetcher::new(rate.min(1000.0 / source_rate.max(1) as f64)));
+    db::reset_source_binding(&conn, adapter.source_key(), &external_book_id)
+        .map_err(|e| format!("reset source binding failed: {e}"))?;
+    drop(conn);
+
+    let (ok, failed) = fetch_details(
+        &db_path,
+        fetcher,
+        adapter.clone(),
+        vec![external_book_id.clone()],
+        1,
+    )
+    .await?;
+    if ok != 1 || failed != 0 {
+        return Err(format!("抓取来源书籍失败：成功 {ok}，失败 {failed}"));
+    }
+
+    let conn = db::open(&db_path).map_err(|e| e.to_string())?;
+    if !db::resolve_confirmed_source(
+        &conn,
+        book_id,
+        adapter.source_key(),
+        &external_book_id,
+        "operator",
+    )
+    .map_err(|e| format!("确认来源绑定失败: {e}"))?
+    {
+        return Err(format!(
+            "来源 {} /{} 未能绑定到内部书籍 {}",
+            adapter.source_key(),
+            external_book_id,
+            book_id
+        ));
+    }
+    eprintln!(
+        "来源绑定完成：{} /{} -> 内部书籍 {}",
+        adapter.source_key(),
+        external_book_id,
+        book_id
+    );
     Ok(())
 }
 
@@ -491,15 +859,21 @@ async fn cmd_backfill_manifests(args: &[String]) -> Result<(), String> {
         .unwrap_or(100_000)
         .clamp(1, 100_000);
     let conn = db::open(&db_path).map_err(|e| e.to_string())?;
-    let ids = db::pending_chapter_ids(&conn, limit).map_err(|e| e.to_string())?;
+    let adapter: Arc<dyn sources::SourceAdapter> = source_adapter().into();
+    let ids = db::pending_source_manifest_ids(&conn, adapter.source_key(), limit)
+        .map_err(|e| e.to_string())?;
     if ids.is_empty() {
         eprintln!("章节目录已全部回填");
         return Ok(());
     }
     eprintln!("待回填章节目录 {} 本（{} 并发）", ids.len(), workers_env());
     drop(conn);
-    let fetcher = Arc::new(Fetcher::new(rate));
-    let (ok, failed) = fetch_details(&db_path, fetcher, ids, workers_env()).await?;
+    let conn = db::open(&db_path).map_err(|e| e.to_string())?;
+    let source_rate =
+        db::source_rate_limit_ms(&conn, adapter.source_key()).map_err(|e| e.to_string())?;
+    drop(conn);
+    let fetcher = Arc::new(Fetcher::new(rate.min(1000.0 / source_rate.max(1) as f64)));
+    let (ok, failed) = fetch_details(&db_path, fetcher, adapter, ids, workers_env()).await?;
     eprintln!("章节目录回填完成：成功 {ok} 本，失败 {failed} 本");
     Ok(())
 }
@@ -550,12 +924,13 @@ async fn main() {
     let result = match cmd {
         "bootstrap" => cmd_bootstrap(&args).await,
         "incremental" => cmd_incremental(&args).await,
+        "bind-source" => cmd_bind_source(&args).await,
         "backfill-manifests" => cmd_backfill_manifests(&args).await,
         "preheat" => cmd_preheat(&args).await,
         "serve" => cmd_serve().await,
         "stats" => cmd_stats(),
         _ => {
-            eprintln!("用法: shanye-catalog <bootstrap|incremental|backfill-manifests|preheat|serve|stats> [选项]");
+            eprintln!("用法: shanye-catalog <bootstrap|incremental|bind-source|backfill-manifests|preheat|serve|stats> [选项]");
             eprintln!("环境变量: SHANYE_CATALOG_DB, SHANYE_CATALOG_BIND, SHANYE_CATALOG_RATE, SHANYE_RELAY_URL, SHANYE_RELAY_TOKEN");
             std::process::exit(2);
         }

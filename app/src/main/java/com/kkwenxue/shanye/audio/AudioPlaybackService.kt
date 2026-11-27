@@ -13,6 +13,8 @@ import com.kkwenxue.shanye.R
 import com.kkwenxue.shanye.data.AudioChapter
 import com.kkwenxue.shanye.data.AudioLibrary
 import com.kkwenxue.shanye.data.Library
+import com.kkwenxue.shanye.tts.LocalTtsLivePlayback
+import com.kkwenxue.shanye.tts.LocalTtsSynthesisService
 
 /** Observable playback state is shared by the reader and the foreground media service. */
 object AudioPlayback {
@@ -60,7 +62,15 @@ object AudioPlayback {
     fun setSleepTimer(context: Context, minutes: Int) {
         timerMode = minutes
         timerRemainingMs = if (minutes > 0) minutes * 60_000L else 0L
-        context.startService(Intent(context, AudioPlaybackService::class.java).setAction("timer").putExtra("minutes", minutes))
+        if (LocalTtsLivePlayback.hasActiveSession()) {
+            // The local realtime path has its own foreground service and
+            // AudioTrack; the regular audiobook service cannot stop it when
+            // the sleep timer expires.
+            LocalTtsSynthesisService.setSleepTimer(context, minutes)
+        } else {
+            context.startService(Intent(context, AudioPlaybackService::class.java)
+                .setAction("timer").putExtra("minutes", minutes))
+        }
     }
 }
 

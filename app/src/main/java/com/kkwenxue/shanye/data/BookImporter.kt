@@ -47,7 +47,7 @@ object BookImporter {
 
     internal fun parseCatalogText(source: CatalogBook, bytes: ByteArray): Book {
         require(bytes.size <= MAX_BYTES) { "文件过大，最多支持 64 MB。" }
-        return parseTxt("online:catalog:${source.id}", source.title, decode(bytes), source)
+        return parseTxt("online:catalog:${source.catalogBookId}", source.title, decode(bytes), source)
     }
 
     private fun contentId(bytes: ByteArray): String {
@@ -90,7 +90,7 @@ object BookImporter {
                     val identity = syncSha256("$chapterTitle\n${syncSha256(content)}")
                     val occurrence = (chapterOccurrences[identity] ?: 0) + 1
                     chapterOccurrences[identity] = occurrence
-                    "online:catalog:${catalog.id}:chapter:sha256:$identity:$occurrence"
+                    "online:catalog:${catalog.catalogBookId}:chapter:sha256:$identity:$occurrence"
                 } else "$id-${chapters.size}"
                 val candidate = Chapter(chapterId, chapterTitle, content)
                 val previous = chapters.lastOrNull()
@@ -124,7 +124,9 @@ object BookImporter {
         require(chapters.isNotEmpty()) { "文件中没有可阅读的正文。" }
         return Book(id, metadataTitle ?: title, author, catalog?.category ?: "本地", "${chapters.size} 章 · TXT",
             if (catalog == null) "从本机导入，支持离线阅读。" else "从在线书库导入，支持离线阅读。", 1, chapters,
-            remoteSource = catalog?.let { "catalog" }, remoteBookId = catalog?.id,
+            remoteSource = catalog?.sourceKey ?: catalog?.let { "suduguu" },
+            remoteBookId = catalog?.catalogBookId,
+            catalogBookId = catalog?.catalogBookId,
             remoteLatestChapterId = catalog?.latestChapterId ?: 0L)
     }
 

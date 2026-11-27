@@ -18,10 +18,10 @@ class OnlineFullBookExportWorker(appContext: Context, params: WorkerParameters) 
             val client=CatalogClient()
             var task=runInterruptible(Dispatchers.IO){
                 val book=BookDatabase(applicationContext).use{it.load(bookId).firstOrNull()} ?: error("书籍已不在书架")
-                val remote=book.remoteBookId ?: error("书籍不属于在线书库")
+                val remote=book.catalogBookId ?: error("书籍不属于在线书库")
                 val existing=prefs.getString("task:$bookId",null)?.takeIf{prefs.getString("revision:$bookId",null)==book.activeRevision}
                     ?.let{runCatching{client.status(it)}.getOrNull()}
-                (existing?.takeIf{it.failureMessage==null} ?: client.startBundle(remote)).also {
+                (existing?.takeIf{it.failureMessage==null} ?: client.startBundle(remote, book.catalogSourceKey)).also {
                     if(it.taskId!=prefs.getString("task:$bookId",null))File(applicationContext.filesDir,"online-exports/${syncSha256(bookId)}.part").delete()
                     prefs.edit().putString("task:$bookId",it.taskId).putString("revision:$bookId",book.activeRevision).commit()
                 }

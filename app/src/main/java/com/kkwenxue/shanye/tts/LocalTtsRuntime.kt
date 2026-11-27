@@ -3,6 +3,7 @@ package com.kkwenxue.shanye.tts
 import android.content.Context
 import android.app.ActivityManager
 import android.os.Build
+import android.os.Process
 import android.os.PowerManager
 import java.io.File
 import java.io.FileInputStream
@@ -23,8 +24,8 @@ import com.kkwenxue.shanye.data.RelayConnection
 
 private fun localTtsSha256(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
     .joinToString("") { "%02x".format(it) }
-private const val LOCAL_TTS_PAUSE_RULE_REVISION = "punctuation-pauses-v3-${TtsTextNormalizer.REVISION}"
-private const val LOCAL_TTS_SYNTHESIS_POLICY_REVISION = "title-alignment-direct-v1-loudness-v1"
+private const val LOCAL_TTS_PAUSE_RULE_REVISION = "phrase-pauses-v1-${TtsTextNormalizer.REVISION}"
+private const val LOCAL_TTS_SYNTHESIS_POLICY_REVISION = "title-alignment-direct-v1-loudness-v1-phrase-pauses-v1"
 
 private fun localTtsWavHeader(pcmBytes: Int, sampleRate: Int): ByteArray =
     ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
@@ -155,16 +156,18 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         var lastError: Throwable? = null
         repeat(3) { attempt ->
             if (pcm != null || cancelled.get()) return@repeat
-            pcm = runCatching {
-                LocalTtsNative.synthesize(
-                    key.text,
-                    codes.absolutePath,
-                    maxFrames,
-                    UUID.randomUUID().hashCode(),
-                    titleSynthesis
-                )
-                    ?: error("native 返回空音频")
-            }.onFailure { lastError = it }.getOrNull()
+            pcm = runForegroundSynthesis {
+                runCatching {
+                    LocalTtsNative.synthesize(
+                        key.text,
+                        codes.absolutePath,
+                        maxFrames,
+                        UUID.randomUUID().hashCode(),
+                        titleSynthesis
+                    )
+                        ?: error("native 返回空音频")
+                }.onFailure { lastError = it }.getOrNull()
+            }
             if (pcm == null && attempt < 2) Thread.yield()
         }
         if (cancelled.get()) throw java.util.concurrent.CancellationException("本地语音合成已取消")
@@ -204,6 +207,8 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
             pieces += titlePieces(chapter.title)
         }
         pieces += sentencePieces(chapter.text)
+            .flatMap(::splitNarrationPiece)
+            .mapIndexed { index, piece -> piece.copy(index = index) }
         val cues = mutableListOf<AudioCue>()
         var positionMs = 0
         var previousTtsText: String? = null
@@ -471,20 +476,49 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         while (true) {
             if (cancelled.get()) throw java.util.concurrent.CancellationException("本地语音合成已取消")
             manager?.getMemoryInfo(memoryInfo)
+            // Android already throttles CPU frequency at SEVERE. Treating
+            // that state as a hard pause makes the audio consumer drain the
+            // queue while synthesis is deliberately stopped, which is most
+            // visible after the screen turns off. Only stop scheduling new
+            // takes at CRITICAL; let the platform's normal throttling handle
+            // the lower thermal levels.
             val tooHot = Build.VERSION.SDK_INT >= 29 && power != null &&
-                power.currentThermalStatus >= PowerManager.THERMAL_STATUS_SEVERE
+                power.currentThermalStatus >= PowerManager.THERMAL_STATUS_CRITICAL
             if (!paused.get() && !memoryInfo.lowMemory && !tooHot && root.usableSpace >= MIN_FREE_BYTES) break
             state.value = LocalTtsRuntimeState.Paused
             Thread.sleep(250)
         }
     }
 
+    /**
+     * Keep native inference in the foreground CPU group while the app is
+     * screen-off. The service already owns a foreground notification and a
+     * partial wake lock; this only prevents the blocking JNI call from being
+     * treated like ordinary background work. Restore the pool thread priority
+     * before it returns to Dispatchers.IO.
+     */
+    private fun <T> runForegroundSynthesis(block: () -> T): T {
+        val tid = Process.myTid()
+        val previous = runCatching { Process.getThreadPriority(tid) }
+            .getOrDefault(Process.THREAD_PRIORITY_DEFAULT)
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND) }
+        return try {
+            block()
+        } finally {
+            runCatching { Process.setThreadPriority(previous) }
+        }
+    }
+
     private fun pauseFor(text: String): Int = when (text.trimEnd().lastOrNull()) {
-        '。', '！', '？', '!', '?', '…' -> 220
+        '。', '！', '？', '!', '?' -> 220
+        // ZONOS already gives an ellipsis a noticeable prosodic break. Keep
+        // only a small safety gap here so `……`/`...` does not become a long
+        // double pause after normalization.
+        '…' -> ELLIPSIS_PAUSE_MS
         '；', ';' -> 150
         '，', ',', '、' -> 100
         '：', ':' -> 120
-        else -> 80
+        else -> NARRATION_MICRO_PAUSE_MS
     }
 
     private data class Piece(val index: Int, val start: Int, val end: Int, val text: String)
@@ -589,6 +623,16 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         return result.ifEmpty { listOf(Piece(0, 0, text.length, text)) }
     }
 
+    private fun splitNarrationPiece(piece: Piece): List<Piece> =
+        TtsTextNormalizer.splitNarration(piece.text).map { chunk ->
+            Piece(
+                piece.index,
+                piece.start + chunk.start,
+                piece.start + chunk.end,
+                piece.text.substring(chunk.start, chunk.end)
+            )
+        }
+
     private fun findHardBoundary(text: String, start: Int): Int? {
         for (offset in start until text.length) {
             if (text[offset] in HARD_BOUNDARIES) {
@@ -629,7 +673,7 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
     companion object {
         const val SAMPLE_RATE = 44100
         const val DEFAULT_VOICE_ID = "clone-linchuan-zonos3-v1"
-        const val PAUSE_RULE_REVISION = "punctuation-pauses-v3-tts-text-normalization-v1"
+        const val PAUSE_RULE_REVISION = "phrase-pauses-v1-tts-text-normalization-v4"
         private const val MIN_FREE_BYTES = 128L * 1024 * 1024
         private const val TARGET_PIECE_CHARS = 64
         private const val MIN_SOFT_PIECE_CHARS = 36
@@ -640,6 +684,8 @@ class LocalTtsRuntime(context: Context, val modelPack: LocalTtsModelPack = Local
         private const val MAX_TITLE_PIECE_CHARS = 72
         private const val TITLE_INTERNAL_PAUSE_MS = 500
         private const val TITLE_PAUSE_MS = 700
+        private const val NARRATION_MICRO_PAUSE_MS = 55
+        private const val ELLIPSIS_PAUSE_MS = 90
         private const val HARD_BOUNDARIES = "。！？!?…"
         private const val SOFT_BOUNDARIES = "，,、；;：:\n"
         private const val CLOSING_PUNCTUATION = "。！？!?…”’」』》〉）)]}】〕》\"'"

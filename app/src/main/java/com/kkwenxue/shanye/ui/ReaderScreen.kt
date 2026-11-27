@@ -124,7 +124,7 @@ fun ReaderScreen(initialBook:Book,store:ReaderStore,audioLibrary:AudioLibrary,au
 
     LaunchedEffect(book.id, chapter, chapterRetry) {
         val selected = book.chapters.getOrNull(chapter)
-        if (book.remoteBookId == null || selected == null || selected.body.isNotBlank()) {loadingChapter=false;chapterError=null;return@LaunchedEffect}
+        if (book.catalogBookId == null || selected == null || selected.body.isNotBlank()) {loadingChapter=false;chapterError=null;return@LaunchedEffect}
         loadingChapter = true
         chapterError = null
         try {
@@ -207,6 +207,10 @@ fun ReaderScreen(initialBook:Book,store:ReaderStore,audioLibrary:AudioLibrary,au
             item.readingAnchor(offset).positionIn(book)?.let { moveTo(it,fromAudio=true,saveAsReading=true) }
         }, onLocalProgress={ index, offset ->
             if (index in book.chapters.indices) store.savePosition(book,index,offset)
+        }, onLocalRead={ index, offset ->
+            if (index in book.chapters.indices) {
+                moveTo(ReadingPosition(index, offset), fromAudio=true, saveAsReading=true)
+            }
         })
         return
     }
@@ -269,7 +273,7 @@ fun ReaderScreen(initialBook:Book,store:ReaderStore,audioLibrary:AudioLibrary,au
                 }
                 IconAction(if(bookmarked) "bookmarked" else "bookmark",if(bookmarked) "移除书签" else "添加书签",if(bookmarked) Accent else colors.ink) {
                     store.toggleBookmark(bookmark)
-                    if (book.remoteBookId != null) {
+                    if (book.catalogBookId != null) {
                         val selected=book.chapters[chapter].id
                         val hasBookmark=store.bookmarks.any{it.bookId==book.id && it.anchor?.chapterId==selected}
                         scope.launch(Dispatchers.IO) {
@@ -363,7 +367,7 @@ fun ReaderScreen(initialBook:Book,store:ReaderStore,audioLibrary:AudioLibrary,au
                 }
                 "contents" -> {
                     SheetTitle("目录", "${book.title} · ${book.chapters.size} 章",colors)
-                    if (book.remoteBookId != null) {
+                    if (book.catalogBookId != null) {
                         Row(Modifier.fillMaxWidth().padding(start=24.dp, end=24.dp, bottom=8.dp), verticalAlignment=Alignment.CenterVertically) {
                             Text("正文缓存", Modifier.weight(1f), fontSize=12.sp, color=colors.muted)
                             TextButton(onClick={ cacheRangeDialog=true }) { Text("缓存范围", color=Accent) }

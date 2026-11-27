@@ -48,8 +48,10 @@ pub fn next_directory_page(html: &str) -> Option<usize> {
             if text_of(&a) != "下一页" {
                 return None;
             }
-            let href = a.value().attr("href")?.split('#').next()?;
+            let href = a.value().attr("href")?.split(['?', '#']).next()?;
             let page = href
+                .rsplit('/')
+                .next()?
                 .strip_prefix("p-")?
                 .strip_suffix(".html")?
                 .parse()
@@ -61,9 +63,25 @@ pub fn next_directory_page(html: &str) -> Option<usize> {
 
 /// `/7407/` 或 `/7407/12345.html` → (7407, Some(12345))
 fn parse_book_href(href: &str) -> Option<(i64, Option<i64>)> {
-    let path = href
-        .trim_start_matches("https://www.suduguu.com")
-        .trim_start_matches("http://www.suduguu.com");
+    parse_book_href_for_host(href, "www.suduguu.com")
+}
+
+fn parse_book_href_for_host(href: &str, host: &str) -> Option<(i64, Option<i64>)> {
+    let mut path = href.trim().split(['?', '#']).next()?.to_string();
+    if path.starts_with("//") {
+        path = format!("https:{path}");
+    }
+    if path.starts_with("http://") || path.starts_with("https://") {
+        let prefix = format!("https://{host}");
+        let http_prefix = format!("http://{host}");
+        path = path
+            .strip_prefix(&prefix)
+            .or_else(|| path.strip_prefix(&http_prefix))?
+            .to_string();
+    }
+    if path.starts_with("./") {
+        path = path.trim_start_matches("./").to_string();
+    }
     let mut parts = path.trim_start_matches('/').split('/');
     let id: i64 = parts.next()?.parse().ok()?;
     match parts.next() {
@@ -75,12 +93,20 @@ fn parse_book_href(href: &str) -> Option<(i64, Option<i64>)> {
     }
 }
 
+pub fn parse_list_for_host(html: &str, host: &str) -> Vec<ListItem> {
+    parse_list_impl(html, host)
+}
+
 fn text_of(el: &scraper::ElementRef<'_>) -> String {
     el.text().collect::<String>().trim().to_string()
 }
 
 /// 列表页：10 本/页，按更新时间倒序。
 pub fn parse_list(html: &str) -> Vec<ListItem> {
+    parse_list_impl(html, "www.suduguu.com")
+}
+
+fn parse_list_impl(html: &str, host: &str) -> Vec<ListItem> {
     let doc = Html::parse_document(html);
     let item_sel = Selector::parse("div.item").unwrap();
     let h3a = Selector::parse("h3 a").unwrap();
@@ -93,7 +119,9 @@ pub fn parse_list(html: &str) -> Vec<ListItem> {
         let Some(title_el) = item.select(&h3a).next() else {
             continue;
         };
-        let Some((id, _)) = parse_book_href(title_el.value().attr("href").unwrap_or("")) else {
+        let Some((id, _)) =
+            parse_book_href_for_host(title_el.value().attr("href").unwrap_or(""), host)
+        else {
             continue;
         };
 
@@ -116,7 +144,7 @@ pub fn parse_list(html: &str) -> Vec<ListItem> {
         let mut latest = (0i64, String::new());
         for a in item.select(&chap_a) {
             let href = a.value().attr("href").unwrap_or("");
-            if let Some((bid, Some(cid))) = parse_book_href(href) {
+            if let Some((bid, Some(cid))) = parse_book_href_for_host(href, host) {
                 if bid == id && cid > latest.0 {
                     latest = (cid, text_of(&a));
                 }
@@ -138,6 +166,10 @@ pub fn parse_list(html: &str) -> Vec<ListItem> {
 
 /// 详情页：字数、状态、分类、作者、绝对更新时间、最新章节。
 pub fn parse_detail(html: &str, id: i64) -> Option<Detail> {
+    parse_detail_for_host(html, id, "www.suduguu.com")
+}
+
+pub fn parse_detail_for_host(html: &str, id: i64, host: &str) -> Option<Detail> {
     let doc = Html::parse_document(html);
     let h1 = Selector::parse("h1").unwrap();
     let h1_i = Selector::parse("h1 i").unwrap();
@@ -153,6 +185,14 @@ pub fn parse_detail(html: &str, id: i64) -> Option<Detail> {
         .next()
         .map(|a| text_of(&a))
         .unwrap_or_default();
+    let title_link = h1_el
+        .select(&h1_a)
+        .next()
+        .and_then(|a| a.value().attr("href"))
+        .and_then(|href| parse_book_href_for_host(href, host));
+    if !title_link.is_some_and(|(book_id, _)| book_id == id) {
+        return None;
+    }
     let words_text = h1_el
         .select(&h1_i)
         .next()
@@ -201,7 +241,7 @@ pub fn parse_detail(html: &str, id: i64) -> Option<Detail> {
     let mut seen_chapters = std::collections::HashSet::new();
     for a in doc.select(&latest_a) {
         let href = a.value().attr("href").unwrap_or("");
-        if let Some((bid, Some(cid))) = parse_book_href(href) {
+        if let Some((bid, Some(cid))) = parse_book_href_for_host(href, host) {
             if bid == id && cid > latest.0 {
                 latest = (cid, text_of(&a));
             }
@@ -209,7 +249,7 @@ pub fn parse_detail(html: &str, id: i64) -> Option<Detail> {
     }
     for a in doc.select(&dir_a) {
         let href = a.value().attr("href").unwrap_or("");
-        if let Some((bid, Some(cid))) = parse_book_href(href) {
+        if let Some((bid, Some(cid))) = parse_book_href_for_host(href, host) {
             if bid == id && seen_chapters.insert(cid) {
                 let title = text_of(&a);
                 if !title.is_empty() {
@@ -385,6 +425,33 @@ mod tests {
             next_directory_page("<a href=\"p-2.html#dir\">下一页</a>"),
             Some(2)
         );
+        assert_eq!(
+            next_directory_page("<a href=\"/407/p-3.html?x=1#dir\">下一页</a>"),
+            Some(3)
+        );
         assert_eq!(next_directory_page("<a href=\"/2/#dir\">目录</a>"), None);
+    }
+
+    #[test]
+    fn source_links_accept_relative_and_configured_absolute_hosts_only() {
+        let relative = parse_list_for_host(
+            r#"<div class="item"><div><h3><a href="/407/">书</a></h3>
+               <p><span>连载</span><span>分类</span><a>作者：甲</a></p>
+               <ul><li><a href="/407/88.html">第88章</a></li></ul></div></div>"#,
+            "www.sudugu520.com",
+        );
+        assert_eq!(relative[0].id, 407);
+        let absolute = parse_list_for_host(
+            r#"<div class="item"><div><h3><a href="https://www.sudugu520.com/407/">书</a></h3>
+               <p><span>连载</span><span>分类</span><a>作者：甲</a></p>
+               <ul><li><a href="https://www.sudugu520.com/407/88.html">第88章</a></li></ul></div></div>"#,
+            "www.sudugu520.com",
+        );
+        assert_eq!(absolute[0].latest_chapter_id, 88);
+        assert!(parse_list_for_host(
+            r#"<div class="item"><h3><a href="https://www.suduguu.com/407/">书</a></h3></div>"#,
+            "www.sudugu520.com",
+        )
+        .is_empty());
     }
 }

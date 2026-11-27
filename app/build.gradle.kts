@@ -8,9 +8,11 @@ val localTtsVoiceDir = providers.gradleProperty("shanyeZonosVoiceDir").orNull
     ?.let(::file)
     ?: rootProject.file("sounds")
 val localTtsAssets = layout.buildDirectory.dir("generated/localTtsAssets")
-val localTtsReferenceAudio = rootProject.file("sounds/林川.mp3")
-val localTtsReferenceText = rootProject.file("sounds/林川.txt")
-val localTtsReferenceCodes = rootProject.file("sounds/LinChuan.codes.npy")
+val localTtsVoiceAssets = listOf(
+    Triple("林川", "林川.mp3", "林川.txt") to "LinChuan.codes.npy",
+    Triple("Adam", "Adam.mp3", "Adam.txt") to "Adam.codes.npy",
+    Triple("Story", "Story.mp3", "Story.txt") to "Story.codes.npy"
+)
 
 android {
     namespace = "com.kkwenxue.shanye"
@@ -43,25 +45,26 @@ android {
 
 val validateEmbeddedLinChuan = tasks.register("validateEmbeddedLinChuan") {
     group = "distribution"
-    description = "Validate the packaged 林川 reference audio, transcript and pre-encoded voice."
-    inputs.file(localTtsReferenceAudio)
-    inputs.file(localTtsReferenceText)
-    inputs.file(localTtsReferenceCodes)
+    description = "Validate the packaged local ZONOS3 reference audio, transcripts and pre-encoded voices."
+    localTtsVoiceAssets.forEach { (reference, codes) ->
+        inputs.file(rootProject.file("sounds/${reference.second}"))
+        inputs.file(rootProject.file("sounds/${reference.third}"))
+        inputs.file(rootProject.file("sounds/$codes"))
+    }
     doLast {
-        require(localTtsReferenceAudio.isFile) {
-            "缺少默认林川参考音频：${localTtsReferenceAudio.absolutePath}"
+        localTtsVoiceAssets.forEach { (reference, codes) ->
+            val audio = rootProject.file("sounds/${reference.second}")
+            val text = rootProject.file("sounds/${reference.third}")
+            val encoded = rootProject.file("sounds/$codes")
+            require(audio.isFile) { "缺少${reference.first}参考音频：${audio.absolutePath}" }
+            require(text.isFile && text.readText(Charsets.UTF_8).trim().isNotBlank()) {
+                "缺少${reference.first}逐字稿：${text.absolutePath}"
+            }
+            require(encoded.isFile && encoded.length() > 0) {
+                "缺少${reference.first}预编码声线：${encoded.absolutePath}"
+            }
         }
-        val transcript = localTtsReferenceText.takeIf { it.isFile }
-            ?.readText(Charsets.UTF_8)
-            ?.trim()
-            .orEmpty()
-        require(transcript.isNotBlank()) {
-            "缺少默认林川逐字稿：${localTtsReferenceText.absolutePath}"
-        }
-        require(localTtsReferenceCodes.isFile && localTtsReferenceCodes.length() > 0) {
-            "缺少林川预编码声线：${localTtsReferenceCodes.absolutePath}"
-        }
-        logger.lifecycle("默认林川声线已绑定 sounds/林川.mp3 + sounds/林川.txt")
+        logger.lifecycle("已绑定本地声线：林川、Adam、Story")
     }
 }
 
@@ -74,11 +77,7 @@ val syncEmbeddedLocalTtsAssets = tasks.register<Sync>("syncEmbeddedLocalTtsAsset
         // Keep the checked-in manifest as the single asset entry point. The
         // release voice directory may also contain a server manifest, which
         // would collide with app/src/main/assets/voices/voices.json.
-        include("*.codes.npy")
-        into("voices")
-    }
-    from(localTtsReferenceCodes) {
-        include("LinChuan.codes.npy")
+        include(localTtsVoiceAssets.map { it.second })
         into("voices")
     }
     into(localTtsAssets)

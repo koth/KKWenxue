@@ -5,6 +5,18 @@
       "name": "林川",
       "codes_path": "voices/LinChuan.codes.npy",
       "reference_text": "林川推开那扇老旧的木门时，山谷里还笼着一层薄雾。远处的河水缓缓流过，偶尔传来几声鸟鸣。他站在门前，没有立刻往前走。"
+    },
+    {
+      "speaker": "clone:adam-zonos3-v1",
+      "name": "Adam",
+      "codes_path": "voices/Adam.codes.npy",
+      "reference_text": "你好，我是adam。有时候，声音不需要很大也能被听见。它只需要恰到好处地出现，在对的时间说出对的话。如果你刚好听到了，那就是我们之间的默契。希望这个声音，也能为你的故事添一笔色彩！"
+    },
+    {
+      "speaker": "clone:story-zonos3-v1",
+      "name": "Story",
+      "codes_path": "voices/Story.codes.npy",
+      "reference_text": "三十年的秘密，今夜即将揭开。当真相浮出水面，所有人都会明白，这座城市的每一条街道，每一盏路灯下面，都埋着不能说的故事。"
     }
   ]
 }

@@ -122,6 +122,24 @@ class ZonosTests(unittest.TestCase):
         self.assertEqual(SPEECH_PLAN,execution['speech_plan'])
         self.assertEqual('她问：山海经，你看过吗？',execution['native_text'])
 
+    def test_long_native_request_is_bounded_without_losing_text(self):
+        text=''.join(['林川推开木门，看着屋内的摆设。' for _ in range(8)])
+        row=self.row(text)
+        with patch.object(self.engine.verifier,'verify',return_value=dict(accepted=True,differences=[])):
+            result=self.engine.generate([row],self.config)[0]
+        requests=self.requests()
+        self.assertGreater(len(requests),1)
+        self.assertEqual(''.join(request['text'] for request in requests),text)
+        self.assertTrue(all(len(request['text']) <= 96 for request in requests))
+        self.assertEqual((19200 * len(requests),),result.shape)
+
+    def test_unpunctuated_long_native_request_is_still_lossless(self):
+        text='林川' * 70
+        row=self.row(text)
+        with patch.object(self.engine.verifier,'verify',return_value=dict(accepted=True,differences=[])):
+            self.engine.generate([row],self.config)
+        self.assertEqual(text,''.join(request['text'] for request in self.requests()))
+
     def test_title_space_and_comma_are_real_pcm_silence_with_one_coverage_check(self):
         import numpy as np
         for text, title, pause_ms in [('第1168章 看不见的人', True, 500), ('门外雨停了，林川放下书。', False, 250)]:
@@ -137,6 +155,13 @@ class ZonosTests(unittest.TestCase):
             self.assertEqual(pause_ms,execution['pauses'][0]['duration_ms'])
             self.assertNotEqual(execution['parts'][0]['seed'],execution['parts'][1]['seed'])
 
+    def test_current_title_plan_keeps_a_real_title_pause(self):
+        import numpy as np
+        row = {**self.row('第1233章 意外'), 'sentence_index': -1}
+        with patch.object(self.engine.verifier,'verify',return_value=dict(accepted=True,differences=[])):
+            samples = self.engine.generate([row],self.config)[0]
+        self.assertEqual((19200 * 2 + 500 * 24,), samples.shape)
+        self.assertEqual(['第1233章 ', '意外'], [req['text'] for req in self.requests()])
     def test_previous_punctuation_plan_remains_a_frozen_single_request(self):
         text = '门外雨停了，林川放下书。'
         with patch.object(self.engine.verifier,'verify',return_value=dict(accepted=True,differences=[])):

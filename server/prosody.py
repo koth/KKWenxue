@@ -17,7 +17,16 @@ def pause_fragments(text, title=False):
     utterance; the chapter renderer already handles inter-sentence gaps.
     """
     if title:
-        text = _CHAPTER_NUMBER.sub(lambda match: '第' + match[1] + match[2], text)
+        def normalize_title_number(match):
+            prefix = '第' + match[1] + match[2]
+            # Imported chapter titles are not consistent about the separator:
+            # both “第123章 意外” and “第123章《意外》” are common.  Normalize
+            # the boundary for speech only so the chapter number and heading
+            # always receive the intended title pause.
+            suffix = text[match.end():]
+            return prefix + (' ' if suffix and not suffix[0].isspace() else '')
+
+        text = _CHAPTER_NUMBER.sub(normalize_title_number, text)
     numeric_commas = {index for match in _GROUPED_NUMBER.finditer(text)
                       for index in range(match.start(), match.end()) if text[index] == ','}
     result, start = [], 0

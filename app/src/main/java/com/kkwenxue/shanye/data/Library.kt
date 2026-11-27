@@ -20,10 +20,17 @@ data class Book(
     , val remoteLatestChapterId: Long = 0L
     , val remoteLatestVersion: String? = null
     , val legacyBookId: String? = null
+    , val catalogBookId: Long? = remoteBookId
 )
 
+val Book.catalogSourceKey: String?
+    get() = remoteSource?.takeUnless { it == "catalog" }
+
+val Book.isOnlineCatalogBook: Boolean
+    get() = catalogBookId != null
+
 internal val Book.isLegacyOnlineImport: Boolean
-    get() = remoteBookId == null && id.startsWith("local-") && description.startsWith("从在线书库导入")
+    get() = catalogBookId == null && id.startsWith("local-") && description.startsWith("从在线书库导入")
 
 /** The reading shelf is populated exclusively by online catalog imports. */
 object Library {

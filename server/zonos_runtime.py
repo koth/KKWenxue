@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 
 from tts.common import digest, file_digest, has_spoken_content
+from tts.common import CLOSERS
 from .config import ENGINE
 from .speech_quality import native_speech_text
 from .speech_verify import SpeechVerifier
@@ -25,6 +26,7 @@ FIXED_PAUSE_SPEECH_PLAN='zonos-native-laci-bounded160-pauses-v3'
 SPEECH_PLAN='zonos-native-laci-bounded160-natural-pauses-v4'
 VERIFICATION='sensevoice-tolerant-coverage-v3'
 LEGACY_VERIFICATION='sensevoice-coverage-additions-v2'
+GENERATION_MAX_CHARS=96
 
 _TEXT_NORMALIZERS={
     LEGACY_SPEECH_PLAN:native_speech_text,
@@ -56,7 +58,22 @@ def content_report(report):
     budget=max(3,min(12,int(expected*.25)))
     reasons=[]
     if expected and not actual:reasons.append('没有识别到正文')
-    if any(a-b>=4 for a,b in spans):reasons.append('连续漏读较长内容')
+    # SenseVoice occasionally replaces an uncommon name, a quoted phrase, or
+    # two adjacent homophones with a different pronunciation.  A pure delete
+    # is stronger evidence of an actual early stop than a replacement, so keep
+    # the former strict while allowing a small replacement mismatch.
+    long_deletes=[
+        d for d in report.get('differences', [])
+        if d.get('op') == 'delete' and
+        len(d.get('expected_units', [])) >= 5
+    ]
+    long_replacements=[
+        d for d in report.get('differences', [])
+        if d.get('op') == 'replace' and
+        len(d.get('expected_units', [])) - len(d.get('actual_units', [])) >= 5
+    ]
+    if long_deletes or long_replacements:
+        reasons.append('连续漏读较长内容')
     if any(b-a>=4 for a,b in spans):reasons.append('额外读出较长内容')
     if mismatches>budget:reasons.append('整体内容差异过大')
     if expected and (actual<expected*.5 or actual>max(expected*1.5,expected+3)):
@@ -65,6 +82,54 @@ def content_report(report):
     return {**report,'policy':VERIFICATION,'additions':additions,'accepted':accepted,
             'tolerated':accepted and bool(spans),'mismatched_units':mismatches,
             'tolerance_budget':budget,'rejection_reasons':reasons}
+
+
+def bounded_generation_texts(text, maximum=GENERATION_MAX_CHARS):
+    """Split only long native requests, preserving every source character.
+
+    The catalog keeps its 160-character source segments for stable IDs and
+    Android UTF-16 anchors.  ZONOS is more reliable when a long segment is
+    sent as several complete clauses instead of one request, so this is an
+    inference-only boundary.  No text is removed and no reader cue changes.
+    """
+    if len(text) <= maximum:
+        return [text]
+    if maximum < 32:
+        raise ValueError('maximum must be at least 32 characters')
+    boundaries=[]
+    index=0
+    while index < len(text):
+        if text[index] in '，,；;：:。！？!?…\n':
+            end=index+1
+            while end < len(text) and (text[end] in CLOSERS or text[end] in '。！？!?…'):
+                end += 1
+            boundaries.append(end)
+            index=end
+        else:
+            index += 1
+    result=[]
+    start=0
+    while len(text)-start > maximum:
+        limit=start+maximum
+        lower=start+max(24, maximum//2)
+        candidates=[point for point in boundaries if lower <= point <= limit]
+        if candidates:
+            target=start+round(maximum*.82)
+            cut=min(candidates,key=lambda point: abs(point-target))
+        else:
+            cut=limit
+            # Avoid splitting an ASCII word when a nearby whitespace boundary
+            # is available, without ever exceeding the hard bound.
+            spaces=[point for point in range(lower,limit+1) if text[point-1].isspace()]
+            if spaces:
+                cut=max(spaces)
+        if cut <= start or cut >= len(text):
+            raise ValueError('无法安全切分原生朗读片段')
+        result.append(text[start:cut])
+        start=cut
+    if start < len(text):
+        result.append(text[start:])
+    return result
 
 
 class ZonosEngine:
@@ -176,9 +241,25 @@ class ZonosEngine:
                 execution['native_text']=text
                 import numpy as np
                 import soundfile as sf
-                fragments = (pause_fragments(text, title=row.get('sentence_index', 0) < 0)
-                             if speech_plan == FIXED_PAUSE_SPEECH_PLAN else [dict(text=text, pause_ms=0, reason=None)])
-                arrays, cursor = [], 0
+                if speech_plan == FIXED_PAUSE_SPEECH_PLAN:
+                    fragments = pause_fragments(
+                        text, title=row.get('sentence_index', 0) < 0
+                    )
+                elif speech_plan == SPEECH_PLAN:
+                    is_title = row.get('sentence_index', 0) < 0
+                    if is_title:
+                        fragments = pause_fragments(text, title=True)
+                    else:
+                        fragments=[
+                            dict(text=piece, pause_ms=0, reason=None)
+                            for piece in bounded_generation_texts(text)
+                        ]
+                else:
+                    # Historical snapshots remain byte-for-byte request
+                    # compatible; only the current plan gets the safer
+                    # inference-only bounding.
+                    fragments=[dict(text=text, pause_ms=0, reason=None)]
+                arrays, generated_clips, cursor = [], [], 0
                 execution['pauses'] = []
                 for index, fragment in enumerate(fragments):
                     actual_seed = (seed + index * 9973) % 2**32
@@ -202,6 +283,7 @@ class ZonosEngine:
                         if index: clip[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
                         if fragment['pause_ms']: clip[-fade:] *= np.linspace(1, 0, fade, dtype=np.float32)
                     arrays.append(clip)
+                    generated_clips.append(clip)
                     cursor += len(clip)
                     part=dict(seed=actual_seed,text=fragment['text'],state='completed',
                         generation_seconds=time.monotonic()-started,audio_seconds=len(clip)/24000)
@@ -219,11 +301,43 @@ class ZonosEngine:
                     began=time.monotonic();report=content_report(self.verifier.verify(row['spoken_text'],samples))
                     execution['verification_checks'].append(report)
                     part['verify_seconds']=time.monotonic()-began
+                    if not report['accepted'] and len(fragments) > 1:
+                        # A single ASR pass over concatenated clauses can
+                        # misalign repeated words at an artificial boundary
+                        # (for example a quoted onomatopoeia).  Recheck each
+                        # generated clip before rejecting the whole segment.
+                        # This still rejects a real omission because the
+                        # missing text remains absent from its own clip.
+                        fragment_checks=[]
+                        for fragment,clip in zip(fragments,generated_clips):
+                            fragment_report=content_report(
+                                self.verifier.verify(fragment['text'],clip)
+                            )
+                            fragment_checks.append(fragment_report)
+                            execution['verification_checks'].append({
+                                **fragment_report,
+                                'scope': 'generated-fragment',
+                                'text': fragment['text'],
+                            })
+                        if fragment_checks and all(
+                            check['accepted'] for check in fragment_checks
+                        ):
+                            report={
+                                **report,
+                                'accepted': True,
+                                'tolerated': True,
+                                'fallback': 'per-fragment-coverage',
+                                'fragment_checks': fragment_checks,
+                            }
+                        else:
+                            for part in execution['parts']: part['state']='rejected-content'
+                            raise ValueError('朗读内容校验未通过，存在明显漏读或大段内容差异，当前片段未发布；'
+                                f"预期「{row['spoken_text'][:160]}」；识别「{report.get('transcript', '')[:160]}」")
                     if not report['accepted']:
                         for part in execution['parts']: part['state']='rejected-content'
                         raise ValueError('朗读内容校验未通过，存在明显漏读或大段内容差异，当前片段未发布；'
                             f"预期「{row['spoken_text'][:160]}」；识别「{report.get('transcript', '')[:160]}」")
-                    if speech_plan == SPEECH_PLAN:
+                    if speech_plan == SPEECH_PLAN and report.get('fallback') != 'per-fragment-coverage':
                         adjusted, pauses = natural_pauses(samples,text,report.get('alignment'),
                                                           title=row.get('sentence_index',0)<0)
                         execution['pauses'] = pauses

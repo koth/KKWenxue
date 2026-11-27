@@ -153,6 +153,7 @@ private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(B
     var pendingPlan by remember { mutableStateOf<Pair<Book, OnlineUpdatePlan>?>(null) }
     var pendingRollback by remember { mutableStateOf<Book?>(null) }
     var legacyToLink by remember { mutableStateOf<Book?>(null) }
+    var sourceBook by remember { mutableStateOf<Book?>(null) }
     val remoteScope = rememberCoroutineScope()
     LaunchedEffect(network, query) {
         if (!network || query.trim().length < 1) { remoteResults = emptyList(); remoteError = null; remoteLoading = false; return@LaunchedEffect }
@@ -220,17 +221,21 @@ private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(B
                         Text(book.subtitle,Modifier.padding(top=12.dp),fontSize=11.sp,color=Muted,maxLines=1)
                         Row(Modifier.padding(top=15.dp),verticalAlignment=Alignment.CenterVertically) {
                             Box(Modifier.size(4.dp).background(Color(0xFF8B9C7D),CircleShape))
-                            Text(if (book.remoteBookId != null) "已关联在线书库" else "已离线",
+                            Text(if (book.catalogBookId != null) "已关联在线书库" else "已离线",
                                 Modifier.padding(start=5.dp),fontSize=9.sp,color=Color(0xFF819175))
                             Spacer(Modifier.weight(1f))
                             Text(if(store.progress(book)==0f) "未开始" else "已读 ${(store.progress(book)*100).toInt()}%",fontSize=10.sp,color=Accent)
                         }
                     }
                 }
-                if (book.remoteBookId != null) {
+                if (book.catalogBookId != null) {
                     OnlineShelfStatus(onlineStatuses[book.id] ?: OnlineSyncStatus("idle"),
                         onCancel={ onCancelSync(book.id) }, onRetry={ onRetrySync(book, null) },
                         onPlan={ pendingPlan = book to it }, onRollback={ pendingRollback = book })
+                    TextButton(
+                        onClick = { sourceBook = book },
+                        modifier = Modifier.padding(start = 94.dp)
+                    ) { Text("切换来源") }
                 } else if (book.isLegacyOnlineImport) {
                     LegacyOnlineAction(Library.books.any { it.legacyBookId == book.id }) { legacyToLink = book }
                 }
@@ -240,7 +245,10 @@ private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(B
         }
     }
     selectedRemote?.let { item ->
-        val existing = Library.books.firstOrNull { it.remoteBookId == item.id && it.remoteSource == "catalog" }
+        val existing = Library.books.firstOrNull {
+            it.catalogBookId == item.catalogBookId &&
+                (item.sourceKey == null || it.catalogSourceKey == item.sourceKey)
+        }
         if (existing != null) {
             AlertDialog(onDismissRequest={ selectedRemote = null }, title={ Text(existing.title) },
                 text={ Text("这本书已经在书架上。") },
@@ -284,6 +292,19 @@ private fun Shelf(context: android.content.Context, store: ReaderStore,onOpen:(B
             legacyToLink = null
             onOpen(online)
         })
+    }
+    sourceBook?.let { book ->
+        SourceSwitchDialog(
+            book = book,
+            catalog = catalog,
+            context = context,
+            onDismiss = { sourceBook = null },
+            onSwitched = { updated ->
+                Library.addImported(updated)
+                sourceBook = null
+                onOpen(updated)
+            }
+        )
     }
 }
 
@@ -407,6 +428,123 @@ internal fun OnlineShelfStatus(status: OnlineSyncStatus, onCancel: () -> Unit, o
 }
 
 @Composable
+private fun SourceSwitchDialog(
+    book: Book,
+    catalog: CatalogClient,
+    context: android.content.Context,
+    onDismiss: () -> Unit,
+    onSwitched: (Book) -> Unit
+) {
+    var sources by remember { mutableStateOf<List<CatalogSource>>(emptyList()) }
+    var selected by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var resolvedCatalogBookId by remember(book.id) { mutableStateOf<Long?>(null) }
+    val scope = rememberCoroutineScope()
+    val currentSourceKey = book.catalogSourceKey
+    LaunchedEffect(book.id, book.catalogBookId, currentSourceKey) {
+        try {
+            val result = withContext(Dispatchers.IO) {
+                catalog.sources(requireNotNull(book.catalogBookId), currentSourceKey)
+            }
+            resolvedCatalogBookId = result.bookId
+            sources = result.items
+                .filter { it.state == "confirmed" && it.sourceKey.isNotBlank() }
+                .distinctBy { it.sourceKey }
+            selected = result.recommendedSource
+                ?.takeIf { it != currentSourceKey && sources.any { source -> source.sourceKey == it } }
+                ?: sources.firstOrNull { it.sourceKey != currentSourceKey }?.sourceKey
+        } catch (e: Exception) {
+            error = e.message ?: "无法读取来源列表"
+        }
+    }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("切换在线来源") },
+        text = {
+            Column {
+                Text("不会创建第二本书，阅读进度和书签仍保留。")
+                Text(
+                    if (currentSourceKey == null) {
+                        "当前来源：未记录（优先使用推荐来源）"
+                    } else {
+                        "当前来源：${sourceDisplayName(currentSourceKey)}（$currentSourceKey）"
+                    },
+                    Modifier.padding(top = 8.dp),
+                    color = Muted,
+                    fontSize = 12.sp
+                )
+                if (sources.isEmpty() && error == null) {
+                    CircularProgressIndicator(Modifier.padding(top = 14.dp).size(20.dp), color = Accent)
+                }
+                sources.forEach { source ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { selected = source.sourceKey }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected == source.sourceKey, { selected = source.sourceKey })
+                        Column {
+                            Text(
+                                "${sourceDisplayName(source.sourceKey)}（${source.sourceKey}）" +
+                                    if (source.preferred) " · 推荐" else ""
+                            )
+                            Text("${source.title} · ${source.author}", fontSize = 11.sp, color = Muted)
+                        }
+                    }
+                }
+                error?.let { Text(it, Modifier.padding(top = 8.dp), color = Color(0xFFAA5544)) }
+                if (busy) Text("正在加载新来源目录…", Modifier.padding(top = 8.dp), color = Accent)
+            }
+        },
+        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } },
+        confirmButton = {
+            Button(enabled = selected != null && selected != currentSourceKey && !busy, onClick = {
+                val source = selected ?: return@Button
+                busy = true
+                error = null
+                scope.launch {
+                    try {
+                        val catalogBookId = resolvedCatalogBookId ?: requireNotNull(book.catalogBookId)
+                        withContext(Dispatchers.IO) {
+                            catalog.chooseSource(catalogBookId, source)
+                        }
+                        val item = CatalogBook(
+                            id = catalogBookId,
+                            title = book.title,
+                            author = book.author,
+                            category = book.genre,
+                            status = "",
+                            words = 0,
+                            chapterNo = book.chapters.size.toLong(),
+                            lastUpdate = "",
+                            latestChapter = "",
+                            latestChapterId = book.remoteLatestChapterId,
+                            sourceKey = source
+                        )
+                        val switched = downloadCatalogBook(context, catalog, item)
+                            .copy(id = book.id, legacyBookId = book.legacyBookId)
+                        val saved = withContext(Dispatchers.IO) {
+                            BookDatabase(context.applicationContext).use { db ->
+                                db.save(switched)
+                                db.load(book.id).firstOrNull() ?: switched
+                            }
+                        }
+                        onSwitched(saved)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        error = e.message ?: "切换来源失败"
+                    } finally {
+                        busy = false
+                    }
+                }
+            }) { Text("切换") }
+        }
+    )
+}
+
+@Composable
 internal fun OnlinePlanDialog(plan: OnlineUpdatePlan, onConfirm: () -> Unit, onLater: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(onDismissRequest=onDismiss, title={ Text("确认正文更新") },
         text={ Column(Modifier.heightIn(max=340.dp).verticalScroll(rememberScrollState())) {
@@ -428,9 +566,43 @@ private fun CatalogBookDialog(item: CatalogBook, context: android.content.Contex
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
     var phase by remember { mutableStateOf("") }
+    var sourceMenu by remember { mutableStateOf(false) }
+    var selectedSource by remember {
+        mutableStateOf(
+            item.sourceKey
+                ?: item.sources.firstOrNull { it.preferred }?.sourceKey
+                ?: item.sources.firstOrNull()?.sourceKey
+        )
+    }
+    val sourceOptions = item.sources.filter { it.state == "confirmed" }.ifEmpty {
+        item.sourceKey?.let { listOf(CatalogSource(it, "", item.title, item.author, "confirmed", true)) }.orEmpty()
+    }
     AlertDialog(onDismissRequest=onDismiss, containerColor=Paper,
         title={Text(item.title, fontFamily=Serif, color=Ink)},
         text={Column { Text("${item.author} · ${item.category} · ${item.status}", color=Muted, fontSize=12.sp)
+            if (sourceOptions.size > 1) {
+                Box {
+                    TextButton(onClick={ sourceMenu = true }) {
+                        Text("来源：${selectedSource ?: "未选择"}")
+                    }
+                    DropdownMenu(expanded=sourceMenu, onDismissRequest={ sourceMenu = false }) {
+                        sourceOptions.forEach { source ->
+                            DropdownMenuItem(
+                                text={
+                                    Text(
+                                        "${sourceDisplayName(source.sourceKey)}（${source.sourceKey}）" +
+                                            if (source.preferred) " · 推荐" else ""
+                                    )
+                                },
+                                onClick={
+                                    selectedSource = source.sourceKey
+                                    sourceMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
             Text("${item.wordsLabel} · ${item.chapterNo} 章 · 更新 ${item.lastUpdate.ifBlank { "未知" }}", Modifier.padding(top=10.dp), color=Muted, fontSize=12.sp)
             Text(item.latestChapter.ifBlank { "暂无最新章节" }, Modifier.padding(top=10.dp), color=Ink, fontSize=13.sp)
             if (error != null) Text(error ?: "", Modifier.padding(top=12.dp), color=Color(0xFFAA5544), fontSize=12.sp)
@@ -441,7 +613,11 @@ private fun CatalogBookDialog(item: CatalogBook, context: android.content.Contex
             setImporting(true); error = null
             scope.launch {
                 try {
-                    val imported = downloadCatalogBook(context, catalog, item) { phase = it }
+                    val imported = downloadCatalogBook(
+                        context,
+                        catalog,
+                        item.copy(sourceKey = selectedSource),
+                    ) { phase = it }
                     val book = withContext(Dispatchers.IO) {
                         BookDatabase(context.applicationContext).use { it.saveOnlineImport(imported) }
                     }
@@ -455,20 +631,27 @@ private fun CatalogBookDialog(item: CatalogBook, context: android.content.Contex
         }) { Text("导入正文") } })
 }
 
+private fun sourceDisplayName(sourceKey: String): String = when (sourceKey) {
+    "sudugu520" -> "速读谷 520"
+    "suduguu" -> "速读谷"
+    else -> sourceKey
+}
+
 private suspend fun downloadCatalogBook(context: android.content.Context, catalog: CatalogClient, item: CatalogBook,
     phase: (String) -> Unit = {}): Book {
     phase("正在读取章节目录…")
-    val manifest=runInterruptible(Dispatchers.IO){catalog.completeManifest(item.id)}
+    val manifest=runInterruptible(Dispatchers.IO){catalog.completeManifest(item.catalogBookId, item.sourceKey)}
     val chapters=manifest.chapters
     val revision=manifest.revision
     phase("目录已就绪，共 ${chapters.size} 章")
     return Book(
-        id = "online:catalog:${item.id}", title = item.title, author = item.author,
+        id = "online:catalog:${item.catalogBookId}", title = item.title, author = item.author,
         genre = item.category, subtitle = "${chapters.size} 章 · 在线目录",
         description = "从在线书库导入，正文按章节加载。", cover = 1,
         chapters = chapters.sortedBy { it.index }.map { ref ->
-            Chapter("online:catalog:${item.id}:chapter:source:${ref.sourceId}", ref.title, "", ref.bodySha256)
-        }, remoteSource = "catalog", remoteBookId = item.id,
+            Chapter("online:catalog:${item.catalogBookId}:chapter:${ref.chapterId}", ref.title, "", ref.bodySha256)
+        }, remoteSource = item.sourceKey ?: "suduguu", remoteBookId = item.catalogBookId,
+        catalogBookId = item.catalogBookId,
         activeRevision = revision, remoteLatestChapterId = item.latestChapterId,
         remoteLatestVersion = revision
     )

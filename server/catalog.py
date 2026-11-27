@@ -100,7 +100,7 @@ def materialize_inline(db, payload):
                     chapter["canonical_text"],
                     chapter["source_sha256"],
                     "reader-canonical+OpenCC-t2s-v1",
-                    "reader-sentence-bounded160-v1",
+                    SEGMENTATION,
                     time.time(),
                 ),
             )

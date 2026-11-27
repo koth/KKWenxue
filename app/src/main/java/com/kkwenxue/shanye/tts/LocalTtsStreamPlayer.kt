@@ -3,10 +3,11 @@ package com.kkwenxue.shanye.tts
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.Process
 import java.util.ArrayDeque
 import java.util.concurrent.CancellationException
 
-internal const val LOCAL_TTS_PREBUFFER_SENTENCES = 5
+internal const val LOCAL_TTS_PREBUFFER_SENTENCES = 8
 
 /** Plays PCM from a bounded queue while the next local TTS sentence is generated. */
 class LocalTtsStreamPlayer(
@@ -47,7 +48,8 @@ class LocalTtsStreamPlayer(
             // keep a larger speech queue so uneven sentence lengths do not
             // immediately catch up with synthesis.
             while (!closed && failure == null &&
-                queuedSpeechSegments >= MAX_BUFFERED_SPEECH_SEGMENTS &&
+                (queuedSpeechSegments >= MAX_BUFFERED_SPEECH_SEGMENTS ||
+                    queuedSamples >= MAX_BUFFERED_SAMPLES) &&
                 prebufferReady) lock.wait()
             ensureOpen()
             queue.addLast(queued)
@@ -112,6 +114,9 @@ class LocalTtsStreamPlayer(
     }
 
     private fun consume() {
+        val previousPriority = runCatching { Process.getThreadPriority(Process.myTid()) }
+            .getOrDefault(Process.THREAD_PRIORITY_DEFAULT)
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
         try {
             val initialSpeed = synchronized(lock) { speed }
             val output = createTrack(initialSpeed)
@@ -174,6 +179,7 @@ class LocalTtsStreamPlayer(
         } catch (error: Throwable) {
             synchronized(lock) { failure = error }
         } finally {
+            runCatching { Process.setThreadPriority(previousPriority) }
             synchronized(lock) {
                 consumerFinished = true
                 lock.notifyAll()
@@ -249,9 +255,14 @@ class LocalTtsStreamPlayer(
     }
 
     companion object {
-        private const val MAX_BUFFERED_SPEECH_SEGMENTS = 20
+        // Keep a larger safety cushion when synthesis is briefly throttled
+        // after the display turns off, while bounding PCM memory separately.
+        private const val MAX_BUFFERED_SPEECH_SEGMENTS = 28
+        private const val MAX_BUFFERED_AUDIO_MS = 120_000L
         private const val PREBUFFER_MS = 350
         private const val FINISH_TIMEOUT_MS = 30_000L
         private val PREBUFFER_SAMPLES = PREBUFFER_MS * LocalTtsRuntime.SAMPLE_RATE / 1000L
+        private val MAX_BUFFERED_SAMPLES =
+            MAX_BUFFERED_AUDIO_MS * LocalTtsRuntime.SAMPLE_RATE / 1000L
     }
 }

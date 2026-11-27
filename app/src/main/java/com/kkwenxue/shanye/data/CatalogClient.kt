@@ -22,8 +22,12 @@ data class CatalogBook(
     val chapterNo: Long,
     val lastUpdate: String,
     val latestChapter: String,
-    val latestChapterId: Long = 0
+    val latestChapterId: Long = 0,
+    val sourceKey: String? = null,
+    val matchState: String? = null,
+    val sources: List<CatalogSource> = emptyList()
 ) {
+    val catalogBookId: Long get() = id
     val wordsLabel: String get() = when {
         words >= 10_000_000 -> "${words / 10_000_000.0}千万字".trimEnd('0').trimEnd('.')
         words >= 10_000 -> "${words / 10_000.0}万字".trimEnd('0').trimEnd('.')
@@ -31,11 +35,29 @@ data class CatalogBook(
     }
 }
 
+data class CatalogSource(
+    val sourceKey: String,
+    val externalBookId: String,
+    val title: String,
+    val author: String,
+    val state: String,
+    val preferred: Boolean,
+    val lastUpdateAt: String? = null,
+)
+
+data class CatalogSources(
+    val bookId: Long,
+    val recommendedSource: String?,
+    val items: List<CatalogSource>,
+)
+
 data class CatalogChapterRef(
     val sourceId: Long,
     val index: Int,
     val title: String,
     val bodySha256: String? = null,
+    val chapterId: Long = sourceId,
+    val externalChapterId: String? = null,
 )
 
 data class CatalogManifest(
@@ -44,6 +66,7 @@ data class CatalogManifest(
     val chapterCount: Int,
     val chapters: List<CatalogChapterRef>,
     val nextCursor: Int?,
+    val sourceKey: String? = null,
 )
 
 data class CatalogChapterContent(
@@ -55,11 +78,13 @@ data class CatalogChapterContent(
     val bytes: Long,
     val sha256: String,
     val etag: String? = null,
+    val sourceKey: String? = null,
 )
 
 data class CatalogPrefetchTask(
     val taskId: String,
     val bookId: Long,
+    val sourceKey: String? = null,
     val state: String,
     val total: Int,
     val completed: Int,
@@ -119,7 +144,7 @@ data class OnlineUpdatePlan(
                 json.getString("toRevision"), json.getString("remoteRevision"), json.getBoolean("appendOnly"),
                 titles("addedTitles"), titles("modifiedTitles"), titles("deletedTitles"), json.getBoolean("reordered"),
                 task.bytes ?: 0L, task.expiresAt)
-            require(plan.bookId == book.remoteBookId && plan.bookId == version.bookId &&
+            require(plan.bookId == book.catalogBookId && plan.bookId == version.bookId &&
                 plan.fromRevision == book.activeRevision && plan.remoteRevision == version.remoteRevision &&
                 plan.toRevision.matches(Regex("[a-f0-9]{64}")) &&
                 plan.bytes in 1L..CatalogClient.MAX_PACKAGE.toLong() &&
@@ -145,47 +170,131 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
 
     fun book(id: Long): CatalogBook = parseBook(request("/v1/catalog/books/$id"))
 
-    fun manifest(id: Long, cursor: Int? = null, limit: Int = 500, revision: String? = null): CatalogManifest {
+    /**
+     * Returns the canonical catalog ID together with its bound sources.
+     *
+     * Books imported before the multi-source migration stored the source
+     * site's external ID (for example 448) as catalogBookId.  The new
+     * `/books/{id}/sources` endpoint only accepts the canonical internal ID,
+     * so resolve the old ID through the compatibility route when necessary.
+     */
+    fun sources(id: Long, legacySourceKey: String? = null): CatalogSources {
+        val value = try {
+            request("/v1/catalog/books/$id/sources")
+        } catch (canonicalError: Exception) {
+            val source = legacySourceKey
+                ?.takeIf { it.isNotBlank() && it != "catalog" }
+                ?: "suduguu"
+            runCatching {
+                request(
+                    "/v1/catalog/legacy/books/$id?source=" +
+                        URLEncoder.encode(source, "UTF-8")
+                )
+            }.getOrElse { throw canonicalError }
+        }
+        val items = value.optJSONArray("items") ?: JSONArray()
+        val sources = buildList {
+            for (i in 0 until items.length()) {
+                val item = items.getJSONObject(i)
+                add(CatalogSource(
+                    item.optString("sourceKey"),
+                    item.optString("externalBookId"),
+                    item.optString("sourceTitle"),
+                    item.optString("sourceAuthor"),
+                    item.optString("bindingState", "candidate"),
+                    item.optBoolean("isPreferred"),
+                    item.optString("lastUpdateAt").takeIf { it.isNotBlank() }
+                ))
+            }
+        }
+        return CatalogSources(
+            bookId = value.optLong("bookId", value.optLong("id", id)),
+            recommendedSource = value.optString("recommendedSource")
+                .takeIf { it.isNotBlank() },
+            items = sources
+        )
+    }
+
+    fun chooseSource(id: Long, sourceKey: String): List<CatalogSource> {
+        val value = request(
+            "/v1/catalog/books/$id/sources/preferred",
+            "POST",
+            JSONObject().put("source", sourceKey)
+        )
+        val items = value.optJSONArray("items") ?: JSONArray()
+        return List(items.length()) { index ->
+            val item = items.getJSONObject(index)
+            CatalogSource(
+                item.optString("sourceKey"),
+                item.optString("externalBookId"),
+                item.optString("sourceTitle"),
+                item.optString("sourceAuthor"),
+                item.optString("bindingState", "candidate"),
+                item.optBoolean("isPreferred"),
+                item.optString("lastUpdateAt").takeIf { it.isNotBlank() }
+            )
+        }
+    }
+
+    fun manifest(id: Long, cursor: Int? = null, limit: Int = 500, revision: String? = null, sourceKey: String? = null): CatalogManifest {
         val suffix = buildString {
             append("/v1/catalog/books/$id/manifest?limit=${limit.coerceIn(1, 500)}")
             cursor?.let { append("&cursor=$it") }
             revision?.let { append("&revision=" + URLEncoder.encode(it,"UTF-8")) }
+            sourceKey?.takeIf { it.isNotBlank() && it != "catalog" }?.let {
+                append("&source=" + URLEncoder.encode(it, "UTF-8"))
+            }
         }
         val value = request(suffix)
         val items = value.optJSONArray("items") ?: JSONArray()
         val chapters = buildList {
             for (i in 0 until items.length()) {
                 val item = items.getJSONObject(i)
-                add(CatalogChapterRef(item.getLong("source_id"), item.getInt("chapter_index"), item.getString("title"),
-                    item.optString("body_sha256").takeIf { it.matches(Regex("[a-fA-F0-9]{64}")) }))
+                val chapterId = item.optLong("chapterId", item.optLong("source_id"))
+                val externalId = item.optString("externalChapterId").takeIf { it.isNotBlank() }
+                    ?: item.optString("source_id").takeIf { it.isNotBlank() }
+                val sourceId = item.optLong("source_id", chapterId)
+                add(CatalogChapterRef(sourceId, item.optInt("index", item.optInt("chapter_index")),
+                    item.getString("title"),
+                    item.optString("bodySha256", item.optString("body_sha256"))
+                        .takeIf { it.matches(Regex("[a-fA-F0-9]{64}")) },
+                    chapterId, externalId))
             }
         }
         return CatalogManifest(value.getLong("bookId"), value.getString("revision"),
             value.optInt("chapterCount", chapters.size), chapters,
-            value.optInt("nextCursor").takeIf { value.has("nextCursor") && !value.isNull("nextCursor") })
+            value.optInt("nextCursor").takeIf { value.has("nextCursor") && !value.isNull("nextCursor") },
+            value.optString("sourceKey").takeIf { it.isNotBlank() })
     }
 
-    fun completeManifest(id: Long): CatalogManifest {
+    fun completeManifest(id: Long, sourceKey: String? = null): CatalogManifest {
         var cursor: Int?=null
         var first: CatalogManifest?=null
         val refs=mutableListOf<CatalogChapterRef>()
         val cursors=mutableSetOf<Int>()
         do {
-            val page=manifest(id,cursor,500,first?.revision)
+            val page=manifest(id,cursor,500,first?.revision,sourceKey)
             if(first==null)first=page
             require(page.bookId==id && page.revision==first.revision && page.chapterCount==first.chapterCount) { "章节目录在下载时变化，请重试" }
-            require(page.chapters.all{it.sourceId>0 && it.title.isNotBlank()}) { "章节目录格式无效" }
+            require(page.chapters.all{it.chapterId>0 && it.title.isNotBlank()}) { "章节目录格式无效" }
             refs+=page.chapters
             require(refs.size<=100000 && refs.size<=page.chapterCount) { "目录数量超过限制" }
             cursor=page.nextCursor
             require(cursor==null || cursors.add(cursor)) { "目录分页重复" }
         } while(cursor!=null)
-        require(refs.isNotEmpty() && refs.size==first.chapterCount && refs.map{it.sourceId}.distinct().size==refs.size && refs.withIndex().all{it.index==it.value.index}) { "章节目录不完整或顺序错误" }
+        require(refs.isNotEmpty() && refs.size==first.chapterCount && refs.map{it.chapterId}.distinct().size==refs.size && refs.withIndex().all{it.index==it.value.index}) { "章节目录不完整或顺序错误" }
         return first.copy(chapters=refs,nextCursor=null)
     }
 
-    fun chapter(bookId: Long, sourceId: Long, etag: String? = null, revision: String? = null): CatalogChapterContent? {
-        val suffix = revision?.let { "?revision=" + URLEncoder.encode(it, "UTF-8") }.orEmpty()
+    fun chapter(bookId: Long, sourceId: Long, etag: String? = null, revision: String? = null, sourceKey: String? = null): CatalogChapterContent? {
+        val suffix = buildString {
+            val params = mutableListOf<String>()
+            revision?.let { params += "revision=" + URLEncoder.encode(it, "UTF-8") }
+            sourceKey?.takeIf { it.isNotBlank() && it != "catalog" }?.let {
+                params += "source=" + URLEncoder.encode(it, "UTF-8")
+            }
+            if (params.isNotEmpty()) append("?${params.joinToString("&")}")
+        }
         val connection = (URL("${baseUrl.trimEnd('/')}/v1/catalog/books/$bookId/chapters/$sourceId$suffix").openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000; readTimeout = 60_000
             setRequestProperty("Accept", "application/json")
@@ -196,22 +305,29 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
             if (status == HttpURLConnection.HTTP_NOT_MODIFIED) return null
             if (status !in 200..299) error(errorMessage(connection, status, "章节正文"))
             val value = connection.inputStream.bufferedReader(Charsets.UTF_8).use { JSONObject(it.readText()) }
-            CatalogChapterContent(value.getLong("bookId"), value.getLong("sourceId"), value.getString("chapterId"),
+            CatalogChapterContent(value.getLong("bookId"), value.optLong("sourceId", value.optLong("index", sourceId)), value.getString("chapterId"),
                 value.getString("revision"), value.getString("body"), value.getLong("bytes"), value.getString("sha256"),
-                connection.getHeaderField("ETag"))
+                connection.getHeaderField("ETag"), value.optString("sourceKey").takeIf { it.isNotBlank() })
         } finally { connection.disconnect() }
     }
 
-    fun prefetch(bookId: Long, sourceIds: List<Long>, priority: Int = 50): CatalogPrefetchTask {
+    fun prefetch(bookId: Long, sourceIds: List<Long>, sourceKey: String? = null, priority: Int = 50): CatalogPrefetchTask {
         require(sourceIds.isNotEmpty() && sourceIds.size <= 2000) { "预取章节数量应为 1–2000" }
         val ids = JSONArray().apply { sourceIds.distinct().forEach { put(it) } }
-        return parsePrefetch(request("/v1/catalog/books/$bookId/prefetch", "POST", JSONObject().put("chapterIds", ids).put("priority", priority.coerceIn(0, 100))))
+        val body = JSONObject()
+            .put("chapterIds", ids)
+            .put("priority", priority.coerceIn(0, 100))
+        sourceKey?.takeIf { it.isNotBlank() && it != "catalog" }?.let { body.put("sourceKey", it) }
+        return parsePrefetch(request("/v1/catalog/books/$bookId/prefetch", "POST", body))
     }
 
     fun prefetchStatus(taskId: String): CatalogPrefetchTask = parsePrefetch(request("/v1/catalog/prefetch/${URLEncoder.encode(taskId, "UTF-8")}"))
 
-    fun version(id: Long): CatalogVersion {
-        val item = request("/v1/catalog/books/$id/version")
+    fun version(id: Long, sourceKey: String? = null): CatalogVersion {
+        val suffix = sourceKey?.takeIf { it.isNotBlank() && it != "catalog" }?.let {
+            "?source=" + URLEncoder.encode(it, "UTF-8")
+        }.orEmpty()
+        val item = request("/v1/catalog/books/$id/version$suffix")
         return CatalogVersion(
             bookId = item.optLong("bookId", id),
             latestChapterId = item.optLong("latestChapterId"),
@@ -235,13 +351,22 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
             .put("fromRevision", book.activeRevision ?: "")
             .put("targetRevision", target?.remoteRevision ?: book.remoteLatestVersion ?: "")
             .put("chapters", chapters)
-        return parseTask(request("/v1/catalog/books/${book.remoteBookId}/update-plan", "POST", body))
+        val source = book.catalogSourceKey?.let { "?source=" + URLEncoder.encode(it, "UTF-8") }.orEmpty()
+        return parseTask(request("/v1/catalog/books/${book.catalogBookId}/update-plan$source", "POST", body))
     }
 
-    fun startBundle(id: Long): CatalogContentTask = parseTask(request("/v1/catalog/books/$id/bundle", "POST"))
+    fun startBundle(id: Long, sourceKey: String? = null): CatalogContentTask {
+        val suffix = sourceKey?.takeIf { it.isNotBlank() && it != "catalog" }?.let {
+            "?source=" + URLEncoder.encode(it, "UTF-8")
+        }.orEmpty()
+        return parseTask(request("/v1/catalog/books/$id/bundle$suffix", "POST"))
+    }
 
-    fun startContent(id: Long): CatalogContentTask {
-        val value = request("/v1/catalog/books/$id/content", "POST")
+    fun startContent(id: Long, sourceKey: String? = null): CatalogContentTask {
+        val suffix = sourceKey?.takeIf { it.isNotBlank() && it != "catalog" }?.let {
+            "?source=" + URLEncoder.encode(it, "UTF-8")
+        }.orEmpty()
+        val value = request("/v1/catalog/books/$id/content$suffix", "POST")
         val task = parseTask(value)
         // Older catalog servers omit the failure details in POST responses.
         return if (task.state == "failed" && task.kind == null) status(task.taskId) else task
@@ -350,7 +475,9 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
     }
 
     private fun parsePrefetch(value: JSONObject): CatalogPrefetchTask = CatalogPrefetchTask(
-        taskId = value.getString("taskId"), bookId = value.getLong("bookId"), state = value.optString("state", "queued"),
+        taskId = value.getString("taskId"), bookId = value.getLong("bookId"),
+        sourceKey = value.optString("sourceKey").takeIf { it.isNotBlank() },
+        state = value.optString("state", "queued"),
         total = value.optInt("total"), completed = value.optInt("completed"), failed = value.optInt("failed")
     )
 
@@ -358,11 +485,28 @@ class CatalogClient(private val baseUrl: String = BASE_URL) {
         const val BASE_URL = "http://120.48.49.190"
         const val MAX_PACKAGE = 64 * 1024 * 1024
         fun parseBook(item: JSONObject) = CatalogBook(
-            id = item.optLong("id"), title = item.optString("title"), author = item.optString("author", "未知作者"),
+            id = item.optLong("bookId", item.optLong("id")), title = item.optString("title"), author = item.optString("author", "未知作者"),
             category = item.optString("category", "未分类"), status = item.optString("status", ""),
             words = item.optLong("words"), chapterNo = item.optLong("chapter_no"),
             lastUpdate = item.optString("last_update_at"), latestChapter = item.optString("latest_chapter"),
-            latestChapterId = item.optLong("latest_chapter_id")
+            latestChapterId = item.optLong("latest_chapter_id"),
+            sourceKey = item.optString("recommendedSource").takeIf { it.isNotBlank() }
+                ?: item.optString("sourceKey").takeIf { it.isNotBlank() },
+            matchState = item.optString("matchState").takeIf { it.isNotBlank() },
+            sources = item.optJSONArray("sources")?.let { values ->
+                List(values.length()) { index ->
+                    val source = values.getJSONObject(index)
+                    CatalogSource(
+                        source.optString("sourceKey"),
+                        source.optString("externalBookId"),
+                        source.optString("sourceTitle"),
+                        source.optString("sourceAuthor"),
+                        source.optString("bindingState", "candidate"),
+                        source.optBoolean("isPreferred"),
+                        source.optString("lastUpdateAt").takeIf { it.isNotBlank() }
+                    )
+                }
+            }.orEmpty()
         )
         fun parseTask(item: JSONObject) = CatalogContentTask(
             taskId = item.optString("taskId", item.optString("id")).also {
@@ -405,7 +549,7 @@ object ContentPackageImporter {
     fun importUpdate(packageFile: File, current: Book, plan: OnlineUpdatePlan): Book = ZipFile(packageFile).use { zip ->
         val manifest = JSONObject(read(zip, "manifest.json", 2 * 1024 * 1024).toString(Charsets.UTF_8))
         require(manifest.getInt("schema_version") == 2 && manifest.getString("kind") == "content.update") { "不是在线书籍更新包" }
-        require(manifest.getLong("bookId") == current.remoteBookId && plan.bookId == current.remoteBookId) { "更新包与本地书籍不匹配" }
+        require(manifest.getLong("bookId") == current.catalogBookId && plan.bookId == current.catalogBookId) { "更新包与本地书籍不匹配" }
         require(manifest.getString("fromRevision") == current.activeRevision && plan.fromRevision == current.activeRevision &&
             manifest.getString("toRevision") == plan.toRevision && manifest.getString("remoteRevision") == plan.remoteRevision &&
             manifest.getBoolean("appendOnly") == plan.appendOnly && plan.expiresAt > System.currentTimeMillis() / 1000) {

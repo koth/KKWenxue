@@ -48,6 +48,8 @@ class ProsodyTests(unittest.TestCase):
         self.assertEqual([500, 0], [part['pause_ms'] for part in parts])
         parts = pause_fragments('第 1168 章 看不见的人', title=True)
         self.assertEqual(['第1168章 ', '看不见的人'], [part['text'] for part in parts])
+        parts = pause_fragments('第1233章意外', title=True)
+        self.assertEqual(['第1233章 ', '意外'], [part['text'] for part in parts])
 
     def test_commas_colons_and_semicolons_get_distinct_internal_gaps(self):
         text = '他说：雨停了，先出门；再回来。'

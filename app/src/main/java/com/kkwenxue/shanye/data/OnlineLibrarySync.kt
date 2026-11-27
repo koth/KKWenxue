@@ -117,7 +117,7 @@ class OnlineLibrarySync(private val context: Context) {
         confirmed: OnlineUpdatePlan? = null,
         onUpdated: (Book) -> Unit
     ) = supervisorScope {
-        books.filter { it.remoteBookId != null && !it.activeRevision.isNullOrBlank() }
+        books.filter { it.catalogBookId != null && !it.activeRevision.isNullOrBlank() }
             .distinctBy { it.id }.map { shelfBook ->
                 async(Dispatchers.IO) {
                     val me = currentCoroutineContext()[Job]!!
@@ -152,7 +152,7 @@ class OnlineLibrarySync(private val context: Context) {
     }
 
     private suspend fun updateOne(book: Book, retry: Boolean, confirmed: OnlineUpdatePlan?): Book? {
-        val remoteId = book.remoteBookId ?: return null
+        val catalogBookId = book.catalogBookId ?: return null
         val from = book.activeRevision ?: return null
         val client = CatalogClient()
         val cached = database.onlineStatus(book.id)
@@ -171,8 +171,8 @@ class OnlineLibrarySync(private val context: Context) {
 
         return try {
             phase("checking")
-            val version = runInterruptible { client.version(remoteId) }
-            require(version.bookId == remoteId && version.remoteRevision.isNotBlank()) { "目录版本无效" }
+            val version = runInterruptible { client.version(catalogBookId, book.catalogSourceKey) }
+            require(version.bookId == catalogBookId && version.remoteRevision.isNotBlank()) { "目录版本无效" }
             status = status.copy(checkedAt = System.currentTimeMillis(), latestTitle = version.latestChapter,
                 latestCount = version.chapterCount, newChapters = (version.chapterCount - book.chapters.size).coerceAtLeast(0),
                 plan = null, downloaded = 0)
@@ -193,7 +193,7 @@ class OnlineLibrarySync(private val context: Context) {
             // Online books use a lightweight manifest revision. Refreshing it
             // keeps already cached chapter bodies by stable source ID and never
             // starts the legacy whole-book ZIP task during an automatic check.
-            if (book.remoteSource == "catalog" && version.remoteRevision != from) {
+            if (version.remoteRevision != from) {
                 phase("syncing", "正在更新章节目录", persist = true)
                 val updated = loadOnlineManifest(book, client, version)
                 database.save(updated, from)
@@ -299,10 +299,12 @@ class OnlineLibrarySync(private val context: Context) {
     }
 
     private suspend fun loadOnlineManifest(book: Book, client: CatalogClient, version: CatalogVersion): Book {
-        val manifest=runInterruptible(Dispatchers.IO){client.completeManifest(requireNotNull(book.remoteBookId))}
+        val manifest=runInterruptible(Dispatchers.IO){
+            client.completeManifest(requireNotNull(book.catalogBookId), book.catalogSourceKey)
+        }
         val refs=manifest.chapters
         val chapters = refs.sortedBy { it.index }.map { ref ->
-            Chapter("online:catalog:${book.remoteBookId}:chapter:source:${ref.sourceId}", ref.title, "", ref.bodySha256)
+            Chapter("online:catalog:${book.catalogBookId}:chapter:${ref.chapterId}", ref.title, "", ref.bodySha256)
         }
         return book.copy(
             subtitle = "${chapters.size} 章 · 在线目录",

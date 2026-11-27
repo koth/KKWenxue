@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +35,7 @@ import com.kkwenxue.shanye.audio.AudioPlayback
 import com.kkwenxue.shanye.data.*
 import com.kkwenxue.shanye.tts.LocalTtsLivePhase
 import com.kkwenxue.shanye.tts.LocalTtsLivePlayback
+import com.kkwenxue.shanye.tts.LocalTtsRuntime
 import com.kkwenxue.shanye.tts.LocalTtsSynthesisService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +51,12 @@ private val PlayerWhite = WorkbenchWhite
 private val PlayerMuted = WorkbenchMuted
 private val PlayerAccent = WorkbenchAccent
 private val PlayerPanel = WorkbenchPanel
+private data class LocalVoiceOption(val id: String, val name: String)
+private val LocalVoiceOptions = listOf(
+    LocalVoiceOption("clone-linchuan-zonos3-v1", "林川"),
+    LocalVoiceOption("clone-adam-zonos3-v1", "Adam"),
+    LocalVoiceOption("clone-story-zonos3-v1", "Story")
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,6 +67,7 @@ internal fun AudioPlayerScreen(
     resumeArtifactId: String? = null,
     onRead: (AudioChapter, Int) -> Unit,
     onLocalProgress: ((Int, Int) -> Unit)? = null,
+    onLocalRead: ((Int, Int) -> Unit)? = null,
     availableBooks: List<Book> = emptyList()
 ) {
     val context = LocalContext.current
@@ -126,6 +135,18 @@ internal fun AudioPlayerScreen(
     var workbenchMode by remember(book?.id, requestedChapter?.id) {
         mutableStateOf(if (displayItem != null) AudioWorkbenchMode.PLAYBACK else AudioWorkbenchMode.LOCAL_REALTIME)
     }
+    val localVoicePreferences = remember {
+        context.getSharedPreferences("shanye_local_tts", android.content.Context.MODE_PRIVATE)
+    }
+    var localVoiceId by rememberSaveable {
+        mutableStateOf(
+            localVoicePreferences.getString(
+                "selected_voice_id",
+                LocalTtsRuntime.DEFAULT_VOICE_ID
+            )?.takeIf { id -> LocalVoiceOptions.any { it.id == id } }
+                ?: LocalTtsRuntime.DEFAULT_VOICE_ID
+        )
+    }
     var localSynthesizing by remember { mutableStateOf(false) }
     val localLive by LocalTtsLivePlayback.state.collectAsState()
     val liveBelongsToBook = displayBook != null && localLive.bookId == displayBook.id
@@ -144,14 +165,15 @@ internal fun AudioPlayerScreen(
     val liveSentence = localLive.currentText?.trim()?.takeIf {
         localSynthesisActive && liveBelongsToChapter && it.isNotBlank()
     }
-    LaunchedEffect(localLive.currentCue?.start, localLive.playedPositionMs, localLive.phase) {
+    LaunchedEffect(localLive.currentCue?.start, localLive.chapterIndex, localLive.phase) {
         val cue = localLive.currentCue
         if (onLocalProgress != null && liveBelongsToBook && localLive.phase == LocalTtsLivePhase.PLAYING &&
             cue != null && cue.kind != "title") {
-            val duration = (cue.endMs - cue.startMs).coerceAtLeast(1)
-            val fraction = ((localLive.playedPositionMs - cue.startMs).toFloat() / duration).coerceIn(0f, 1f)
-            val offset = (cue.start + ((cue.end - cue.start) * fraction).toInt()).coerceIn(cue.start, cue.end)
-            onLocalProgress(localLive.chapterIndex, offset)
+            // The streaming player publishes sentence boundaries, not a
+            // millisecond clock. Persist the boundary immediately so the
+            // reader position advances even while the player screen is open
+            // or the app is backgrounded.
+            onLocalProgress(localLive.chapterIndex, cue.start)
         }
     }
     LaunchedEffect(localLive.phase) {
@@ -209,6 +231,7 @@ internal fun AudioPlayerScreen(
         // the chapter from its beginning.
         LocalTtsSynthesisService.start(
             context, targetBook.id, index,
+            voiceId = localVoiceId,
             startOffset = localStartOffset.coerceAtLeast(0)
         )
     }
@@ -223,7 +246,11 @@ internal fun AudioPlayerScreen(
         if (index !in targetBook.chapters.indices) return
         if (localSynthesisActive) LocalTtsSynthesisService.stop(context)
         localSynthesizing = true
-        LocalTtsSynthesisService.start(context, targetBook.id, index, startOffset = 0)
+        LocalTtsSynthesisService.start(
+            context, targetBook.id, index,
+            voiceId = localVoiceId,
+            startOffset = 0
+        )
     }
     fun setPlaybackSpeed(value: Float) {
         AudioPlayback.setSpeed(context, value)
@@ -255,6 +282,14 @@ internal fun AudioPlayerScreen(
         if (live) AudioPlayback.checkpointNow()
         val time = dragging?.toInt() ?: if (live) AudioPlayback.position else position
         onRead(item, item.offsetAt(time) ?: 0)
+    }
+    fun readLocalDisplayed() {
+        val targetIndex = localLive.chapterIndex.takeIf { liveBelongsToBook && it >= 0 } ?: localChapterIndex
+        val targetOffset = localLive.currentCue
+            ?.takeIf { it.kind == "body" }
+            ?.start
+            ?: localStartOffset
+        onLocalRead?.invoke(targetIndex, targetOffset.coerceAtLeast(0))
     }
     if (showSynthesis) {
         SynthesisScreen(
@@ -415,8 +450,8 @@ internal fun AudioPlayerScreen(
                     fourthActionEnabled = !importing,
                     previousEnabled = localPrevious != null,
                     nextEnabled = localNext != null,
-                    voiceLabel = "本地音色 · 林川",
-                    voiceEnabled = false,
+                    voiceLabel = "本地音色 · ${LocalVoiceOptions.firstOrNull { it.id == localVoiceId }?.name ?: "林川"}",
+                    voiceEnabled = !localSynthesisActive,
                     onTimer = { chooser = PlayerChooser.TIMER },
                     onSpeed = { chooser = PlayerChooser.SPEED },
                     onChapters = { chooser = PlayerChooser.CHAPTERS },
@@ -428,8 +463,8 @@ internal fun AudioPlayerScreen(
                         else if (localChapterEntry) synthesizeLocally() else showSynthesis = true
                     },
                     onSeek = {},
-                    onVoice = {},
-                    onRead = null
+                    onVoice = { chooser = PlayerChooser.VOICES },
+                    onRead = onLocalRead?.let { { readLocalDisplayed() } }
                 )
                 Column(
                     Modifier.fillMaxWidth().padding(bottom = 18.dp),
@@ -440,7 +475,7 @@ internal fun AudioPlayerScreen(
                             localLive.status.takeIf { liveBelongsToBook && it.isNotBlank() }
                                 ?: "正在准备本地语音，首次加载模型可能需要一点时间…"
                         } else if (localChapterEntry) {
-                            "点击播放后从当前句开始合成，前 5 句缓冲后开始播放。"
+                            "点击播放后从当前句开始合成，前 8 句缓冲后开始播放。"
                         } else {
                             "请先打开一本书，再选择本地实时或服务器合成。"
                         },
@@ -552,7 +587,53 @@ internal fun AudioPlayerScreen(
                         }
                     }
                     PlayerChooser.CHAPTERS, PlayerChooser.VOICES -> {
-                        if (chooser == PlayerChooser.CHAPTERS &&
+                        if (chooser == PlayerChooser.VOICES &&
+                            workbenchMode == AudioWorkbenchMode.LOCAL_REALTIME
+                        ) {
+                            Text(
+                                "选择本地预编码声线；停止当前朗读后才可切换。",
+                                Modifier.padding(bottom = 12.dp),
+                                fontSize = 12.sp,
+                                color = PlayerMuted
+                            )
+                            LocalVoiceOptions.forEach { voice ->
+                                val selected = voice.id == localVoiceId
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .clickable {
+                                            if (!localSynthesisActive) {
+                                                localVoiceId = voice.id
+                                                localVoicePreferences.edit()
+                                                    .putString("selected_voice_id", voice.id)
+                                                    .apply()
+                                                chooser = null
+                                            }
+                                        }
+                                        .padding(vertical = 17.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Glyph(
+                                        if (selected) "audio" else "play",
+                                        if (selected) PlayerAccent else PlayerMuted,
+                                        size = 20.dp
+                                    )
+                                    Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                                        Text(
+                                            voice.name,
+                                            fontSize = 16.sp,
+                                            color = if (selected) PlayerAccent else PlayerWhite
+                                        )
+                                        Text(
+                                            "本地实时合成",
+                                            Modifier.padding(top = 5.dp),
+                                            fontSize = 11.sp,
+                                            color = PlayerMuted
+                                        )
+                                    }
+                                }
+                                HorizontalDivider(color = PlayerWhite.copy(.08f))
+                            }
+                        } else if (chooser == PlayerChooser.CHAPTERS &&
                             workbenchMode == AudioWorkbenchMode.LOCAL_REALTIME &&
                             localBook != null
                         ) {

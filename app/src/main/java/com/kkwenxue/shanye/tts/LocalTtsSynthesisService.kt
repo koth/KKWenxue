@@ -20,8 +20,10 @@ import com.kkwenxue.shanye.data.OnlineChapterStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -42,6 +44,9 @@ class LocalTtsSynthesisService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var audioLibrary: AudioLibrary? = null
     private var currentChapterTitle: String? = null
+    private var sleepTimerJob: Job? = null
+    private var sleepAtElapsed = 0L
+    private var sleepAtChapterEnd = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -53,6 +58,7 @@ class LocalTtsSynthesisService : Service() {
                 stopSynthesis()
                 stopSelfResult(startId)
             }
+            ACTION_TIMER -> configureSleepTimer(intent.getIntExtra(KEY_TIMER_MINUTES, 0))
             ACTION_START -> {
                 val bookId = intent.getStringExtra(KEY_BOOK_ID)
                 val chapterIndex = intent.getIntExtra(KEY_CHAPTER_INDEX, -1)
@@ -78,6 +84,7 @@ class LocalTtsSynthesisService : Service() {
                         effectiveJob
                     )
                     startForegroundNow()
+                    syncSleepTimerFromPlayback()
                     task?.cancel()
                     activeJobKey = jobKey
                     task = scope.launch {
@@ -200,7 +207,11 @@ class LocalTtsSynthesisService : Service() {
                     ) { segment -> chapterSession.offer(segment) }
                 }
                 withContext(Dispatchers.IO) {
-                    chapterSession.finish(keepActive = index < book.chapters.lastIndex)
+                    // "本章结束" must drain this chapter's queued PCM but
+                    // must not keep the producer open for the next chapter.
+                    chapterSession.finish(
+                        keepActive = index < book.chapters.lastIndex && !sleepAtChapterEnd
+                    )
                 }
                 val published = library.registerLocalChapter(
                     hydrated, index, result.voiceKey, result.voiceName,
@@ -211,6 +222,17 @@ class LocalTtsSynthesisService : Service() {
                 if (index == book.chapters.lastIndex) {
                     chapterSession.close()
                     session = null
+                }
+                if (sleepAtChapterEnd) {
+                    sleepAtChapterEnd = false
+                    sleepTimerJob?.cancel()
+                    sleepTimerJob = null
+                    AudioPlayback.timerMode = 0
+                    AudioPlayback.timerRemainingMs = 0L
+                    LocalTtsJobStore.clearIfIdMatches(applicationContext, jobId)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelfResult(startId)
+                    return
                 }
             }
 
@@ -253,6 +275,10 @@ class LocalTtsSynthesisService : Service() {
     }
 
     private fun stopSynthesis() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        sleepAtElapsed = 0L
+        sleepAtChapterEnd = false
         runtime?.cancel()
         task?.cancel()
         LocalTtsNative.cancel()
@@ -260,6 +286,71 @@ class LocalTtsSynthesisService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         if (wakeLock?.isHeld == true) wakeLock?.release()
         wakeLock = null
+    }
+
+    private fun configureSleepTimer(minutes: Int) {
+        when {
+            minutes == -1 -> configureSleepTimerAtChapterEnd()
+            minutes > 0 -> configureSleepTimerForMillis(minutes * 60_000L)
+            else -> clearSleepTimer()
+        }
+    }
+
+    private fun syncSleepTimerFromPlayback() {
+        when {
+            AudioPlayback.timerMode == -1 -> configureSleepTimerAtChapterEnd()
+            AudioPlayback.timerMode > 0 && AudioPlayback.timerRemainingMs > 0L ->
+                configureSleepTimerForMillis(AudioPlayback.timerRemainingMs)
+        }
+    }
+
+    private fun configureSleepTimerAtChapterEnd() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        sleepAtElapsed = 0L
+        sleepAtChapterEnd = false
+        sleepAtChapterEnd = true
+        AudioPlayback.timerMode = -1
+        AudioPlayback.timerRemainingMs = 0L
+    }
+
+    private fun configureSleepTimerForMillis(durationMs: Long) {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        sleepAtElapsed = android.os.SystemClock.elapsedRealtime() + durationMs.coerceAtLeast(1L)
+        sleepAtChapterEnd = false
+        if (AudioPlayback.timerMode <= 0) {
+            AudioPlayback.timerMode = ((durationMs + 59_999L) / 60_000L).toInt().coerceAtLeast(1)
+        }
+        AudioPlayback.timerRemainingMs = durationMs
+        sleepTimerJob = scope.launch {
+            while (true) {
+                delay(250)
+                val remaining = (sleepAtElapsed - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+                AudioPlayback.timerRemainingMs = remaining
+                if (remaining == 0L) {
+                    LocalTtsJobStore.clear(applicationContext)
+                    runtime?.cancel()
+                    task?.cancel()
+                    LocalTtsNative.cancel()
+                    LocalTtsLivePlayback.stopActive()
+                    AudioPlayback.timerMode = 0
+                    AudioPlayback.timerRemainingMs = 0L
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    break
+                }
+            }
+        }
+    }
+
+    private fun clearSleepTimer() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        sleepAtElapsed = 0L
+        sleepAtChapterEnd = false
+        AudioPlayback.timerMode = 0
+        AudioPlayback.timerRemainingMs = 0L
     }
 
     private fun createChannel() {
@@ -312,11 +403,13 @@ class LocalTtsSynthesisService : Service() {
         private const val NOTIFICATION_ID = 301
         private const val ACTION_START = "com.kkwenxue.shanye.tts.START"
         private const val ACTION_STOP = "com.kkwenxue.shanye.tts.STOP"
+        private const val ACTION_TIMER = "com.kkwenxue.shanye.tts.TIMER"
         private const val KEY_BOOK_ID = "book_id"
         private const val KEY_CHAPTER_INDEX = "chapter_index"
         private const val KEY_VOICE_ID = "voice_id"
         private const val KEY_START_OFFSET = "start_offset"
         private const val KEY_JOB_ID = "job_id"
+        private const val KEY_TIMER_MINUTES = "timer_minutes"
 
         fun start(
             context: Context,
@@ -357,6 +450,14 @@ class LocalTtsSynthesisService : Service() {
             // AudioTrack/wake-lock resources even if the action delivery is
             // delayed by the system.
             context.stopService(intent)
+        }
+
+        fun setSleepTimer(context: Context, minutes: Int) {
+            context.startService(
+                Intent(context, LocalTtsSynthesisService::class.java)
+                    .setAction(ACTION_TIMER)
+                    .putExtra(KEY_TIMER_MINUTES, minutes)
+            )
         }
     }
 }

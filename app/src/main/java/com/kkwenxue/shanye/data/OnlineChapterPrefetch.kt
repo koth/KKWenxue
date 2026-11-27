@@ -97,7 +97,7 @@ class OnlineChapterPrefetchWorker(appContext: Context, params: WorkerParameters)
                     val index=book.chapters.indexOfFirst { it.id==item.chapterId }
                     require(index>=0) { "章节已从目录移除" }
                     OnlineChapterStore(applicationContext).load(book,index,interactive=false)
-                    if(item.scope!="adjacent")runInterruptible(Dispatchers.IO){OnlineChapterStore(applicationContext).protect(book.id,item.chapterId)}
+                    if(item.scope!="adjacent")runInterruptible(Dispatchers.IO){OnlineChapterStore(applicationContext).protect(book.id,item.chapterId,sourceKey=book.catalogSourceKey.orEmpty())}
                     runInterruptible(Dispatchers.IO){ChapterQueue(applicationContext).use { it.finish(item) }}
                 } catch(cancelled: CancellationException) { throw cancelled
                 } catch(error: Exception) {
@@ -121,7 +121,7 @@ class OnlineChapterPrefetchWorker(appContext: Context, params: WorkerParameters)
         }
         fun enqueue(context: Context,book: Book,currentChapter: Int) = enqueueRange(context,book,listOf(currentChapter+1,currentChapter+2,currentChapter-1),"adjacent")
         fun enqueueRange(context: Context,book: Book,indices: List<Int>,scope: String="range") {
-            if(book.remoteBookId==null)return
+            if(book.catalogBookId==null)return
             ChapterQueue(context.applicationContext).use { it.enqueue(book,indices,scope) }; wake(context)
         }
         fun cancel(context: Context,book: Book) { ChapterQueue(context.applicationContext).use { it.pause(book) } }

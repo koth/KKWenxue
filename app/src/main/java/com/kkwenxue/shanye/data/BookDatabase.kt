@@ -8,7 +8,7 @@ import android.database.sqlite.SQLiteOpenHelper
 /** SQLite source of truth for imported books and their ordered chapters. */
 class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOpenHelper(context, name, null, VERSION) {
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE IF NOT EXISTS books (id TEXT PRIMARY KEY, title TEXT NOT NULL, author TEXT NOT NULL, genre TEXT NOT NULL, subtitle TEXT NOT NULL, description TEXT NOT NULL, cover INTEGER NOT NULL, remote_source TEXT, remote_book_id INTEGER, active_revision TEXT, remote_latest_chapter_id INTEGER NOT NULL DEFAULT 0, remote_latest_version TEXT, legacy_book_id TEXT)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS books (id TEXT PRIMARY KEY, title TEXT NOT NULL, author TEXT NOT NULL, genre TEXT NOT NULL, subtitle TEXT NOT NULL, description TEXT NOT NULL, cover INTEGER NOT NULL, remote_source TEXT, remote_book_id INTEGER, catalog_book_id INTEGER, active_revision TEXT, remote_latest_chapter_id INTEGER NOT NULL DEFAULT 0, remote_latest_version TEXT, legacy_book_id TEXT)")
         db.execSQL("CREATE TABLE IF NOT EXISTS chapters (id TEXT PRIMARY KEY, book_id TEXT NOT NULL, chapter_index INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, body_sha256 TEXT, FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE)")
         db.execSQL("CREATE INDEX IF NOT EXISTS chapters_book_index ON chapters(book_id, chapter_index)")
         createSyncTables(db)
@@ -37,8 +37,13 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
         if (oldVersion < 6) createChapterCacheTable(db)
         if (oldVersion < 7) addChapterCacheProtectionColumn(db)
         if (oldVersion < 8) addColumnIfMissing(db, "chapters", "body_sha256 TEXT")
-        if(oldVersion<9)createProtectionTable(db)
-        if(oldVersion<10)addColumnIfMissing(db,"protected_chapters","flags INTEGER NOT NULL DEFAULT 1")
+        if (oldVersion < 9) createProtectionTable(db)
+        if (oldVersion < 10) addColumnIfMissing(db, "protected_chapters", "flags INTEGER NOT NULL DEFAULT 1")
+        if (oldVersion < 11) {
+            addColumnIfMissing(db, "books", "catalog_book_id INTEGER")
+            db.execSQL("UPDATE books SET catalog_book_id=remote_book_id WHERE catalog_book_id IS NULL")
+        }
+        if (oldVersion < 12) migrateSourceScopedChapterCache(db)
     }
 
     fun save(book: Book, expectedRevision: String? = null, job: OnlineSyncJob? = null) {
@@ -52,7 +57,7 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
                 ).use { rows -> if (rows.moveToFirst()) rows.getString(0) else null }
                 check(current == expectedRevision) { "本地书籍版本已变化，请重新检查更新" }
             }
-            val previous = if (book.remoteBookId != null && !book.activeRevision.isNullOrBlank()) {
+            val previous = if (book.catalogBookId != null && !book.activeRevision.isNullOrBlank()) {
                 db.rawQuery(
                     "SELECT active_revision FROM books WHERE id=? AND active_revision IS NOT NULL",
                     arrayOf(book.id)
@@ -60,14 +65,19 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
             } else null
             val previousBook = if (previous != null) load(book.id).firstOrNull() else null
             val previousChapters = if (previousBook != null && previous != book.activeRevision) previousBook.chapters else emptyList()
-            if (book.remoteBookId != null && previousBook != null) {
+            if (book.catalogBookId != null && previousBook != null) {
                 val next = book.chapters.associateBy { it.id }
+                val sourceKey = book.catalogSourceKey.orEmpty()
                 previousBook.chapters.forEach { old ->
                     val ref = next[old.id]
-                    val cachedHash = latestChapterCache(book.id, old.id)?.sha256
+                    val cachedHash = latestChapterCache(book.id, old.id, sourceKey)?.sha256
                     if (ref == null || ref.title != old.title ||
                         (ref.bodySha256 != null && cachedHash != null && ref.bodySha256 != cachedHash)) {
-                        db.delete("online_chapter_cache", "book_id=? AND chapter_id=?", arrayOf(book.id, old.id))
+                        db.delete(
+                            "online_chapter_cache",
+                            "book_id=? AND source_key=? AND chapter_id=?",
+                            arrayOf(book.id, sourceKey, old.id)
+                        )
                     }
                 }
             }
@@ -77,13 +87,13 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
             book.chapters.forEachIndexed { index, chapter ->
                 db.insertOrThrow("chapters", null, ContentValues().apply {
                     put("id", chapter.id); put("book_id", book.id); put("chapter_index", index)
-                    put("title", chapter.title); put("body", if (book.remoteBookId != null) "" else chapter.body); put("body_sha256", chapter.bodySha256)
+                    put("title", chapter.title); put("body", if (book.catalogBookId != null) "" else chapter.body); put("body_sha256", chapter.bodySha256)
                 })
             }
-            if (book.remoteBookId != null) {
+            if (book.catalogBookId != null) {
                 val values = ContentValues().apply {
-                    put("source", book.remoteSource ?: "catalog")
-                    put("remote_book_id", book.remoteBookId)
+                    put("source", book.catalogSourceKey ?: book.remoteSource ?: "suduguu")
+                    put("remote_book_id", book.catalogBookId)
                     put("remote_latest_chapter_id", book.remoteLatestChapterId)
                     put("active_revision", book.activeRevision)
                     put("last_sync_at", System.currentTimeMillis())
@@ -129,7 +139,13 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
                 val id = books.getString(books.getColumnIndexOrThrow("id"))
                 val chapters = mutableListOf<Chapter>()
                 db.query("chapters", arrayOf("id", "title", "body", "body_sha256"), "book_id = ?", arrayOf(id), null, null, "chapter_index ASC").use { rows ->
-                    while (rows.moveToNext()) chapters += Chapter(rows.getString(0), rows.getString(1), if (books.getLongOrNull("remote_book_id") != null) "" else rows.getString(2), rows.getString(3))
+                    while (rows.moveToNext()) chapters += Chapter(
+                        rows.getString(0),
+                        rows.getString(1),
+                        if ((books.getLongOrNull("catalog_book_id")
+                                ?: books.getLongOrNull("remote_book_id")) != null) "" else rows.getString(2),
+                        rows.getString(3)
+                    )
                 }
                 if (chapters.isNotEmpty()) result += Book(
                     id,
@@ -145,7 +161,8 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
                     books.getStringOrNull("active_revision"),
                     books.getLongOrNull("remote_latest_chapter_id") ?: 0L,
                     books.getStringOrNull("remote_latest_version"),
-                    books.getStringOrNull("legacy_book_id")
+                    books.getStringOrNull("legacy_book_id"),
+                    books.getLongOrNull("catalog_book_id") ?: books.getLongOrNull("remote_book_id")
                 )
             }
         }
@@ -155,7 +172,8 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
     private fun bookValues(book: Book) = ContentValues().apply {
         put("id", book.id); put("title", book.title); put("author", book.author); put("genre", book.genre)
         put("subtitle", book.subtitle); put("description", book.description); put("cover", book.cover)
-        put("remote_source", book.remoteSource); put("remote_book_id", book.remoteBookId)
+        put("remote_source", book.remoteSource); put("remote_book_id", book.catalogBookId)
+        put("catalog_book_id", book.catalogBookId)
         put("active_revision", book.activeRevision); put("remote_latest_chapter_id", book.remoteLatestChapterId)
         put("remote_latest_version", book.remoteLatestVersion)
         put("legacy_book_id", book.legacyBookId)
@@ -168,8 +186,8 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
     internal fun linkLegacy(legacyId: String, online: Book): Book {
         val db = writableDatabase
         val old = load(legacyId).singleOrNull()
-        require(old != null && old.isLegacyOnlineImport && online.id == "online:catalog:${online.remoteBookId}" &&
-            online.remoteBookId != null && !online.activeRevision.isNullOrBlank()) { "旧版书籍或在线正文无效" }
+        require(old != null && old.isLegacyOnlineImport && online.id == "online:catalog:${online.catalogBookId}" &&
+            online.catalogBookId != null && !online.activeRevision.isNullOrBlank()) { "旧版书籍或在线正文无效" }
         val existing = db.rawQuery(
             "SELECT 1 FROM books WHERE id=? OR legacy_book_id=? LIMIT 1", arrayOf(online.id, legacyId)
         ).use { it.moveToFirst() }
@@ -273,12 +291,55 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
     }
 
     private fun createProtectionTable(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE IF NOT EXISTS protected_chapters(book_id TEXT NOT NULL,chapter_id TEXT NOT NULL,flags INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(book_id,chapter_id))")
+        db.execSQL("CREATE TABLE IF NOT EXISTS protected_chapters(book_id TEXT NOT NULL,source_key TEXT NOT NULL DEFAULT '',chapter_id TEXT NOT NULL,flags INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(book_id,source_key,chapter_id))")
     }
 
     private fun createChapterCacheTable(db: SQLiteDatabase) {
         createProtectionTable(db)
-        db.execSQL("CREATE TABLE IF NOT EXISTS online_chapter_cache (book_id TEXT NOT NULL, chapter_id TEXT NOT NULL, revision TEXT NOT NULL, path TEXT NOT NULL, bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, etag TEXT, state TEXT NOT NULL, protected INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(book_id, chapter_id, revision))")
+        db.execSQL("CREATE TABLE IF NOT EXISTS online_chapter_cache (book_id TEXT NOT NULL, source_key TEXT NOT NULL DEFAULT '', chapter_id TEXT NOT NULL, revision TEXT NOT NULL, path TEXT NOT NULL, bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, etag TEXT, state TEXT NOT NULL, protected INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(book_id, source_key, chapter_id, revision))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS online_chapter_cache_book ON online_chapter_cache(book_id, updated_at DESC)")
+    }
+
+    private fun migrateSourceScopedChapterCache(db: SQLiteDatabase) {
+        val cacheExists = db.rawQuery(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='online_chapter_cache'",
+            null
+        ).use { it.moveToFirst() }
+        if (cacheExists) {
+            db.execSQL("ALTER TABLE online_chapter_cache RENAME TO online_chapter_cache_legacy_v11")
+            db.execSQL("CREATE TABLE online_chapter_cache (book_id TEXT NOT NULL, source_key TEXT NOT NULL DEFAULT '', chapter_id TEXT NOT NULL, revision TEXT NOT NULL, path TEXT NOT NULL, bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, etag TEXT, state TEXT NOT NULL, protected INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(book_id, source_key, chapter_id, revision))")
+            db.execSQL(
+                "INSERT OR IGNORE INTO online_chapter_cache(book_id,source_key,chapter_id,revision,path,bytes,sha256,etag,state,protected,updated_at) " +
+                    "SELECT c.book_id,CASE WHEN b.remote_source='catalog' THEN '' ELSE COALESCE(b.remote_source,'') END,c.chapter_id,c.revision,c.path,c.bytes,c.sha256,c.etag,c.state,c.protected,c.updated_at " +
+                    "FROM online_chapter_cache_legacy_v11 c LEFT JOIN books b ON b.id=c.book_id"
+            )
+            db.execSQL("DROP TABLE online_chapter_cache_legacy_v11")
+        } else {
+            createChapterCacheTable(db)
+        }
+        val protectionExists = db.rawQuery(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='protected_chapters'",
+            null
+        ).use { it.moveToFirst() }
+        if (protectionExists) {
+            val hasSource = db.rawQuery("PRAGMA table_info(protected_chapters)", null).use { rows ->
+                var found = false
+                while (rows.moveToNext()) if (rows.getString(1) == "source_key") found = true
+                found
+            }
+            if (!hasSource) {
+                db.execSQL("ALTER TABLE protected_chapters RENAME TO protected_chapters_legacy_v11")
+                db.execSQL("CREATE TABLE protected_chapters(book_id TEXT NOT NULL,source_key TEXT NOT NULL DEFAULT '',chapter_id TEXT NOT NULL,flags INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(book_id,source_key,chapter_id))")
+                db.execSQL(
+                    "INSERT OR IGNORE INTO protected_chapters(book_id,source_key,chapter_id,flags) " +
+                        "SELECT p.book_id,CASE WHEN b.remote_source='catalog' THEN '' ELSE COALESCE(b.remote_source,'') END,p.chapter_id,p.flags " +
+                        "FROM protected_chapters_legacy_v11 p LEFT JOIN books b ON b.id=p.book_id"
+                )
+                db.execSQL("DROP TABLE protected_chapters_legacy_v11")
+            }
+        } else {
+            createProtectionTable(db)
+        }
         db.execSQL("CREATE INDEX IF NOT EXISTS online_chapter_cache_book ON online_chapter_cache(book_id, updated_at DESC)")
     }
 
@@ -293,40 +354,40 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
 
     internal data class ChapterCache(val path: String, val bytes: Long, val sha256: String, val etag: String?)
 
-    internal fun chapterCache(bookId: String, chapterId: String, revision: String): ChapterCache? =
+    internal fun chapterCache(bookId: String, chapterId: String, revision: String, sourceKey: String = ""): ChapterCache? =
         readableDatabase.rawQuery(
-            "SELECT path,bytes,sha256,etag FROM online_chapter_cache WHERE book_id=? AND chapter_id=? AND revision=?",
-            arrayOf(bookId, chapterId, revision)
+            "SELECT path,bytes,sha256,etag FROM online_chapter_cache WHERE book_id=? AND source_key=? AND chapter_id=? AND revision=?",
+            arrayOf(bookId, sourceKey, chapterId, revision)
         ).use { rows ->
             if (!rows.moveToFirst()) null else ChapterCache(rows.getString(0), rows.getLong(1), rows.getString(2), rows.getString(3).takeUnless { rows.isNull(3) })
         }
 
-    internal fun latestChapterCache(bookId: String, chapterId: String): ChapterCache? =
+    internal fun latestChapterCache(bookId: String, chapterId: String, sourceKey: String = ""): ChapterCache? =
         readableDatabase.rawQuery(
-            "SELECT path,bytes,sha256,etag FROM online_chapter_cache WHERE book_id=? AND chapter_id=? ORDER BY updated_at DESC LIMIT 1",
-            arrayOf(bookId, chapterId)
+            "SELECT path,bytes,sha256,etag FROM online_chapter_cache WHERE book_id=? AND source_key=? AND chapter_id=? ORDER BY updated_at DESC LIMIT 1",
+            arrayOf(bookId, sourceKey, chapterId)
         ).use { rows ->
             if (!rows.moveToFirst()) null else ChapterCache(rows.getString(0), rows.getLong(1), rows.getString(2), rows.getString(3).takeUnless { rows.isNull(3) })
         }
 
-    internal fun saveChapterCache(bookId: String, chapterId: String, revision: String, path: String, bytes: Long, sha256: String, etag: String?) {
+    internal fun saveChapterCache(bookId: String, chapterId: String, revision: String, path: String, bytes: Long, sha256: String, etag: String?, sourceKey: String = "") {
         val db = writableDatabase
-        val protected = db.rawQuery("SELECT 1 FROM protected_chapters WHERE book_id=? AND chapter_id=?", arrayOf(bookId,chapterId)).use {it.moveToFirst()}
+        val protected = db.rawQuery("SELECT 1 FROM protected_chapters WHERE book_id=? AND source_key=? AND chapter_id=?", arrayOf(bookId,sourceKey,chapterId)).use {it.moveToFirst()}
         db.insertWithOnConflict("online_chapter_cache", null, ContentValues().apply {
-            put("book_id", bookId); put("chapter_id", chapterId); put("revision", revision)
+            put("book_id", bookId); put("source_key", sourceKey); put("chapter_id", chapterId); put("revision", revision)
             put("path", path); put("bytes", bytes); put("sha256", sha256); put("etag", etag)
             put("state", "ready"); put("protected", if (protected) 1 else 0); put("updated_at", System.currentTimeMillis())
         }, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
-    internal fun deleteChapterCache(bookId: String, chapterId: String) {
-        writableDatabase.delete("online_chapter_cache", "book_id=? AND chapter_id=?", arrayOf(bookId, chapterId))
+    internal fun deleteChapterCache(bookId: String, chapterId: String, sourceKey: String = "") {
+        writableDatabase.delete("online_chapter_cache", "book_id=? AND source_key=? AND chapter_id=?", arrayOf(bookId, sourceKey, chapterId))
     }
 
-    internal fun touchChapterCache(bookId: String, chapterId: String, revision: String) {
+    internal fun touchChapterCache(bookId: String, chapterId: String, revision: String, sourceKey: String = "") {
         writableDatabase.execSQL(
-            "UPDATE online_chapter_cache SET updated_at=? WHERE book_id=? AND chapter_id=? AND revision=?",
-            arrayOf<Any>(System.currentTimeMillis(), bookId, chapterId, revision)
+            "UPDATE online_chapter_cache SET updated_at=? WHERE book_id=? AND source_key=? AND chapter_id=? AND revision=?",
+            arrayOf<Any>(System.currentTimeMillis(), bookId, sourceKey, chapterId, revision)
         )
     }
 
@@ -334,14 +395,14 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
         writableDatabase.delete("online_chapter_cache", "path=?", arrayOf(path))
     }
 
-    internal fun setChapterCacheProtected(bookId: String, chapterId: String, protected: Boolean, flag: Int=1) {
+    internal fun setChapterCacheProtected(bookId: String, chapterId: String, protected: Boolean, flag: Int=1, sourceKey: String = "") {
         val db=writableDatabase
         db.beginTransaction()
         try {
-            db.execSQL("INSERT OR IGNORE INTO protected_chapters(book_id,chapter_id,flags) VALUES(?,?,0)",arrayOf(bookId,chapterId))
-            db.execSQL("UPDATE protected_chapters SET flags=flags ${if(protected) "|" else "&"} ? WHERE book_id=? AND chapter_id=?",arrayOf<Any>(if(protected)flag else flag.inv(),bookId,chapterId))
-            db.delete("protected_chapters","book_id=? AND chapter_id=? AND flags=0",arrayOf(bookId,chapterId))
-            db.execSQL("UPDATE online_chapter_cache SET protected=EXISTS(SELECT 1 FROM protected_chapters p WHERE p.book_id=online_chapter_cache.book_id AND p.chapter_id=online_chapter_cache.chapter_id) WHERE book_id=? AND chapter_id=?",arrayOf(bookId,chapterId))
+            db.execSQL("INSERT OR IGNORE INTO protected_chapters(book_id,source_key,chapter_id,flags) VALUES(?,?,?,0)",arrayOf(bookId,sourceKey,chapterId))
+            db.execSQL("UPDATE protected_chapters SET flags=flags ${if(protected) "|" else "&"} ? WHERE book_id=? AND source_key=? AND chapter_id=?",arrayOf<Any>(if(protected)flag else flag.inv(),bookId,sourceKey,chapterId))
+            db.delete("protected_chapters","book_id=? AND source_key=? AND chapter_id=? AND flags=0",arrayOf(bookId,sourceKey,chapterId))
+            db.execSQL("UPDATE online_chapter_cache SET protected=EXISTS(SELECT 1 FROM protected_chapters p WHERE p.book_id=online_chapter_cache.book_id AND p.source_key=online_chapter_cache.source_key AND p.chapter_id=online_chapter_cache.chapter_id) WHERE book_id=? AND source_key=? AND chapter_id=?",arrayOf(bookId,sourceKey,chapterId))
             db.setTransactionSuccessful()
         } finally {db.endTransaction()}
     }
@@ -370,6 +431,6 @@ class BookDatabase(private val context: Context, name: String = NAME) : SQLiteOp
 
     companion object {
         private const val NAME = "shanye.db"
-        private const val VERSION = 10
+        private const val VERSION = 12
     }
 }

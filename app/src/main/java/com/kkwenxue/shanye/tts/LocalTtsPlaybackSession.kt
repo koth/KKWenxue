@@ -47,6 +47,8 @@ object LocalTtsLivePlayback {
 
     val state = live.asStateFlow()
 
+    fun hasActiveSession(): Boolean = synchronized(lock) { active != null }
+
     fun start(
         bookId: String,
         chapterId: String,
