@@ -273,7 +273,15 @@ Java_com_kkwenxue_shanye_tts_LocalTtsNative_nativeLoad(JNIEnv * env, jclass, jst
         __android_log_print(ANDROID_LOG_ERROR, kTag, "model path is empty");
         return JNI_FALSE;
     }
-    if (g_runtime && g_runtime->backbone_path == backbone_path && g_runtime->decoder_path == decoder_path) return JNI_TRUE;
+    if (g_runtime && g_runtime->backbone_path == backbone_path && g_runtime->decoder_path == decoder_path) {
+        // `nativeCancel()` is intentionally process-global because it must
+        // interrupt a generation currently holding this native runtime.
+        // Starting a new local-TTS request with the same model used to return
+        // early here without clearing that flag, so switching voices after a
+        // stop left every following synthesis cancelled before it started.
+        g_cancelled.store(false);
+        return JNI_TRUE;
+    }
     // Loading a new pack while the old one is still resident can briefly
     // require both ~1.1 GB model sets. Release the old pack first so model
     // upgrades do not create a transient OOM peak.

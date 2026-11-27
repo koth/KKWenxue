@@ -26,6 +26,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
@@ -119,6 +121,29 @@ class LocalTtsSynthesisService : Service() {
     }
 
     private suspend fun synthesize(
+        bookId: String,
+        chapterIndex: Int,
+        voiceId: String,
+        requestedStartOffset: Int,
+        startId: Int,
+        jobId: String
+    ) {
+        // The JNI model and its cancellation flag are process-global. A stop
+        // followed immediately by a voice switch can otherwise let the new
+        // service instance race the old instance's native release.
+        synthesisMutex.withLock {
+            synthesizeExclusive(
+                bookId,
+                chapterIndex,
+                voiceId,
+                requestedStartOffset,
+                startId,
+                jobId
+            )
+        }
+    }
+
+    private suspend fun synthesizeExclusive(
         bookId: String,
         chapterIndex: Int,
         voiceId: String,
@@ -410,6 +435,7 @@ class LocalTtsSynthesisService : Service() {
         private const val KEY_START_OFFSET = "start_offset"
         private const val KEY_JOB_ID = "job_id"
         private const val KEY_TIMER_MINUTES = "timer_minutes"
+        private val synthesisMutex = Mutex()
 
         fun start(
             context: Context,

@@ -296,7 +296,7 @@ class LocalTtsModelPack(context: Context) {
         val speaker = when {
             lower == "haoran" -> "zonos:haoran"
             lower.contains("linchuan") -> "clone:linchuan-zonos3-v1"
-            lower == "adam" -> "clone:adam-zonos3-v1"
+            lower == "shuqing" -> "clone:shuqing-zonos3-v1"
             lower == "story" -> "clone:story-zonos3-v1"
             lower.contains("shuoshuren1") -> "clone:upload-53677481cc5fa643ef6413ff"
             lower.contains("shuoshuren2") -> "clone:upload-8b3a4bdcb1e3db46b0f78b89"
@@ -305,7 +305,7 @@ class LocalTtsModelPack(context: Context) {
         val name = when {
             lower == "haoran" -> "Haoran"
             lower.contains("linchuan") -> "林川"
-            lower == "adam" -> "Adam"
+            lower == "shuqing" -> "Shuqing"
             lower == "story" -> "Story"
             lower.contains("shuoshuren1") -> "说书人一"
             lower.contains("shuoshuren2") -> "说书人二"

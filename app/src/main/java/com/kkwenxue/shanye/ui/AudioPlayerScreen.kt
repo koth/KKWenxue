@@ -54,7 +54,7 @@ private val PlayerPanel = WorkbenchPanel
 private data class LocalVoiceOption(val id: String, val name: String)
 private val LocalVoiceOptions = listOf(
     LocalVoiceOption("clone-linchuan-zonos3-v1", "林川"),
-    LocalVoiceOption("clone-adam-zonos3-v1", "Adam"),
+    LocalVoiceOption("clone-shuqing-zonos3-v1", "Shuqing"),
     LocalVoiceOption("clone-story-zonos3-v1", "Story")
 )
 

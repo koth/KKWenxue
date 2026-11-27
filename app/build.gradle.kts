@@ -10,7 +10,7 @@ val localTtsVoiceDir = providers.gradleProperty("shanyeZonosVoiceDir").orNull
 val localTtsAssets = layout.buildDirectory.dir("generated/localTtsAssets")
 val localTtsVoiceAssets = listOf(
     Triple("林川", "林川.mp3", "林川.txt") to "LinChuan.codes.npy",
-    Triple("Adam", "Adam.mp3", "Adam.txt") to "Adam.codes.npy",
+    Triple("Shuqing", "Shuqing.mp3", "Shuqing.txt") to "Shuqing.codes.npy",
     Triple("Story", "Story.mp3", "Story.txt") to "Story.codes.npy"
 )
 
@@ -64,7 +64,7 @@ val validateEmbeddedLinChuan = tasks.register("validateEmbeddedLinChuan") {
                 "缺少${reference.first}预编码声线：${encoded.absolutePath}"
             }
         }
-        logger.lifecycle("已绑定本地声线：林川、Adam、Story")
+        logger.lifecycle("已绑定本地声线：林川、Shuqing、Story")
     }
 }
 
